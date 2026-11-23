@@ -14,6 +14,7 @@ import {
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { useCueStore } from '../store/useCueStore';
+import { COMIC_EDITIONS, getComicEditionLabel, isDcComic } from '../utils/editions';
 import { getReadStats } from '../utils/stats';
 
 export function ReadDetailView({ readId }: { readId: string }) {
@@ -27,6 +28,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
     toggleReadBookmark,
     rateReadItem,
     setReadMood,
+    setReadEdition,
     updateReadTotalUnits,
     resetReadProgress,
     toggleItemInList,
@@ -61,13 +63,17 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const stats = getReadStats(item, progress);
   const formatLabel =
     item.format === 'manga' ? 'Manga' : item.format === 'comic' ? 'Comic' : 'Novel';
+  const activeCover = (progress?.edition && item.editionCovers?.[progress.edition]) || item.coverUrl;
+  const editionLabel =
+    item.format === 'comic' ? getComicEditionLabel(progress?.edition, item) : '';
+  const dcTitle = isDcComic(item);
 
   return (
     <div className="min-h-dvh pb-20 bg-background">
       {/* Flat Dark Hero (no gradient) */}
       <div className="relative h-[300px] sm:h-[360px] w-full overflow-hidden border-b border-white/[0.06]">
         <MediaImage
-          src={item.backdropUrl || item.coverUrl}
+          src={(progress?.edition && item.editionCovers?.[progress.edition]) || item.backdropUrl || item.coverUrl}
           alt={item.title}
           className="w-full h-full object-cover object-center blur-[3px] scale-105 opacity-30"
         />
@@ -145,12 +151,19 @@ export function ReadDetailView({ readId }: { readId: string }) {
 
         <div className="absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto flex items-end gap-4">
           <div className="w-24 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface">
-            <MediaImage src={item.coverUrl} alt={item.title} className="w-full h-full object-cover" />
+            <MediaImage src={activeCover} alt={item.title} className="w-full h-full object-cover" />
           </div>
           <div className="min-w-0 pb-1">
-            <span className="inline-block text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-brand/20 text-brand mb-1.5">
-              {formatLabel}
-            </span>
+            <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
+              <span className="inline-block text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-brand/20 text-brand">
+                {formatLabel}
+              </span>
+              {editionLabel && (
+                <span className="inline-block text-[10px] font-semibold tracking-wide px-2.5 py-0.5 rounded-full bg-surface-raised border border-white/10 text-ink-dim">
+                  {editionLabel}
+                </span>
+              )}
+            </div>
             <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-ink tracking-tight leading-tight">
               {item.title}
             </h1>
@@ -210,6 +223,40 @@ export function ReadDetailView({ readId }: { readId: string }) {
             </button>
           )}
         </div>
+
+        {/* Comic Edition Selector */}
+        {item.format === 'comic' && (
+          <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-6">
+            <div className="flex items-baseline justify-between gap-2 flex-wrap mb-2.5">
+              <span className="text-sm font-semibold text-ink">Which edition are you reading?</span>
+              <span className="text-xs text-ink-dim">
+                {editionLabel || 'Progress stays tracked in issues'}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {COMIC_EDITIONS.map((opt) => {
+                const label = opt.dcLabel && dcTitle ? opt.dcLabel : opt.label;
+                const active = progress?.edition === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setReadEdition(item.id, opt.id)}
+                    title={opt.subtitle}
+                    aria-pressed={active}
+                    className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
+                      active
+                        ? 'border-brand bg-brand/15 text-ink'
+                        : 'border-white/10 bg-surface-raised/60 text-ink-dim hover:text-ink hover:border-white/20'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Interactive Chapter / Issue Progress Tracker */}
         <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-6">

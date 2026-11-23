@@ -1,6 +1,7 @@
 export type MediaDomain = 'watch' | 'read' | 'play';
 export type ReadFormat = 'novel' | 'manga' | 'comic';
 export type ReadUnit = 'chapters' | 'issues';
+export type ComicEditionId = 'digital' | 'tpb' | 'compact' | 'hardcover' | 'absolute';
 export type GamePlatform = 'PC' | 'PS5' | 'Switch' | 'Xbox' | 'Steam Deck';
 
 export type ShowWatchStatus = 'watching' | 'not_started' | 'finished';
@@ -83,6 +84,7 @@ export interface ReadItem {
   coverUrl: string;
   backdropUrl: string;
   overview: string;
+  editionCovers?: Partial<Record<ComicEditionId, string>>;
 }
 
 export interface GameItem {
@@ -123,6 +125,7 @@ export interface ReadProgress {
   currentUnit: number;
   rereadCount: number;
   bookmarked: boolean;
+  edition?: ComicEditionId;
   lastReadAt?: string;
   rating?: number;
   mood?: PersonalMood;

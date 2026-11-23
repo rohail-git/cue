@@ -1,4 +1,4 @@
-import type { CastMember, GameItem, Movie, ReadItem, Season, Show } from '../types';
+import type { CastMember, ComicEditionId, GameItem, Movie, ReadItem, Season, Show } from '../types';
 
 export interface LiveSearchResult {
   domain: 'watch' | 'read' | 'play';
@@ -18,6 +18,7 @@ export interface LiveSearchResult {
   director?: string;
   runtime?: number;
   totalUnits?: number;
+  editionCovers?: Partial<Record<ComicEditionId, string>>;
   steamAppId?: number;
   popularity?: number;
   anilistEpisodes?: number;
@@ -40,6 +41,136 @@ function normalizeTitleKey(title: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+const MINOR_TITLE_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'at',
+  'by',
+  'for',
+  'from',
+  'in',
+  'of',
+  'on',
+  'or',
+  'the',
+  'to',
+  'vs',
+  'with',
+]);
+
+const UPPERCASE_TITLE_TOKENS = new Set([
+  'dc',
+  'tpb',
+  'usa',
+  'uk',
+  'ny',
+  'jla',
+  'ii',
+  'iii',
+  'iv',
+  'vi',
+  'vii',
+  'viii',
+  'ix',
+]);
+
+function formatHyphenWord(word: string, forceCapitalize: boolean): string {
+  const parts = word.split('-');
+  return parts
+    .map((part, pIdx) => {
+      const m = part.match(/^([^A-Za-z0-9]*)([A-Za-z0-9'’]+)([^A-Za-z0-9]*)$/);
+      if (!m) return part;
+      const [, lead, core, trail] = m;
+      const lower = core.toLowerCase();
+      if (UPPERCASE_TITLE_TOKENS.has(lower)) return `${lead}${lower.toUpperCase()}${trail}`;
+      if (!forceCapitalize && pIdx === 0 && MINOR_TITLE_WORDS.has(lower)) {
+        return `${lead}${lower}${trail}`;
+      }
+      return `${lead}${lower.charAt(0).toUpperCase()}${lower.slice(1)}${trail}`;
+    })
+    .join('-');
+}
+
+function formatDisplayTitle(raw: string): string {
+  const collapsed = raw.replace(/\s+/g, ' ').trim();
+  if (!collapsed) return '';
+  const words = collapsed.split(' ');
+  return words
+    .map((word, idx) => {
+      const prev = idx > 0 ? words[idx - 1] : '';
+      const afterColonOrDash = /[:—–\-]$/.test(prev);
+      const forceCap = idx === 0 || idx === words.length - 1 || afterColonOrDash;
+      return formatHyphenWord(word, forceCap);
+    })
+    .join(' ');
+}
+
+function stripEditionAffixes(title: string): string {
+  let cleaned = title.replace(/\([^)]*\)/g, ' ').trim();
+  for (let i = 0; i < 3; i++) {
+    const next = cleaned
+      .replace(
+        /^(?:dc\s+compact(?:\s+comics)?|absolute|deluxe|omnibus|compendium|complete|essential|epic\s+collection)\s*[:\-–—]?\s+/i,
+        ''
+      )
+      .replace(
+        /(?:[:,\-–—\s]+)(?:vol\.?|volume|book|pt\.?|part)\s*(?:\d+|one|two|three|four|five|six|seven|eight|i{1,3}|iv|v)\b.*$/i,
+        ''
+      )
+      .replace(
+        /(?:[:,\-–—\s]+)(?:the\s+)?(?:absolute|deluxe|omnibus|compendium|compact(?:\s+comics)?|collector'?s|anniversary|complete|ultimate|standard)?\s*(?:hardcover|hc|softcover|tpb|trade\s+paperback|edition)\b.*$/i,
+        ''
+      )
+      .replace(/\s+#\d+\s*$/i, '')
+      .trim();
+    if (next === cleaned) break;
+    cleaned = next;
+  }
+  return cleaned || title;
+}
+
+function canonicalReadWorkKey(title: string): string {
+  return normalizeTitleKey(stripEditionAffixes(title));
+}
+
+function detectComicEdition(title: string, year?: number, earliestYear?: number): ComicEditionId {
+  const lower = title.toLowerCase();
+  if (lower.includes('absolute') || lower.includes('omnibus') || lower.includes('compendium')) {
+    return 'absolute';
+  }
+  if (lower.includes('compact')) return 'compact';
+  if (lower.includes('deluxe') || lower.includes('hardcover') || /\bhc\b/.test(lower)) {
+    return 'hardcover';
+  }
+  if (/\b(vol\.?|volume|tpb|trade paperback|book)\b/.test(lower)) return 'tpb';
+  if (year && earliestYear && year >= 2024 && year - earliestYear >= 10) return 'compact';
+  return 'digital';
+}
+
+const COMIC_WORK_HINTS = [
+  'comic',
+  'graphic novel',
+  'superhero',
+  'dc comics',
+  'marvel',
+  'cartoons and comics',
+  'superman',
+  'batman',
+  'watchmen',
+  'wonder woman',
+  'justice league',
+  'spider-man',
+  'x-men',
+  'avengers',
+  'daredevil',
+  'sandman',
+  'invincible',
+  'grant morrison',
+  'alan moore',
+  'frank miller',
+];
 
 function scoreResult(item: LiveSearchResult, query: string): number {
   const qNorm = normalizeTitleKey(query);
@@ -71,17 +202,39 @@ function scoreResult(item: LiveSearchResult, query: string): number {
 }
 
 function rankAndDedupeLiveResults(results: LiveSearchResult[], query: string): LiveSearchResult[] {
+  const qWords = normalizeTitleKey(query)
+    .split(' ')
+    .filter((w) => w.length >= 2);
   const scored = results
     .map((item) => ({ item, score: scoreResult(item, query) }))
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const typeWeight = (t: LiveSearchResult['mediaType']) =>
+        t === 'comic' || t === 'manga' ? 1 : 0;
+      return typeWeight(b.item.mediaType) - typeWeight(a.item.mediaType);
+    });
 
+  const topScore = scored[0]?.score || 0;
   const seen = new Set<string>();
   const out: LiveSearchResult[] = [];
+
   for (const entry of scored) {
-    const key = `${entry.item.domain}:${entry.item.mediaType}:${normalizeTitleKey(entry.item.title)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(entry.item);
+    const { item, score } = entry;
+    // Filter out weak Open Library noise when strong exact/primary matches exist
+    if (item.source === 'openlibrary' && topScore >= 120 && qWords.length >= 2) {
+      const hay = normalizeTitleKey(`${item.title} ${item.subtitle || ''}`);
+      const matched = qWords.filter((w) => hay.includes(w)).length;
+      if (matched < Math.ceil(qWords.length * 0.6)) continue;
+      if (score < 120) continue;
+    }
+
+    const workKey =
+      item.domain === 'read'
+        ? `read:${canonicalReadWorkKey(item.title)}`
+        : `${item.domain}:${item.mediaType}:${normalizeTitleKey(item.title)}`;
+    if (seen.has(workKey)) continue;
+    seen.add(workKey);
+    out.push(item);
   }
   return out;
 }
@@ -296,7 +449,7 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
   const queryIsLatin = !hasNonLatinScript(query);
   try {
     const res = await fetch(
-      `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&language=eng&limit=15&fields=key,title,author_name,first_publish_year,cover_i,number_of_pages_median,subject,edition_count`
+      `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&language=eng&limit=18&fields=key,title,author_name,first_publish_year,cover_i,number_of_pages_median,subject,edition_count`
     );
     if (!res.ok) return [];
     const data = (await res.json()) as {
@@ -312,74 +465,122 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
       }>;
     };
 
-    return (data.docs || [])
-      .filter((d) => {
-        if (!d.title || !d.cover_i) return false;
-        if (queryIsLatin && hasNonLatinScript(d.title)) return false;
+    type OlDoc = NonNullable<typeof data.docs>[number];
+    const filteredDocs = (data.docs || []).filter((d) => {
+      if (!d.title || !d.cover_i) return false;
+      if (queryIsLatin && hasNonLatinScript(d.title)) return false;
 
-        const lowerTitle = d.title.toLowerCase();
-        if (
-          lowerTitle.includes('coloring book') ||
-          lowerTitle.includes('activity book') ||
-          lowerTitle.includes('sticker book') ||
-          lowerTitle.includes('study guide') ||
-          lowerTitle.includes('summary of')
-        ) {
-          return false;
-        }
+      const lowerTitle = d.title.toLowerCase();
+      if (
+        lowerTitle.includes('coloring book') ||
+        lowerTitle.includes('activity book') ||
+        lowerTitle.includes('sticker book') ||
+        lowerTitle.includes('study guide') ||
+        lowerTitle.includes('summary of')
+      ) {
+        return false;
+      }
 
-        const subjectsLower = (d.subject || []).map((s) => s.toLowerCase());
-        // Let AniList handle manga so Open Library only surfaces Novels & Western Comics
-        const looksLikeManga = subjectsLower.some(
-          (s) =>
-            s.includes('manga') ||
-            s.includes('japanese comics') ||
-            s.includes('shonen') ||
-            s.includes('seinen') ||
-            s.includes('shojo')
-        );
-        if (looksLikeManga) return false;
+      const subjectsLower = (d.subject || []).map((s) => s.toLowerCase());
+      // Let AniList handle manga so Open Library only surfaces Novels & Western Comics
+      const looksLikeManga = subjectsLower.some(
+        (s) =>
+          s.includes('manga') ||
+          s.includes('japanese comics') ||
+          s.includes('shonen') ||
+          s.includes('seinen') ||
+          s.includes('shojo')
+      );
+      if (looksLikeManga) return false;
 
-        return true;
-      })
-      .slice(0, 6)
-      .map((d) => {
-        const subjectsLower = (d.subject || []).map((s) => s.toLowerCase());
-        const isComic = subjectsLower.some(
-          (s) =>
-            s.includes('comic') ||
-            s.includes('graphic novel') ||
-            s.includes('superhero') ||
-            s.includes('cartoons and comics')
-        );
-        const cover = `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg`;
-        const cleanKey = d.key.replace('/works/', '');
-        const estimatedChapters = Math.max(
-          12,
-          Math.min(80, Math.round((d.number_of_pages_median || 320) / 14))
-        );
-        return {
-          domain: 'read' as const,
-          kind: 'read' as const,
-          id: `ol-${cleanKey}`,
-          source: 'openlibrary' as const,
-          externalId: cleanKey,
-          title: d.title,
-          subtitle: d.author_name?.[0] || 'Author',
-          year: d.first_publish_year || 2020,
-          mediaType: isComic ? ('comic' as const) : ('novel' as const),
-          genres: (d.subject || []).slice(0, 2).length
-            ? (d.subject || []).slice(0, 2)
-            : [isComic ? 'Comics' : 'Novel'],
-          rating: 4.4,
-          posterUrl: cover,
-          backdropUrl: cover,
-          overview: `${d.title} by ${d.author_name?.[0] || 'Unknown author'}.`,
-          director: d.author_name?.[0] || 'Unknown',
-          totalUnits: isComic ? 12 : estimatedChapters,
-          popularity: (d.edition_count || 1) * 5000,
-        };
+      return true;
+    });
+
+    // Collapse editions of the same canonical work (e.g. Vol 02, Absolute, 2024 Compact)
+    const groups = new Map<string, OlDoc[]>();
+    for (const doc of filteredDocs) {
+      const workKey = canonicalReadWorkKey(doc.title);
+      const authorKey = normalizeTitleKey(doc.author_name?.[0] || '');
+      const groupKey = authorKey ? `${workKey}::${authorKey}` : workKey;
+      const list = groups.get(groupKey) || [];
+      list.push(doc);
+      groups.set(groupKey, list);
+    }
+
+    const collapsed: LiveSearchResult[] = [];
+    for (const docs of groups.values()) {
+      const years = docs
+        .map((d) => d.first_publish_year)
+        .filter((y): y is number => typeof y === 'number' && y > 1900);
+      const earliestYear = years.length > 0 ? Math.min(...years) : 2020;
+
+      // Pick the canonical doc without Vol / Absolute / Deluxe wrappers if available
+      const sortedForPrimary = [...docs].sort((a, b) => {
+        const aIsEditionWrapper = /\b(vol\.?|volume|absolute|deluxe|omnibus|compact)\b/i.test(a.title)
+          ? 1
+          : 0;
+        const bIsEditionWrapper = /\b(vol\.?|volume|absolute|deluxe|omnibus|compact)\b/i.test(b.title)
+          ? 1
+          : 0;
+        if (aIsEditionWrapper !== bIsEditionWrapper) return aIsEditionWrapper - bIsEditionWrapper;
+        return (a.first_publish_year || 9999) - (b.first_publish_year || 9999);
       });
+
+      const primary = sortedForPrimary[0];
+      const baseTitle = formatDisplayTitle(stripEditionAffixes(primary.title));
+      const allSubjectsLower = docs.flatMap((d) => (d.subject || []).map((s) => s.toLowerCase()));
+      const hayLower = `${baseTitle} ${primary.author_name?.[0] || ''} ${allSubjectsLower.join(' ')}`.toLowerCase();
+      const isComic =
+        COMIC_WORK_HINTS.some((kw) => hayLower.includes(kw)) ||
+        docs.some((d) => /\b(absolute|omnibus|tpb|vol\.?\s*\d+)\b/i.test(d.title));
+
+      const primaryCover = `https://covers.openlibrary.org/b/id/${primary.cover_i}-L.jpg`;
+      const editionCovers: Partial<Record<ComicEditionId, string>> = {};
+      if (isComic) {
+        editionCovers.digital = primaryCover;
+        for (const d of docs) {
+          if (!d.cover_i) continue;
+          const ed = detectComicEdition(d.title, d.first_publish_year, earliestYear);
+          if (!editionCovers[ed]) {
+            editionCovers[ed] = `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg`;
+          }
+        }
+        if (!editionCovers.tpb) editionCovers.tpb = primaryCover;
+      }
+
+      const cleanKey = primary.key.replace('/works/', '');
+      const authorName = primary.author_name?.[0] || 'Author';
+      const estimatedChapters = Math.max(
+        12,
+        Math.min(80, Math.round((primary.number_of_pages_median || 320) / 14))
+      );
+      const totalEditions = docs.reduce((acc, d) => acc + (d.edition_count || 1), 0);
+
+      collapsed.push({
+        domain: 'read' as const,
+        kind: 'read' as const,
+        id: `ol-${cleanKey}`,
+        source: 'openlibrary' as const,
+        externalId: cleanKey,
+        title: baseTitle,
+        subtitle: authorName,
+        year: earliestYear,
+        mediaType: isComic ? ('comic' as const) : ('novel' as const),
+        genres: (primary.subject || []).slice(0, 2).length
+          ? (primary.subject || []).slice(0, 2)
+          : [isComic ? 'Comics' : 'Novel'],
+        rating: 4.5,
+        posterUrl: primaryCover,
+        backdropUrl: primaryCover,
+        overview: `${baseTitle} by ${authorName}.`,
+        director: authorName,
+        totalUnits: isComic ? 12 : estimatedChapters,
+        editionCovers: isComic ? editionCovers : undefined,
+        popularity: Math.max(totalEditions, docs.length * 3) * 5000,
+      });
+    }
+
+    return collapsed.slice(0, 6);
   } catch {
     return [];
   }
@@ -909,6 +1110,7 @@ export function hydrateLiveReadItem(item: LiveSearchResult): ReadItem {
     coverUrl: item.posterUrl,
     backdropUrl: item.backdropUrl || item.posterUrl,
     overview: item.overview,
+    editionCovers: item.editionCovers,
   };
 }
 

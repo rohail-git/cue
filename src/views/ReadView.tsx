@@ -6,6 +6,7 @@ import { MediaImage } from '../components/MediaImage';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
 import { useCueStore } from '../store/useCueStore';
 import type { ReadFilter, ReadItem } from '../types';
+import { getComicEditionLabel } from '../utils/editions';
 import { getReadStats } from '../utils/stats';
 
 export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
@@ -134,6 +135,9 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     const prog = state.readProgress[item.id];
     const stats = getReadStats(item, prog);
     const flash = Boolean(justBumped[item.id]);
+    const displayCover = (prog?.edition && item.editionCovers?.[prog.edition]) || item.coverUrl;
+    const editionLabel =
+      item.format === 'comic' ? getComicEditionLabel(prog?.edition, item) : '';
 
     if (isPosterLayout) {
       return (
@@ -149,7 +153,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
         >
           <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
             <MediaImage
-              src={item.coverUrl}
+              src={displayCover}
               alt={item.title}
               className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
             />
@@ -192,13 +196,13 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
         title={item.title}
         badgeLabel={formatBadge(item.format)}
         badgeClassName="bg-read/15 text-read"
-        posterUrl={item.coverUrl}
+        posterUrl={displayCover}
         primaryLine={
           stats.isFinished
             ? `${stats.total}/${stats.total} ${stats.unitLabel}`
             : `${stats.unitShort} · ${stats.current}/${stats.total} ${stats.unitLabel}`
         }
-        secondaryLine={item.creator}
+        secondaryLine={editionLabel ? `${item.creator} · ${editionLabel}` : item.creator}
         progressRatio={stats.ratio}
         showProgress={state.settings.showPosterProgress && stats.current > 0}
         isFlashing={flash}

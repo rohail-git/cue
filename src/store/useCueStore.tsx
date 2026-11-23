@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { createSeedState } from '../data/seedState';
 import type {
   AppSettings,
+  ComicEditionId,
   CueStoreState,
   GameItem,
   GamePlatform,
@@ -20,6 +21,7 @@ import type {
   ShowProgress,
   UserProfile,
 } from '../types';
+import { getComicEditionLabel } from '../utils/editions';
 import { formatEpisodeCode, getAllEpisodes, getEpisodeKey, getShowStats } from '../utils/stats';
 
 const STORAGE_KEY = 'cue_state_v3';
@@ -155,6 +157,7 @@ interface CueContextValue {
   toggleReadBookmark: (readId: string) => void;
   rateReadItem: (readId: string, rating: number) => void;
   setReadMood: (readId: string, mood: PersonalMood | undefined) => void;
+  setReadEdition: (readId: string, edition: ComicEditionId) => void;
   updateReadTotalUnits: (readId: string, totalUnits: number) => void;
   resetReadProgress: (readId: string) => void;
 
@@ -779,6 +782,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       currentUnit: clamped,
       rereadCount: finished ? Math.max(1, prev?.rereadCount || 0) : prev?.rereadCount || 0,
       bookmarked: prev?.bookmarked ?? true,
+      edition: prev?.edition,
       lastReadAt: clamped > 0 ? new Date().toISOString() : prev?.lastReadAt,
       rating: prev?.rating,
       mood: prev?.mood,
@@ -875,6 +879,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               currentUnit: item.totalUnits,
               rereadCount: isDone ? (prog?.rereadCount || 1) + 1 : Math.max(1, prog?.rereadCount || 0),
               bookmarked: prog?.bookmarked ?? true,
+              edition: prog?.edition,
               lastReadAt: new Date().toISOString(),
               rating: prog?.rating,
               mood: prog?.mood,
@@ -903,6 +908,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               currentUnit: nextReread > 0 ? item.totalUnits : prog?.currentUnit || 0,
               rereadCount: nextReread,
               bookmarked: prog?.bookmarked ?? true,
+              edition: prog?.edition,
               lastReadAt: new Date().toISOString(),
               rating: prog?.rating,
               mood: prog?.mood,
@@ -930,6 +936,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               currentUnit: existing?.currentUnit || 0,
               rereadCount: existing?.rereadCount || 0,
               bookmarked: added,
+              edition: existing?.edition,
               lastReadAt: existing?.lastReadAt,
               rating: existing?.rating,
               mood: existing?.mood,
@@ -954,6 +961,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             currentUnit: existing?.currentUnit || 0,
             rereadCount: existing?.rereadCount || 0,
             bookmarked: existing?.bookmarked ?? true,
+            edition: existing?.edition,
             lastReadAt: existing?.lastReadAt,
             rating,
             mood: existing?.mood,
@@ -975,6 +983,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             currentUnit: existing?.currentUnit || 0,
             rereadCount: existing?.rereadCount || 0,
             bookmarked: existing?.bookmarked ?? true,
+            edition: existing?.edition,
             lastReadAt: existing?.lastReadAt,
             rating: existing?.rating,
             mood,
@@ -983,6 +992,35 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       };
     });
   }, []);
+
+  const setReadEdition = useCallback(
+    (readId: string, edition: ComicEditionId) => {
+      let label = '';
+      setState((prev) => {
+        const item = prev.readItems[readId];
+        const existing = prev.readProgress[readId];
+        label = getComicEditionLabel(edition, item);
+        return {
+          ...prev,
+          readProgress: {
+            ...prev.readProgress,
+            [readId]: {
+              status: existing?.status || 'want_to_read',
+              currentUnit: existing?.currentUnit || 0,
+              rereadCount: existing?.rereadCount || 0,
+              bookmarked: existing?.bookmarked ?? true,
+              edition,
+              lastReadAt: existing?.lastReadAt,
+              rating: existing?.rating,
+              mood: existing?.mood,
+            },
+          },
+        };
+      });
+      if (label) showToast(`Edition set to ${label}`);
+    },
+    [showToast]
+  );
 
   const resetReadProgress = useCallback(
     (readId: string) => {
@@ -997,6 +1035,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               currentUnit: 0,
               rereadCount: 0,
               bookmarked: existing?.bookmarked ?? true,
+              edition: existing?.edition,
             },
           },
         };
@@ -1719,6 +1758,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         toggleReadBookmark,
         rateReadItem,
         setReadMood,
+        setReadEdition,
         updateReadTotalUnits,
         resetReadProgress,
         logGameSession,
