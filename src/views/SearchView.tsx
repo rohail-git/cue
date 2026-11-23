@@ -274,7 +274,12 @@ export function SearchView() {
       if (andAdd || !state.readItems[readItem.id]) {
         addLiveReadToStore(readItem, 'want_to_read');
       } else {
-        updateReadEditionCovers(readItem.id, readItem.editionCovers || {}, readItem.title);
+        updateReadEditionCovers(
+          readItem.id,
+          readItem.editionCovers || {},
+          readItem.title,
+          readItem.editionIssueCounts
+        );
       }
       if (!andAdd) pushRoute({ view: 'read-detail', readId: readItem.id });
       return;

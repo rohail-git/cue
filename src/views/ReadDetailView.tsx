@@ -13,9 +13,14 @@ import {
 } from 'lucide-react';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
-import { fetchComicEditionCovers, formatDisplayTitle } from '../services/mediaApi';
+import { fetchComicEditionMetadata, formatDisplayTitle } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
-import { COMIC_EDITIONS, getComicEditionLabel, isDcComic } from '../utils/editions';
+import {
+  COMIC_EDITIONS,
+  getComicEditionLabel,
+  getKnownComicEditionCounts,
+  isDcComic,
+} from '../utils/editions';
 import { getReadStats } from '../utils/stats';
 
 export function ReadDetailView({ readId }: { readId: string }) {
@@ -52,16 +57,26 @@ export function ReadDetailView({ readId }: { readId: string }) {
     if (!item || item.format !== 'comic') return;
     if (fetchedCoversRef.current.has(item.id)) return;
     const uniqueCoverCount = item.editionCovers ? new Set(Object.values(item.editionCovers)).size : 0;
+    const needsCounts = !item.editionIssueCounts;
     const formattedTitle = formatDisplayTitle(item.title);
     const needsTitleFix = formattedTitle !== item.title;
-    if (uniqueCoverCount > 1 && !needsTitleFix) return;
+    if (uniqueCoverCount > 1 && !needsCounts && !needsTitleFix) return;
 
     let cancelled = false;
-    fetchComicEditionCovers(item.title, item.creator).then((covers) => {
+    fetchComicEditionMetadata(item.title, item.creator).then(({ covers, issueCounts }) => {
       if (cancelled) return;
       fetchedCoversRef.current.add(item.id);
-      if (Object.keys(covers).length > 0 || needsTitleFix) {
-        updateReadEditionCovers(item.id, covers, needsTitleFix ? formattedTitle : undefined);
+      if (
+        Object.keys(covers).length > 0 ||
+        Object.keys(issueCounts).length > 0 ||
+        needsTitleFix
+      ) {
+        updateReadEditionCovers(
+          item.id,
+          covers,
+          needsTitleFix ? formattedTitle : undefined,
+          issueCounts
+        );
       }
     });
     return () => {
@@ -261,6 +276,9 @@ export function ReadDetailView({ readId }: { readId: string }) {
               {COMIC_EDITIONS.map((opt) => {
                 const label = opt.dcLabel && dcTitle ? opt.dcLabel : opt.label;
                 const active = progress?.edition === opt.id;
+                const editionCount =
+                  item.editionIssueCounts?.[opt.id] ??
+                  getKnownComicEditionCounts(item.title)?.[opt.id];
                 return (
                   <button
                     key={opt.id}
@@ -274,7 +292,12 @@ export function ReadDetailView({ readId }: { readId: string }) {
                         : 'border-white/10 bg-surface-raised/60 text-ink-dim hover:text-ink hover:border-white/20'
                     }`}
                   >
-                    {label}
+                    <span>{label}</span>
+                    {typeof editionCount === 'number' && editionCount > 0 && (
+                      <span className="ml-1.5 text-[11px] text-ink-dim tabular-nums">
+                        · {editionCount}
+                      </span>
+                    )}
                   </button>
                 );
               })}

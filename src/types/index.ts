@@ -85,6 +85,8 @@ export interface ReadItem {
   backdropUrl: string;
   overview: string;
   editionCovers?: Partial<Record<ComicEditionId, string>>;
+  editionIssueCounts?: Partial<Record<ComicEditionId, number>>;
+  baseTotalUnits?: number;
 }
 
 export interface GameItem {
@@ -123,6 +125,7 @@ export interface MovieProgress {
 export interface ReadProgress {
   status: ReadWatchStatus;
   currentUnit: number;
+  maxCompletedUnit?: number;
   rereadCount: number;
   bookmarked: boolean;
   edition?: ComicEditionId;

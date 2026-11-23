@@ -28,7 +28,7 @@ import type {
   ShowProgress,
   UserProfile,
 } from '../types';
-import { getComicEditionLabel } from '../utils/editions';
+import { getComicEditionLabel, resolveComicEditionTotal } from '../utils/editions';
 import { formatEpisodeCode, getAllEpisodes, getEpisodeKey, getShowStats } from '../utils/stats';
 
 const STORAGE_KEY = 'cue_state_v3';
@@ -171,7 +171,8 @@ interface CueContextValue {
   updateReadEditionCovers: (
     readId: string,
     editionCovers: Partial<Record<ComicEditionId, string>>,
-    cleanTitle?: string
+    cleanTitle?: string,
+    editionIssueCounts?: Partial<Record<ComicEditionId, number>>
   ) => void;
   updateReadTotalUnits: (readId: string, totalUnits: number) => void;
   resetReadProgress: (readId: string) => void;
@@ -1035,9 +1036,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   ): ReadProgress => {
     const clamped = Math.min(item.totalUnits, Math.max(0, nextUnit));
     const finished = clamped >= item.totalUnits;
+    const prevMax = prev?.maxCompletedUnit ?? prev?.currentUnit ?? 0;
     return {
       status: finished ? 'finished' : clamped > 0 ? 'reading' : 'want_to_read',
       currentUnit: clamped,
+      maxCompletedUnit: Math.max(clamped, prevMax),
       rereadCount: finished ? Math.max(1, prev?.rereadCount || 0) : prev?.rereadCount || 0,
       bookmarked: prev?.bookmarked ?? true,
       edition: prev?.edition,
@@ -1108,8 +1111,16 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     setState((prev) => {
       const item = prev.readItems[readId];
       if (!item) return prev;
-      const updatedItem = { ...item, totalUnits: safeTotal };
       const prog = prev.readProgress[readId];
+      const nextEditionCounts = prog?.edition
+        ? { ...(item.editionIssueCounts || {}), [prog.edition]: safeTotal }
+        : item.editionIssueCounts;
+      const updatedItem: ReadItem = {
+        ...item,
+        totalUnits: safeTotal,
+        baseTotalUnits: prog?.edition ? item.baseTotalUnits : safeTotal,
+        editionIssueCounts: nextEditionCounts,
+      };
       return {
         ...prev,
         readItems: { ...prev.readItems, [readId]: updatedItem },
@@ -1136,6 +1147,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             [readId]: {
               status: isDone ? 'finished' : 'finished',
               currentUnit: item.totalUnits,
+              maxCompletedUnit: Math.max(item.totalUnits, prog?.maxCompletedUnit || 0),
               rereadCount: isDone ? (prog?.rereadCount || 1) + 1 : Math.max(1, prog?.rereadCount || 0),
               bookmarked: prog?.bookmarked ?? true,
               edition: prog?.edition,
@@ -1165,6 +1177,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             [readId]: {
               status: nextReread > 0 ? 'finished' : 'reading',
               currentUnit: nextReread > 0 ? item.totalUnits : prog?.currentUnit || 0,
+              maxCompletedUnit: nextReread > 0 ? Math.max(item.totalUnits, prog?.maxCompletedUnit || 0) : prog?.maxCompletedUnit,
               rereadCount: nextReread,
               bookmarked: prog?.bookmarked ?? true,
               edition: prog?.edition,
@@ -1193,6 +1206,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             [readId]: {
               status: existing?.status || 'want_to_read',
               currentUnit: existing?.currentUnit || 0,
+              maxCompletedUnit: existing?.maxCompletedUnit,
               rereadCount: existing?.rereadCount || 0,
               bookmarked: added,
               edition: existing?.edition,
@@ -1218,6 +1232,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           [readId]: {
             status: existing?.status || 'reading',
             currentUnit: existing?.currentUnit || 0,
+            maxCompletedUnit: existing?.maxCompletedUnit,
             rereadCount: existing?.rereadCount || 0,
             bookmarked: existing?.bookmarked ?? true,
             edition: existing?.edition,
@@ -1240,6 +1255,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           [readId]: {
             status: existing?.status || 'reading',
             currentUnit: existing?.currentUnit || 0,
+            maxCompletedUnit: existing?.maxCompletedUnit,
             rereadCount: existing?.rereadCount || 0,
             bookmarked: existing?.bookmarked ?? true,
             edition: existing?.edition,
@@ -1254,25 +1270,40 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const setReadEdition = useCallback(
     (readId: string, edition: ComicEditionId) => {
-      let label = '';
+      let toastMsg = '';
       setState((prev) => {
         const item = prev.readItems[readId];
+        if (!item) return prev;
         const existing = prev.readProgress[readId];
-        label = getComicEditionLabel(edition, item);
-        const nextCover = item?.editionCovers?.[edition] || item?.coverUrl;
+        const label = getComicEditionLabel(edition, item);
+        const nextTotal = resolveComicEditionTotal(item, edition);
+        const preservedMax = Math.max(existing?.currentUnit || 0, existing?.maxCompletedUnit || 0);
+        const nextCurrent = Math.min(nextTotal, preservedMax);
+        const finished = nextCurrent >= nextTotal;
+        const nextCover = item.editionCovers?.[edition] || item.coverUrl;
         const nextHistory = nextCover
           ? (prev.history || []).map((h) =>
               h.domain === 'read' && h.mediaId === readId ? { ...h, posterUrl: nextCover } : h
             )
           : prev.history;
+        toastMsg = label ? `${label} · ${nextTotal} ${item.unit}` : '';
         return {
           ...prev,
+          readItems: {
+            ...prev.readItems,
+            [readId]: {
+              ...item,
+              baseTotalUnits: item.baseTotalUnits ?? item.totalUnits,
+              totalUnits: nextTotal,
+            },
+          },
           readProgress: {
             ...prev.readProgress,
             [readId]: {
-              status: existing?.status || 'want_to_read',
-              currentUnit: existing?.currentUnit || 0,
-              rereadCount: existing?.rereadCount || 0,
+              status: finished ? 'finished' : nextCurrent > 0 ? 'reading' : 'want_to_read',
+              currentUnit: nextCurrent,
+              maxCompletedUnit: preservedMax,
+              rereadCount: finished ? Math.max(1, existing?.rereadCount || 0) : existing?.rereadCount || 0,
               bookmarked: existing?.bookmarked ?? true,
               edition,
               lastReadAt: existing?.lastReadAt,
@@ -1283,7 +1314,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           history: nextHistory,
         };
       });
-      if (label) showToast(`Edition set to ${label}`);
+      if (toastMsg) showToast(toastMsg);
     },
     [showToast]
   );
@@ -1292,14 +1323,33 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     (
       readId: string,
       editionCovers: Partial<Record<ComicEditionId, string>>,
-      cleanTitle?: string
+      cleanTitle?: string,
+      editionIssueCounts?: Partial<Record<ComicEditionId, number>>
     ) => {
       setState((prev) => {
         const item = prev.readItems[readId];
         if (!item) return prev;
         const mergedCovers = { ...(item.editionCovers || {}), ...editionCovers };
+        const mergedCounts = { ...(item.editionIssueCounts || {}), ...(editionIssueCounts || {}) };
         const nextTitle = cleanTitle || item.title;
-        const activeEdition = prev.readProgress[readId]?.edition;
+        const existingProg = prev.readProgress[readId];
+        const activeEdition = existingProg?.edition;
+        const tempItem: ReadItem = {
+          ...item,
+          title: nextTitle,
+          editionCovers: mergedCovers,
+          editionIssueCounts: mergedCounts,
+        };
+        const resolvedTotal = activeEdition
+          ? resolveComicEditionTotal(tempItem, activeEdition)
+          : !item.editionIssueCounts && mergedCounts.digital && item.totalUnits === 12
+            ? mergedCounts.digital
+            : item.totalUnits;
+        const updatedItem: ReadItem = {
+          ...tempItem,
+          baseTotalUnits: item.baseTotalUnits ?? resolvedTotal,
+          totalUnits: resolvedTotal,
+        };
         const nextCover = (activeEdition && mergedCovers[activeEdition]) || item.coverUrl;
         const nextHistory = (prev.history || []).map((h) =>
           h.domain === 'read' && h.mediaId === readId
@@ -1310,12 +1360,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           ...prev,
           readItems: {
             ...prev.readItems,
-            [readId]: {
-              ...item,
-              title: nextTitle,
-              editionCovers: mergedCovers,
-            },
+            [readId]: updatedItem,
           },
+          readProgress: existingProg
+            ? {
+                ...prev.readProgress,
+                [readId]: normalizeReadProgress(updatedItem, existingProg.currentUnit, existingProg),
+              }
+            : prev.readProgress,
           history: nextHistory,
         };
       });
@@ -1334,6 +1386,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             [readId]: {
               status: 'want_to_read',
               currentUnit: 0,
+              maxCompletedUnit: 0,
               rereadCount: 0,
               bookmarked: existing?.bookmarked ?? true,
               edition: existing?.edition,
