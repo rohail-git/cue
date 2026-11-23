@@ -101,7 +101,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
                 className="appearance-none bg-transparent font-display font-bold text-[18px] text-ink pr-6 py-0.5 cursor-pointer outline-none"
               >
                 {show.seasons.map((s) => (
-                  <option key={s.number} value={s.number} className="bg-[#171515] text-ink">
+                  <option key={s.number} value={s.number} className="bg-surface text-ink">
                     Season {s.number}
                   </option>
                 ))}
@@ -244,14 +244,14 @@ export function ShowDetailView({ showId }: { showId: string }) {
 
   return (
     <div className="min-h-dvh pb-20 bg-background">
-      {/* Hero Banner */}
-      <div className="relative h-[300px] sm:h-[360px] md:h-[400px] w-full overflow-hidden">
+      {/* Flat Dark Hero (no gradient) */}
+      <div className="relative h-[290px] sm:h-[350px] md:h-[380px] w-full overflow-hidden border-b border-white/[0.06]">
         <MediaImage
           src={show.backdropUrl || show.posterUrl}
           alt={show.title}
-          className="w-full h-full object-cover object-center"
+          className="w-full h-full object-cover object-center opacity-55"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/35 to-black/30" />
+        <div className="absolute inset-0 bg-[#131519]/50" />
 
         <button
           type="button"
@@ -285,7 +285,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
           </div>
 
           {menuOpen && (
-            <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-[#1b1818] border border-white/12 p-1.5 shadow-2xl animate-sheet-up">
+            <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-surface-raised border border-white/12 p-1.5 shadow-2xl animate-sheet-up">
               <button
                 type="button"
                 onClick={() => {
@@ -352,7 +352,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
         </div>
 
         <div className="absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto">
-          <h1 className="font-display font-extrabold text-3xl sm:text-5xl text-white tracking-tight drop-shadow-[0_4px_18px_rgba(0,0,0,0.85)]">
+          <h1 className="font-display font-extrabold text-3xl sm:text-5xl text-ink tracking-tight">
             {show.title}
           </h1>
         </div>
@@ -391,7 +391,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
             <button
               type="button"
               onClick={() => watchNextEpisode(show.id)}
-              className="flex-1 h-12 rounded-full bg-brand text-white font-semibold text-[15px] flex items-center justify-center gap-2 hover:opacity-95 transition-opacity"
+              className="flex-1 h-12 rounded-full bg-brand text-brand-ink font-semibold text-[15px] flex items-center justify-center gap-2 hover:opacity-95 transition-opacity"
             >
               <Check className="w-5 h-5" strokeWidth={2.5} />
               <span>
@@ -419,8 +419,8 @@ export function ShowDetailView({ showId }: { showId: string }) {
                 <span>·</span>
                 <span>{show.genres.slice(0, 2).join(', ')}</span>
                 <span>·</span>
-                <span className="inline-flex items-center gap-1 text-amber-400">
-                  <Star className="w-3.5 h-3.5 fill-amber-400" />
+                <span className="inline-flex items-center gap-1 text-brand">
+                  <Star className="w-3.5 h-3.5 fill-brand" />
                   {show.rating.toFixed(1)}
                 </span>
               </p>
@@ -501,7 +501,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
                       onClick={() => setSeasonPairStart(sStart)}
                       className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors ${
                         active
-                          ? 'bg-brand text-white'
+                          ? 'bg-brand text-brand-ink'
                           : 'bg-surface border border-white/10 text-ink-dim hover:text-ink'
                       }`}
                     >
@@ -542,7 +542,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
           onClick={() => setActiveEpisodeDrawer(null)}
         >
           <div
-            className="w-full md:max-w-md bg-[#161414] border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl space-y-4 animate-sheet-up"
+            className="w-full md:max-w-md bg-surface-raised border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl space-y-4 animate-sheet-up"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-3">
@@ -646,7 +646,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
               <button
                 type="submit"
                 disabled={!epNoteText.trim()}
-                className="w-full py-2.5 rounded-full bg-brand text-white text-sm font-semibold disabled:opacity-40"
+                className="w-full py-2.5 rounded-full bg-brand text-brand-ink text-sm font-semibold disabled:opacity-40"
               >
                 Save episode note
               </button>
@@ -662,7 +662,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
           onClick={() => setListPickerOpen(false)}
         >
           <div
-            className="w-full md:max-w-md bg-[#161414] border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl"
+            className="w-full md:max-w-md bg-surface-raised border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="font-display font-bold text-lg text-ink mb-3">Add to custom list</h3>
@@ -699,7 +699,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
                   createCustomList(newListName, '', { kind: 'show', id: show.id });
                   setNewListName('');
                 }}
-                className="px-4 py-2 rounded-xl bg-brand text-white text-sm font-semibold"
+                className="px-4 py-2 rounded-xl bg-brand text-brand-ink text-sm font-semibold"
               >
                 Create
               </button>

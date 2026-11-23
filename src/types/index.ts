@@ -1,6 +1,6 @@
 export type MediaDomain = 'watch' | 'read' | 'play';
-export type ReadFormat = 'book' | 'manga' | 'comic';
-export type ReadUnit = 'pages' | 'chapters' | 'issues';
+export type ReadFormat = 'novel' | 'manga' | 'comic';
+export type ReadUnit = 'chapters' | 'issues';
 export type GamePlatform = 'PC' | 'PS5' | 'Switch' | 'Xbox' | 'Steam Deck';
 
 export type ShowWatchStatus = 'watching' | 'not_started' | 'finished';
@@ -37,6 +37,7 @@ export interface Show {
   id: string;
   tvmazeId?: number;
   tmdbId?: number;
+  anilistId?: number;
   title: string;
   year: number;
   genres: string[];
@@ -153,10 +154,22 @@ export interface UpcomingEntry {
   artworkUrl: string;
 }
 
+export interface HistoryEntry {
+  id: string;
+  domain: MediaDomain;
+  mediaKind: 'show' | 'movie' | 'read' | 'game';
+  mediaId: string;
+  title: string;
+  posterUrl: string;
+  codeLabel: string;
+  subtitle: string;
+  loggedAt: string;
+}
+
 export interface JournalEntry {
   id: string;
   domain: MediaDomain;
-  mediaKind: 'show' | 'movie' | 'book' | 'manga' | 'comic' | 'game';
+  mediaKind: 'show' | 'movie' | 'novel' | 'manga' | 'comic' | 'game';
   mediaId: string;
   mediaTitle: string;
   mediaPoster: string;
@@ -197,7 +210,7 @@ export interface AppNotification {
 export type LayoutMode = 'cards' | 'posters';
 export type SortMode = 'recent' | 'alpha' | 'progress' | 'rating';
 export type WatchFilter = 'all' | 'tv' | 'movie' | 'anime';
-export type ReadFilter = 'all' | 'book' | 'manga' | 'comic';
+export type ReadFilter = 'all' | 'novel' | 'manga' | 'comic';
 export type PlayFilter = 'all' | 'playing' | 'backlog' | 'completed';
 
 export interface AppSettings {
@@ -242,6 +255,7 @@ export interface CueStoreState {
   readProgress: Record<string, ReadProgress>;
   gameProgress: Record<string, GameProgress>;
   upcoming: UpcomingEntry[];
+  history: HistoryEntry[];
   journalEntries: JournalEntry[];
   lists: CustomList[];
   profile: UserProfile;

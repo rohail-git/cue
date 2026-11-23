@@ -26,7 +26,7 @@ export function MediaImage({
   if (!activeSrc || failed) {
     return (
       <div
-        className={`flex flex-col items-center justify-center bg-gradient-to-br from-[#272222] via-[#1a1717] to-[#110f0f] text-ink-dim p-2 text-center select-none ${aspectClass} ${className}`}
+        className={`flex flex-col items-center justify-center bg-surface-raised text-ink-dim p-2 text-center select-none ${aspectClass} ${className}`}
       >
         <Film className="w-5 h-5 text-ink-faint mb-1 opacity-70" />
         <span className="text-[11px] font-medium leading-tight line-clamp-2 text-ink-dim">

@@ -8,21 +8,7 @@ export function CueIcon({ size = 34, className = '' }: { size?: number; classNam
       className={`shrink-0 ${className}`}
       aria-hidden="true"
     >
-      <defs>
-        <linearGradient id="cueIconGrad" x1="0.35" y1="0" x2="0.65" y2="1">
-          <stop offset="0%" stopColor="#F2EFEA" />
-          <stop offset="62%" stopColor="#F2EFEA" />
-          <stop offset="84%" stopColor="#F9C4B4" />
-          <stop offset="100%" stopColor="#FF7856" />
-        </linearGradient>
-        <radialGradient id="cueIconGlow" cx="0.6" cy="0.78" r="0.72">
-          <stop offset="0%" stopColor="rgba(255,74,45,0.4)" />
-          <stop offset="48%" stopColor="rgba(255,74,45,0.12)" />
-          <stop offset="100%" stopColor="rgba(255,74,45,0)" />
-        </radialGradient>
-      </defs>
-      <rect width="64" height="64" rx="15" fill="#110F0F" />
-      <rect width="64" height="64" rx="15" fill="url(#cueIconGlow)" />
+      <rect width="64" height="64" rx="15" fill="#242933" />
       <text
         x="32"
         y="47"
@@ -30,7 +16,7 @@ export function CueIcon({ size = 34, className = '' }: { size?: number; classNam
         fontFamily="Outfit, system-ui, -apple-system, sans-serif"
         fontSize="46"
         fontWeight="800"
-        fill="url(#cueIconGrad)"
+        fill="#E6EAF0"
       >
         c
       </text>

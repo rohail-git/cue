@@ -44,13 +44,13 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
 
   return (
     <div className="min-h-dvh pb-20 bg-background">
-      <div className="relative h-[320px] sm:h-[380px] w-full overflow-hidden">
+      <div className="relative h-[300px] sm:h-[360px] w-full overflow-hidden border-b border-white/[0.06]">
         <MediaImage
           src={movie.backdropUrl || movie.posterUrl}
           alt={movie.title}
-          className="w-full h-full object-cover object-center blur-[2px] scale-105 opacity-60"
+          className="w-full h-full object-cover object-center blur-[3px] scale-105 opacity-30"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/55 to-black/35" />
+        <div className="absolute inset-0 bg-[#131519]/65" />
 
         <button
           type="button"
@@ -75,7 +75,7 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
             <MediaImage src={movie.posterUrl} alt={movie.title} className="w-full h-full object-cover" />
           </div>
           <div className="min-w-0 pb-1">
-            <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-white tracking-tight leading-tight">
+            <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-ink tracking-tight leading-tight">
               {movie.title}
             </h1>
             <p className="text-sm text-ink-dim mt-1 flex items-center gap-2 flex-wrap">
@@ -86,8 +86,8 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                 {movie.runtime}m
               </span>
               <span>·</span>
-              <span className="inline-flex items-center gap-1 text-amber-400">
-                <Star className="w-3.5 h-3.5 fill-amber-400" />
+              <span className="inline-flex items-center gap-1 text-brand">
+                <Star className="w-3.5 h-3.5 fill-brand" />
                 {movie.rating.toFixed(1)}
               </span>
             </p>
@@ -116,12 +116,12 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
             onClick={() => toggleMovieWatched(movie.id)}
             className={`flex-1 h-12 rounded-full font-semibold text-[15px] flex items-center justify-center gap-2 transition-all ${
               isWatched
-                ? 'border-2 border-watched bg-watched/[0.06] text-ink'
-                : 'bg-brand text-white hover:opacity-95'
+                ? 'border-2 border-watched bg-watched/[0.08] text-ink'
+                : 'bg-brand text-brand-ink hover:opacity-95'
             }`}
           >
             <Check
-              className={`w-5 h-5 ${isWatched ? 'text-watched' : 'text-white'}`}
+              className={`w-5 h-5 ${isWatched ? 'text-watched' : 'text-brand-ink'}`}
               strokeWidth={2.5}
             />
             <span>
@@ -200,7 +200,7 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
           onClick={() => setListPickerOpen(false)}
         >
           <div
-            className="w-full md:max-w-md bg-[#161414] border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl"
+            className="w-full md:max-w-md bg-surface-raised border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="font-display font-bold text-lg text-ink mb-3">Add to custom list</h3>
@@ -237,7 +237,7 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                   createCustomList(newListName, '', { kind: 'movie', id: movie.id });
                   setNewListName('');
                 }}
-                className="px-4 py-2 rounded-xl bg-brand text-white text-sm font-semibold"
+                className="px-4 py-2 rounded-xl bg-brand text-brand-ink text-sm font-semibold"
               >
                 Create
               </button>

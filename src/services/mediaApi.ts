@@ -9,7 +9,7 @@ export interface LiveSearchResult {
   title: string;
   subtitle?: string;
   year: number;
-  mediaType: 'tv' | 'anime' | 'movie' | 'book' | 'manga' | 'comic' | 'game';
+  mediaType: 'tv' | 'anime' | 'movie' | 'novel' | 'manga' | 'comic' | 'game';
   genres: string[];
   rating: number;
   posterUrl: string;
@@ -19,10 +19,72 @@ export interface LiveSearchResult {
   runtime?: number;
   totalUnits?: number;
   steamAppId?: number;
+  popularity?: number;
+  anilistEpisodes?: number;
 }
 
 const stripHtml = (html?: string | null): string =>
   html ? html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() : '';
+
+const NON_LATIN_REGEX =
+  /[\u3000-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u0400-\u04ff\u0600-\u06ff]/;
+
+function hasNonLatinScript(text: string): boolean {
+  return NON_LATIN_REGEX.test(text);
+}
+
+function normalizeTitleKey(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[:\-–—_.,!?'"]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function scoreResult(item: LiveSearchResult, query: string): number {
+  const qNorm = normalizeTitleKey(query);
+  const tNorm = normalizeTitleKey(item.title);
+  const qWords = qNorm.split(' ').filter(Boolean);
+  const queryIsLatin = !hasNonLatinScript(query);
+
+  let score = 0;
+
+  if (tNorm === qNorm) score += 130;
+  else if (tNorm.startsWith(qNorm)) score += 90;
+  else if (tNorm.includes(qNorm)) score += 65;
+
+  if (qWords.length > 0) {
+    const matchedWords = qWords.filter((w) => tNorm.includes(w)).length;
+    score += Math.round((matchedWords / qWords.length) * 40);
+  }
+
+  if (queryIsLatin) {
+    if (hasNonLatinScript(item.title)) score -= 85;
+    else score += 30;
+  }
+
+  if (item.posterUrl) score += 12;
+  if (item.popularity && item.popularity > 20000) score += 18;
+  if (item.source === 'anilist' || item.source === 'tvmaze' || item.source === 'tmdb') score += 8;
+
+  return score;
+}
+
+function rankAndDedupeLiveResults(results: LiveSearchResult[], query: string): LiveSearchResult[] {
+  const scored = results
+    .map((item) => ({ item, score: scoreResult(item, query) }))
+    .sort((a, b) => b.score - a.score);
+
+  const seen = new Set<string>();
+  const out: LiveSearchResult[] = [];
+  for (const entry of scored) {
+    const key = `${entry.item.domain}:${entry.item.mediaType}:${normalizeTitleKey(entry.item.title)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry.item);
+  }
+  return out;
+}
 
 export async function searchLiveMedia(
   query: string,
@@ -46,6 +108,7 @@ export async function searchLiveMedia(
       tasks.push(searchTvMaze(trimmed));
       tasks.push(searchItunesMovies(trimmed));
     }
+    tasks.push(searchAniListAnime(trimmed));
   }
 
   if (domainFilter === 'all' || domainFilter === 'read') {
@@ -62,7 +125,7 @@ export async function searchLiveMedia(
   for (const res of settled) {
     if (res.status === 'fulfilled') combined.push(...res.value);
   }
-  return combined;
+  return rankAndDedupeLiveResults(combined, trimmed);
 }
 
 async function searchTvMaze(query: string): Promise<LiveSearchResult[]> {
@@ -106,6 +169,64 @@ async function searchTvMaze(query: string): Promise<LiveSearchResult[]> {
       runtime: s.averageRuntime || 45,
     };
   });
+}
+
+async function searchAniListAnime(query: string): Promise<LiveSearchResult[]> {
+  try {
+    const gql = `query($s:String){Page(perPage:6){media(search:$s,type:ANIME,sort:[SEARCH_MATCH,POPULARITY_DESC]){id title{english romaji} coverImage{extraLarge large} bannerImage episodes startDate{year} genres averageScore popularity description(asHtml:false)}}}`;
+    const res = await fetch('https://graphql.anilist.co', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: gql, variables: { s: query } }),
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      data?: {
+        Page?: {
+          media?: Array<{
+            id: number;
+            title?: { english?: string; romaji?: string };
+            coverImage?: { extraLarge?: string; large?: string };
+            bannerImage?: string;
+            episodes?: number;
+            startDate?: { year?: number };
+            genres?: string[];
+            averageScore?: number;
+            popularity?: number;
+            description?: string;
+          }>;
+        };
+      };
+    };
+
+    const queryIsLatin = !hasNonLatinScript(query);
+    return (json.data?.Page?.media || [])
+      .map((a) => {
+        const title = a.title?.english || a.title?.romaji || '';
+        const cover = a.coverImage?.extraLarge || a.coverImage?.large || '';
+        return {
+          domain: 'watch' as const,
+          kind: 'show' as const,
+          id: `al-anime-${a.id}`,
+          source: 'anilist' as const,
+          externalId: a.id,
+          title,
+          subtitle: a.episodes ? `${a.episodes} episodes` : 'Anime series',
+          year: a.startDate?.year || 2020,
+          mediaType: 'anime' as const,
+          genres: a.genres?.length ? a.genres.slice(0, 3) : ['Anime'],
+          rating: a.averageScore ? Number((a.averageScore / 10).toFixed(1)) : 8.4,
+          posterUrl: cover,
+          backdropUrl: a.bannerImage || cover,
+          overview: stripHtml(a.description) || `${title} anime series.`,
+          popularity: a.popularity || 0,
+          anilistEpisodes: a.episodes || 12,
+        };
+      })
+      .filter((a) => a.title && (!queryIsLatin || !hasNonLatinScript(a.title)));
+  } catch {
+    return [];
+  }
 }
 
 async function searchItunesMovies(query: string): Promise<LiveSearchResult[]> {
@@ -172,9 +293,10 @@ async function searchItunesMovies(query: string): Promise<LiveSearchResult[]> {
 }
 
 async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
+  const queryIsLatin = !hasNonLatinScript(query);
   try {
     const res = await fetch(
-      `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=8`
+      `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&language=eng&limit=15&fields=key,title,author_name,first_publish_year,cover_i,number_of_pages_median,subject,edition_count`
     );
     if (!res.ok) return [];
     const data = (await res.json()) as {
@@ -186,18 +308,56 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
         cover_i?: number;
         number_of_pages_median?: number;
         subject?: string[];
+        edition_count?: number;
       }>;
     };
 
     return (data.docs || [])
-      .filter((d) => d.title && d.cover_i)
+      .filter((d) => {
+        if (!d.title || !d.cover_i) return false;
+        if (queryIsLatin && hasNonLatinScript(d.title)) return false;
+
+        const lowerTitle = d.title.toLowerCase();
+        if (
+          lowerTitle.includes('coloring book') ||
+          lowerTitle.includes('activity book') ||
+          lowerTitle.includes('sticker book') ||
+          lowerTitle.includes('study guide') ||
+          lowerTitle.includes('summary of')
+        ) {
+          return false;
+        }
+
+        const subjectsLower = (d.subject || []).map((s) => s.toLowerCase());
+        // Let AniList handle manga so Open Library only surfaces Novels & Western Comics
+        const looksLikeManga = subjectsLower.some(
+          (s) =>
+            s.includes('manga') ||
+            s.includes('japanese comics') ||
+            s.includes('shonen') ||
+            s.includes('seinen') ||
+            s.includes('shojo')
+        );
+        if (looksLikeManga) return false;
+
+        return true;
+      })
       .slice(0, 6)
       .map((d) => {
-        const isComic = (d.subject || []).some((s) =>
-          s.toLowerCase().includes('comic') || s.toLowerCase().includes('graphic novel')
+        const subjectsLower = (d.subject || []).map((s) => s.toLowerCase());
+        const isComic = subjectsLower.some(
+          (s) =>
+            s.includes('comic') ||
+            s.includes('graphic novel') ||
+            s.includes('superhero') ||
+            s.includes('cartoons and comics')
         );
         const cover = `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg`;
         const cleanKey = d.key.replace('/works/', '');
+        const estimatedChapters = Math.max(
+          12,
+          Math.min(80, Math.round((d.number_of_pages_median || 320) / 14))
+        );
         return {
           domain: 'read' as const,
           kind: 'read' as const,
@@ -207,14 +367,17 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
           title: d.title,
           subtitle: d.author_name?.[0] || 'Author',
           year: d.first_publish_year || 2020,
-          mediaType: isComic ? ('comic' as const) : ('book' as const),
-          genres: (d.subject || []).slice(0, 2).length ? (d.subject || []).slice(0, 2) : ['Literature'],
+          mediaType: isComic ? ('comic' as const) : ('novel' as const),
+          genres: (d.subject || []).slice(0, 2).length
+            ? (d.subject || []).slice(0, 2)
+            : [isComic ? 'Comics' : 'Novel'],
           rating: 4.4,
           posterUrl: cover,
           backdropUrl: cover,
           overview: `${d.title} by ${d.author_name?.[0] || 'Unknown author'}.`,
           director: d.author_name?.[0] || 'Unknown',
-          totalUnits: d.number_of_pages_median || (isComic ? 12 : 340),
+          totalUnits: isComic ? 12 : estimatedChapters,
+          popularity: (d.edition_count || 1) * 5000,
         };
       });
   } catch {
@@ -223,8 +386,9 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
 }
 
 async function searchAniListManga(query: string): Promise<LiveSearchResult[]> {
+  const queryIsLatin = !hasNonLatinScript(query);
   try {
-    const gql = `query($s:String){Page(perPage:6){media(search:$s,type:MANGA,sort:POPULARITY_DESC){id title{english romaji} coverImage{extraLarge large} bannerImage chapters startDate{year} genres averageScore description(asHtml:false) staff(perPage:1){nodes{name{full}}}}}}`;
+    const gql = `query($s:String){Page(perPage:8){media(search:$s,type:MANGA,sort:[SEARCH_MATCH,POPULARITY_DESC]){id format title{english romaji} coverImage{extraLarge large} bannerImage chapters startDate{year} genres averageScore popularity description(asHtml:false) staff(perPage:1){nodes{name{full}}}}}}`;
     const res = await fetch('https://graphql.anilist.co', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -236,6 +400,7 @@ async function searchAniListManga(query: string): Promise<LiveSearchResult[]> {
         Page?: {
           media?: Array<{
             id: number;
+            format?: string;
             title?: { english?: string; romaji?: string };
             coverImage?: { extraLarge?: string; large?: string };
             bannerImage?: string;
@@ -243,6 +408,7 @@ async function searchAniListManga(query: string): Promise<LiveSearchResult[]> {
             startDate?: { year?: number };
             genres?: string[];
             averageScore?: number;
+            popularity?: number;
             description?: string;
             staff?: { nodes?: Array<{ name?: { full?: string } }> };
           }>;
@@ -250,29 +416,33 @@ async function searchAniListManga(query: string): Promise<LiveSearchResult[]> {
       };
     };
 
-    return (json.data?.Page?.media || []).map((m) => {
-      const title = m.title?.english || m.title?.romaji || 'Manga';
-      const cover = m.coverImage?.extraLarge || m.coverImage?.large || '';
-      const author = m.staff?.nodes?.[0]?.name?.full || 'Mangaka';
-      return {
-        domain: 'read' as const,
-        kind: 'read' as const,
-        id: `al-manga-${m.id}`,
-        source: 'anilist' as const,
-        externalId: m.id,
-        title,
-        subtitle: author,
-        year: m.startDate?.year || 2020,
-        mediaType: 'manga' as const,
-        genres: m.genres?.length ? m.genres.slice(0, 2) : ['Manga'],
-        rating: m.averageScore ? Number((m.averageScore / 20).toFixed(1)) : 4.5,
-        posterUrl: cover,
-        backdropUrl: m.bannerImage || cover,
-        overview: stripHtml(m.description) || `${title} manga series.`,
-        director: author,
-        totalUnits: m.chapters || 100,
-      };
-    });
+    return (json.data?.Page?.media || [])
+      .map((m) => {
+        const title = m.title?.english || m.title?.romaji || '';
+        const cover = m.coverImage?.extraLarge || m.coverImage?.large || '';
+        const author = m.staff?.nodes?.[0]?.name?.full || 'Author';
+        const isNovel = m.format === 'NOVEL';
+        return {
+          domain: 'read' as const,
+          kind: 'read' as const,
+          id: `al-manga-${m.id}`,
+          source: 'anilist' as const,
+          externalId: m.id,
+          title,
+          subtitle: author,
+          year: m.startDate?.year || 2020,
+          mediaType: isNovel ? ('novel' as const) : ('manga' as const),
+          genres: m.genres?.length ? m.genres.slice(0, 2) : [isNovel ? 'Light Novel' : 'Manga'],
+          rating: m.averageScore ? Number((m.averageScore / 20).toFixed(1)) : 4.5,
+          posterUrl: cover,
+          backdropUrl: m.bannerImage || cover,
+          overview: stripHtml(m.description) || `${title} series.`,
+          director: author,
+          totalUnits: m.chapters || (isNovel ? 18 : 100),
+          popularity: m.popularity || 0,
+        };
+      })
+      .filter((m) => m.title && (!queryIsLatin || !hasNonLatinScript(m.title)));
   } catch {
     return [];
   }
@@ -340,7 +510,8 @@ async function searchWikipediaSummary(
     .map((w) => (w.length ? w[0].toUpperCase() + w.slice(1) : ''))
     .join('_');
 
-  const suffixes = target === 'film' ? [`${titleCased}_(film)`, titleCased] : [`${titleCased}_(video_game)`, titleCased];
+  const suffixes =
+    target === 'film' ? [`${titleCased}_(film)`, titleCased] : [`${titleCased}_(video_game)`, titleCased];
   for (const slug of suffixes) {
     try {
       const res = await fetch(
@@ -379,6 +550,7 @@ async function searchWikipediaSummary(
           posterUrl: poster,
           backdropUrl: poster,
           overview: data.extract || data.description || '',
+          popularity: 30000,
         };
       }
 
@@ -398,6 +570,7 @@ async function searchWikipediaSummary(
         overview: data.extract || data.description || '',
         director: data.description || 'Feature Film',
         runtime: 135,
+        popularity: 30000,
       };
     } catch {
       // try next
@@ -425,6 +598,7 @@ async function searchTmdbMulti(query: string, apiKey: string): Promise<LiveSearc
       vote_average?: number;
       original_language?: string;
       genre_ids?: number[];
+      popularity?: number;
     }>;
   };
 
@@ -453,6 +627,7 @@ async function searchTmdbMulti(query: string, apiKey: string): Promise<LiveSearc
         posterUrl: poster,
         backdropUrl: backdrop,
         overview: r.overview || '',
+        popularity: r.popularity ? r.popularity * 1000 : 25000,
       };
     });
 }
@@ -467,6 +642,39 @@ export async function testTmdbConnection(apiKey: string): Promise<boolean> {
 export async function hydrateLiveShow(item: LiveSearchResult, tmdbApiKey?: string): Promise<Show> {
   if (item.source === 'tmdb' && tmdbApiKey) {
     return hydrateTmdbShow(item, tmdbApiKey);
+  }
+  if (item.source === 'anilist') {
+    const epCount = Math.max(1, Math.min(100, item.anilistEpisodes || 12));
+    return {
+      id: item.id,
+      anilistId: Number(item.externalId),
+      title: item.title,
+      year: item.year,
+      genres: item.genres,
+      rating: item.rating,
+      mediaType: 'anime',
+      posterUrl: item.posterUrl,
+      backdropUrl: item.backdropUrl || item.posterUrl,
+      overview: item.overview,
+      runtimeAvg: 24,
+      totalEpisodes: epCount,
+      seasons: [
+        {
+          number: 1,
+          episodes: Array.from({ length: epCount }, (_, idx) => ({
+            id: `${item.id}-s1e${idx + 1}`,
+            season: 1,
+            number: idx + 1,
+            title: `Episode ${idx + 1}`,
+            airdate: `${item.year}-01-01`,
+            runtime: 24,
+            stillUrl: item.backdropUrl || item.posterUrl,
+            overview: '',
+          })),
+        },
+      ],
+      cast: [],
+    };
   }
   return hydrateTvMazeShow(item);
 }
@@ -686,8 +894,8 @@ export function hydrateLiveMovie(item: LiveSearchResult): Movie {
 
 export function hydrateLiveReadItem(item: LiveSearchResult): ReadItem {
   const format =
-    item.mediaType === 'manga' ? 'manga' : item.mediaType === 'comic' ? 'comic' : 'book';
-  const unit = format === 'manga' ? 'chapters' : format === 'comic' ? 'issues' : 'pages';
+    item.mediaType === 'manga' ? 'manga' : item.mediaType === 'comic' ? 'comic' : 'novel';
+  const unit = format === 'comic' ? 'issues' : 'chapters';
   return {
     id: item.id,
     format,
@@ -695,7 +903,7 @@ export function hydrateLiveReadItem(item: LiveSearchResult): ReadItem {
     title: item.title,
     creator: item.director || item.subtitle || 'Author',
     year: item.year,
-    totalUnits: item.totalUnits || (format === 'book' ? 320 : format === 'manga' ? 120 : 12),
+    totalUnits: item.totalUnits || (format === 'novel' ? 30 : format === 'manga' ? 100 : 12),
     genres: item.genres,
     rating: item.rating,
     coverUrl: item.posterUrl,

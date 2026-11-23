@@ -117,19 +117,22 @@ export function getSeasonProgress(
 }
 
 export function getReadStats(item: ReadItem, progress?: ReadProgress) {
-  const current = Math.min(item.totalUnits, Math.max(0, progress?.currentUnit || 0));
   const total = Math.max(1, item.totalUnits);
+  const current = Math.min(total, Math.max(0, progress?.currentUnit || 0));
   const isFinished = progress?.status === 'finished' || current >= total;
   const ratio = Math.min(1, current / total);
-  const stepAmount = item.unit === 'pages' ? 25 : 1;
-  const unitShort =
-    item.unit === 'pages' ? `p. ${current}` : item.unit === 'chapters' ? `Ch. ${current}` : `#${current}`;
+  const stepAmount = 1;
+  const unitLabel = item.unit === 'issues' ? 'issues' : 'chapters';
+  const unitSingular = item.unit === 'issues' ? 'issue' : 'chapter';
+  const unitShort = item.unit === 'issues' ? `Issue #${current}` : `Ch. ${current}`;
   return {
     current,
     total,
     ratio,
     isFinished,
     stepAmount,
+    unitLabel,
+    unitSingular,
     unitShort,
     rereadCount: progress?.rereadCount || (isFinished ? 1 : 0),
   };
@@ -160,7 +163,6 @@ export interface AllMediaAnalytics {
   moviesWatchedCount: number;
   totalWatchCount: number;
   readFinishedCount: number;
-  readPagesCount: number;
   readChaptersCount: number;
   readIssuesCount: number;
   totalRereads: number;
@@ -184,7 +186,6 @@ export function computeAllMediaStats(state: CueStoreState): AllMediaAnalytics {
   let episodesWatchedCount = 0;
   let moviesWatchedCount = 0;
   let readFinishedCount = 0;
-  let readPagesCount = 0;
   let readChaptersCount = 0;
   let readIssuesCount = 0;
   let totalRereads = 0;
@@ -267,12 +268,11 @@ export function computeAllMediaStats(state: CueStoreState): AllMediaAnalytics {
     }
     const mult = Math.max(1, stats.rereadCount);
     const totalUnits = stats.current * (stats.isFinished ? mult : 1);
-    if (item.unit === 'pages') readPagesCount += totalUnits;
-    else if (item.unit === 'chapters') readChaptersCount += totalUnits;
-    else readIssuesCount += totalUnits;
+    if (item.unit === 'issues') readIssuesCount += totalUnits;
+    else readChaptersCount += totalUnits;
 
     if (stats.current > 0) {
-      bumpGenre(item.genres, Math.max(1, Math.round(totalUnits / 50)));
+      bumpGenre(item.genres, Math.max(1, Math.round(totalUnits / 12)));
     }
   }
 
@@ -310,7 +310,6 @@ export function computeAllMediaStats(state: CueStoreState): AllMediaAnalytics {
     moviesWatchedCount,
     totalWatchCount: episodesWatchedCount + moviesWatchedCount,
     readFinishedCount,
-    readPagesCount,
     readChaptersCount,
     readIssuesCount,
     totalRereads,

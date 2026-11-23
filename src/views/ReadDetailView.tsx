@@ -6,6 +6,7 @@ import {
   ListPlus,
   Minus,
   MoreHorizontal,
+  Pencil,
   Plus,
   RotateCcw,
   Star,
@@ -26,6 +27,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
     toggleReadBookmark,
     rateReadItem,
     setReadMood,
+    updateReadTotalUnits,
     resetReadProgress,
     toggleItemInList,
     createCustomList,
@@ -35,6 +37,8 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [listPickerOpen, setListPickerOpen] = useState(false);
   const [newListName, setNewListName] = useState('');
+  const [editingTotal, setEditingTotal] = useState(false);
+  const [totalDraft, setTotalDraft] = useState('');
 
   const item = state.readItems[readId];
   const progress = state.readProgress[readId];
@@ -55,17 +59,19 @@ export function ReadDetailView({ readId }: { readId: string }) {
   }
 
   const stats = getReadStats(item, progress);
+  const formatLabel =
+    item.format === 'manga' ? 'Manga' : item.format === 'comic' ? 'Comic' : 'Novel';
 
   return (
     <div className="min-h-dvh pb-20 bg-background">
-      {/* Hero */}
-      <div className="relative h-[320px] sm:h-[380px] w-full overflow-hidden">
+      {/* Flat Dark Hero (no gradient) */}
+      <div className="relative h-[300px] sm:h-[360px] w-full overflow-hidden border-b border-white/[0.06]">
         <MediaImage
           src={item.backdropUrl || item.coverUrl}
           alt={item.title}
-          className="w-full h-full object-cover object-center blur-[2px] scale-105 opacity-60"
+          className="w-full h-full object-cover object-center blur-[3px] scale-105 opacity-30"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/55 to-black/35" />
+        <div className="absolute inset-0 bg-[#131519]/65" />
 
         <button
           type="button"
@@ -99,7 +105,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
           </div>
 
           {menuOpen && (
-            <div className="absolute right-0 mt-2 w-52 rounded-2xl bg-[#1b1818] border border-white/12 p-1.5 shadow-2xl animate-sheet-up">
+            <div className="absolute right-0 mt-2 w-52 rounded-2xl bg-surface-raised border border-white/12 p-1.5 shadow-2xl animate-sheet-up">
               <button
                 type="button"
                 onClick={() => {
@@ -128,7 +134,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
                   resetReadProgress(item.id);
                   setMenuOpen(false);
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm text-red-400 hover:bg-red-500/10 text-left"
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm text-red-300 hover:bg-red-500/10 text-left"
               >
                 <RotateCcw className="w-4 h-4" />
                 <span>Reset reading progress</span>
@@ -138,14 +144,14 @@ export function ReadDetailView({ readId }: { readId: string }) {
         </div>
 
         <div className="absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto flex items-end gap-4">
-          <div className="w-24 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0">
+          <div className="w-24 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface">
             <MediaImage src={item.coverUrl} alt={item.title} className="w-full h-full object-cover" />
           </div>
           <div className="min-w-0 pb-1">
-            <span className="inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-brand/20 text-brand mb-1.5">
-              {item.format}
+            <span className="inline-block text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-brand/20 text-brand mb-1.5">
+              {formatLabel}
             </span>
-            <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-white tracking-tight leading-tight">
+            <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-ink tracking-tight leading-tight">
               {item.title}
             </h1>
             <p className="text-sm text-ink-dim mt-1">
@@ -155,7 +161,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 pt-3">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 pt-4">
         {/* Action Bar */}
         <div className="flex items-center gap-3 mb-6">
           <button
@@ -175,7 +181,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
             <button
               type="button"
               onClick={() => incrementReread(item.id, 1)}
-              className="flex-1 h-12 rounded-full border-2 border-watched text-ink font-semibold text-[15px] flex items-center justify-center gap-2 bg-watched/[0.06] hover:bg-watched/15 transition-colors"
+              className="flex-1 h-12 rounded-full border-2 border-watched text-ink font-semibold text-[15px] flex items-center justify-center gap-2 bg-watched/[0.08] hover:bg-watched/15 transition-colors"
             >
               <Check className="w-5 h-5 text-watched" strokeWidth={2.5} />
               <span>Finished</span>
@@ -186,13 +192,11 @@ export function ReadDetailView({ readId }: { readId: string }) {
           ) : (
             <button
               type="button"
-              onClick={() => advanceReadProgress(item.id)}
-              className="flex-1 h-12 rounded-full bg-brand text-white font-semibold text-[15px] flex items-center justify-center gap-2 hover:opacity-95 transition-opacity"
+              onClick={() => advanceReadProgress(item.id, 1)}
+              className="flex-1 h-12 rounded-full bg-brand text-brand-ink font-semibold text-[15px] flex items-center justify-center gap-2 hover:opacity-95 transition-opacity"
             >
               <Plus className="w-5 h-5" strokeWidth={2.5} />
-              <span>
-                Log +{stats.stepAmount} {item.unit}
-              </span>
+              <span>Log +1 {stats.unitSingular}</span>
             </button>
           )}
 
@@ -207,14 +211,55 @@ export function ReadDetailView({ readId }: { readId: string }) {
           )}
         </div>
 
-        {/* Interactive Progress Tracker */}
+        {/* Interactive Chapter / Issue Progress Tracker */}
         <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-6">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-semibold text-ink">Reading progress</span>
-            <span className="text-sm font-bold text-watched tabular-nums">
-              {stats.current} / {stats.total} {item.unit} ({Math.round(stats.ratio * 100)}%)
+          <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+            <span className="text-sm font-semibold text-ink">
+              {item.format === 'comic' ? 'Issue run progress' : 'Chapter progress'}
             </span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold text-watched tabular-nums">
+                {stats.current} / {stats.total} {stats.unitLabel} ({Math.round(stats.ratio * 100)}%)
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setTotalDraft(String(item.totalUnits));
+                  setEditingTotal((v) => !v);
+                }}
+                aria-label="Edit total count"
+                className="p-1 rounded-full bg-white/8 text-ink-dim hover:text-ink"
+              >
+                <Pencil className="w-3 h-3" />
+              </button>
+            </div>
           </div>
+
+          {editingTotal && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const val = Number(totalDraft);
+                if (val > 0) updateReadTotalUnits(item.id, val);
+                setEditingTotal(false);
+              }}
+              className="flex items-center gap-2 mb-3"
+            >
+              <input
+                type="number"
+                min={1}
+                value={totalDraft}
+                onChange={(e) => setTotalDraft(e.target.value)}
+                className="w-28 rounded-xl bg-background border border-white/12 px-3 py-1.5 text-xs text-ink outline-none focus:border-brand"
+              />
+              <button
+                type="submit"
+                className="px-3 py-1.5 rounded-xl bg-brand text-brand-ink text-xs font-semibold"
+              >
+                Set total {stats.unitLabel}
+              </button>
+            </form>
+          )}
 
           <input
             type="range"
@@ -223,26 +268,24 @@ export function ReadDetailView({ readId }: { readId: string }) {
             value={stats.current}
             onChange={(e) => setReadProgress(item.id, Number(e.target.value))}
             aria-label="Reading progress slider"
-            className="w-full accent-[#22E55C] cursor-pointer mb-3"
+            className="w-full accent-[#DFB062] cursor-pointer mb-3"
           />
 
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setReadProgress(item.id, stats.current - stats.stepAmount)}
+                onClick={() => setReadProgress(item.id, stats.current - 1)}
                 className="h-9 px-3 rounded-full bg-white/8 text-xs font-semibold text-ink hover:bg-white/12 flex items-center gap-1"
               >
-                <Minus className="w-3.5 h-3.5" />
-                {stats.stepAmount}
+                <Minus className="w-3.5 h-3.5" />1 {stats.unitSingular}
               </button>
               <button
                 type="button"
-                onClick={() => advanceReadProgress(item.id)}
+                onClick={() => advanceReadProgress(item.id, 1)}
                 className="h-9 px-3 rounded-full bg-watched/15 text-xs font-semibold text-watched hover:bg-watched/25 flex items-center gap-1"
               >
-                <Plus className="w-3.5 h-3.5" />
-                {stats.stepAmount}
+                <Plus className="w-3.5 h-3.5" />1 {stats.unitSingular}
               </button>
             </div>
 
@@ -275,7 +318,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
             <div>
               <h2 className="font-semibold text-[16px] text-ink">About</h2>
               <p className="text-[13.5px] text-ink-dim mt-0.5">
-                {item.genres.join(' · ')} · {item.totalUnits} {item.unit}
+                {item.genres.join(' · ')} · {item.totalUnits} {stats.unitLabel}
               </p>
             </div>
             <div className="flex items-center gap-1">
@@ -323,11 +366,11 @@ export function ReadDetailView({ readId }: { readId: string }) {
 
       {listPickerOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/75 backdrop-blur-sm p-0 md:p-4"
+          className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/65 backdrop-blur-sm p-0 md:p-4"
           onClick={() => setListPickerOpen(false)}
         >
           <div
-            className="w-full md:max-w-md bg-[#161414] border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl"
+            className="w-full md:max-w-md bg-surface border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="font-display font-bold text-lg text-ink mb-3">Add to custom list</h3>
@@ -339,7 +382,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
                     key={list.id}
                     type="button"
                     onClick={() => toggleItemInList(list.id, 'read', item.id)}
-                    className="w-full flex items-center justify-between p-3 rounded-xl bg-surface border border-white/8 text-left"
+                    className="w-full flex items-center justify-between p-3 rounded-xl bg-background border border-white/8 text-left"
                   >
                     <div>
                       <p className="text-sm font-semibold text-ink">{list.name}</p>
@@ -355,7 +398,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
                 placeholder="New list name..."
                 value={newListName}
                 onChange={(e) => setNewListName(e.target.value)}
-                className="flex-1 rounded-xl bg-surface border border-white/10 px-3 py-2 text-sm text-ink outline-none focus:border-brand"
+                className="flex-1 rounded-xl bg-background border border-white/10 px-3 py-2 text-sm text-ink outline-none focus:border-brand"
               />
               <button
                 type="button"
@@ -364,7 +407,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
                   createCustomList(newListName, '', { kind: 'read', id: item.id });
                   setNewListName('');
                 }}
-                className="px-4 py-2 rounded-xl bg-brand text-white text-sm font-semibold"
+                className="px-4 py-2 rounded-xl bg-brand text-brand-ink text-sm font-semibold"
               >
                 Create
               </button>

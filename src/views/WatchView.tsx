@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react';
-import { Calendar, Check, ChevronDown, ChevronRight, Layers, ListFilter, Star } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Check, ChevronDown, ChevronRight } from 'lucide-react';
+import { BingersMediaRow } from '../components/BingersMediaRow';
 import { FilterSortSheet } from '../components/FilterSortSheet';
 import { MediaImage } from '../components/MediaImage';
 import { ReleaseAlertBanner } from '../components/ReleaseAlertBanner';
+import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
 import { useCueStore } from '../store/useCueStore';
-import type { Movie, Show, UpcomingEntry, WatchFilter } from '../types';
+import type { HistoryEntry, Movie, Show, UpcomingEntry, WatchFilter } from '../types';
 import { formatEpisodeCode, getShowStats } from '../utils/stats';
 
 export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) {
@@ -21,34 +23,51 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
 
   const [justChecked, setJustChecked] = useState<Record<string, boolean>>({});
   const [showFinished, setShowFinished] = useState(false);
+  const timersRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    return () => {
+      for (const id of timersRef.current) window.clearTimeout(id);
+    };
+  }, []);
 
   const filter = state.settings.watchFilter;
 
-  const handleQuickWatchShow = (e: React.MouseEvent, showId: string) => {
-    e.stopPropagation();
-    if (justChecked[showId]) return;
-    setJustChecked((prev) => ({ ...prev, [showId]: true }));
-    setTimeout(() => {
-      watchNextEpisode(showId);
+  const triggerFlash = (id: string, commit: () => void) => {
+    if (justChecked[id]) return;
+    setJustChecked((prev) => ({ ...prev, [id]: true }));
+    const tCommit = window.setTimeout(commit, 250);
+    const tClear = window.setTimeout(() => {
       setJustChecked((prev) => {
         const copy = { ...prev };
-        delete copy[showId];
+        delete copy[id];
         return copy;
       });
-    }, 320);
+    }, 640);
+    timersRef.current.push(tCommit, tClear);
+  };
+
+  const handleQuickWatchShow = (e: React.MouseEvent, showId: string) => {
+    e.stopPropagation();
+    triggerFlash(showId, () => watchNextEpisode(showId));
   };
 
   const handleQuickWatchMovie = (e: React.MouseEvent, movieId: string) => {
     e.stopPropagation();
-    setJustChecked((prev) => ({ ...prev, [movieId]: true }));
-    setTimeout(() => {
-      toggleMovieWatched(movieId);
-      setJustChecked((prev) => {
-        const copy = { ...prev };
-        delete copy[movieId];
-        return copy;
-      });
-    }, 260);
+    triggerFlash(movieId, () => toggleMovieWatched(movieId));
+  };
+
+  const watchHistory = useMemo(
+    () => (state.history || []).filter((h) => h.domain === 'watch'),
+    [state.history]
+  );
+
+  const openHistoryEntry = (entry: HistoryEntry) => {
+    if (entry.mediaKind === 'movie') {
+      pushRoute({ view: 'movie-detail', movieId: entry.mediaId });
+    } else {
+      pushRoute({ view: 'show-detail', showId: entry.mediaId });
+    }
   };
 
   const { watchingShows, notStartedShows, finishedShows, watchlistMovies, watchedMovies } =
@@ -162,7 +181,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
           }}
           className="group cursor-pointer text-left"
         >
-          <div className="relative aspect-[2/3] rounded-[18px] overflow-hidden bg-surface border border-white/8">
+          <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
             <MediaImage
               src={show.posterUrl}
               alt={show.title}
@@ -202,84 +221,32 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
     }
 
     return (
-      <div
+      <BingersMediaRow
         key={show.id}
-        role="button"
-        tabIndex={0}
-        onClick={() => pushRoute({ view: 'show-detail', showId: show.id })}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') pushRoute({ view: 'show-detail', showId: show.id });
-        }}
-        className="group relative rounded-[20px] bg-surface hover:bg-[#1e1b1b] border border-white/[0.04] overflow-hidden flex items-center cursor-pointer transition-colors"
-      >
-        <div className="w-[104px] sm:w-[114px] h-[94px] shrink-0 overflow-hidden bg-[#121010] relative">
-          <MediaImage
-            src={show.backdropUrl || show.posterUrl}
-            alt={show.title}
-            className="w-full h-full object-cover group-hover:scale-[1.04] transition-transform duration-300"
-          />
-          {state.settings.showPosterProgress && stats.watchedUnique > 0 && (
-            <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/45">
-              <div
-                className="h-full bg-watched transition-all duration-300"
-                style={{ width: `${Math.round(stats.progressRatio * 100)}%` }}
-              />
-            </div>
-          )}
-        </div>
-
-        <div className="flex-1 min-w-0 px-3.5 py-2">
-          <div className="flex items-center gap-1.5">
-            <h3 className="text-[15.5px] font-semibold text-ink truncate leading-tight">
-              {show.title}
-            </h3>
-            {show.mediaType === 'anime' && (
-              <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-white/8 text-ink-dim shrink-0">
-                Anime
-              </span>
-            )}
-          </div>
-          {next ? (
-            <>
-              <p className="text-[13.5px] text-ink-dim tabular-nums mt-0.5">
-                {formatEpisodeCode(next.season, next.number)} · {stats.nextOrdinal}/
-                {stats.totalEpisodes}
-              </p>
-              <p className="text-[13px] text-ink-faint truncate mt-0.5">{next.title}</p>
-            </>
-          ) : (
-            <>
-              <p className="text-[13.5px] text-watched tabular-nums mt-0.5">
-                {stats.totalEpisodes}/{stats.totalEpisodes} watched
-              </p>
-              <p className="text-[13px] text-ink-faint truncate mt-0.5">
-                {stats.rewatchCount > 1 ? `Rewatched x${stats.rewatchCount}` : 'All caught up'}
-              </p>
-            </>
-          )}
-        </div>
-
-        <div className="pr-3.5 shrink-0">
-          {!stats.isFinished ? (
-            <button
-              type="button"
-              onClick={(e) => handleQuickWatchShow(e, show.id)}
-              aria-label={`Mark ${show.title} episode watched`}
-              className={`h-[40px] w-[40px] rounded-full border flex items-center justify-center transition-all active:scale-90 ${
-                flash
-                  ? 'border-watched/70 bg-watched/15 text-watched animate-check-pop'
-                  : 'border-white/15 bg-white/[0.02] text-ink-dim hover:border-watched/60 hover:text-watched'
-              }`}
-            >
-              <Check className="w-[18px] h-[18px]" strokeWidth={2.4} />
-            </button>
-          ) : (
-            <span className="text-sm font-bold text-watched tabular-nums px-1.5">
-              {stats.rewatchCount > 1 ? `x${stats.rewatchCount}` : '✓'}
-            </span>
-          )}
-        </div>
-      </div>
+        title={show.title}
+        badgeLabel={show.mediaType === 'anime' ? 'Anime' : undefined}
+        badgeClassName="bg-watch/15 text-watch"
+        posterUrl={show.posterUrl}
+        posterTag={next?.number === 1 ? 'PREMIERE' : undefined}
+        primaryLine={
+          next
+            ? `${formatEpisodeCode(next.season, next.number)} · ${stats.nextOrdinal}/${stats.totalEpisodes}`
+            : `Finished · ${stats.totalEpisodes}/${stats.totalEpisodes}`
+        }
+        secondaryLine={
+          next ? next.title : `${show.year} · ${show.genres.slice(0, 2).join(' · ')}`
+        }
+        progressRatio={stats.progressRatio}
+        showProgress={state.settings.showPosterProgress}
+        isFlashing={flash}
+        flashLabel="Watched"
+        actionContent={<Check className="w-[17px] h-[17px]" strokeWidth={2.4} />}
+        actionAriaLabel={`Mark ${show.title} next episode watched`}
+        actionDisabled={stats.isFinished}
+        actionActive={stats.isFinished}
+        onAction={!stats.isFinished ? (e) => handleQuickWatchShow(e, show.id) : undefined}
+        onOpen={() => pushRoute({ view: 'show-detail', showId: show.id })}
+      />
     );
   };
 
@@ -300,7 +267,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
           }}
           className="group cursor-pointer text-left"
         >
-          <div className="relative aspect-[2/3] rounded-[18px] overflow-hidden bg-surface border border-white/8">
+          <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
             <MediaImage
               src={movie.posterUrl}
               alt={movie.title}
@@ -312,7 +279,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
               aria-label={`Toggle ${movie.title} watched`}
               className={`absolute top-2 right-2 h-8 w-8 rounded-full backdrop-blur-md flex items-center justify-center border transition-all ${
                 isWatched || flash
-                  ? 'bg-watched/20 border-watched text-watched'
+                  ? 'bg-watched/25 border-watched text-watched animate-check-pop'
                   : 'bg-black/60 border-white/20 text-white hover:border-watched hover:text-watched'
               }`}
             >
@@ -328,138 +295,74 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
     }
 
     return (
-      <div
+      <BingersMediaRow
         key={movie.id}
-        role="button"
-        tabIndex={0}
-        onClick={() => pushRoute({ view: 'movie-detail', movieId: movie.id })}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') pushRoute({ view: 'movie-detail', movieId: movie.id });
-        }}
-        className="group rounded-[20px] bg-surface hover:bg-[#1e1b1b] border border-white/[0.04] overflow-hidden flex items-center cursor-pointer transition-colors"
-      >
-        <div className="w-[68px] sm:w-[74px] h-[94px] shrink-0 overflow-hidden bg-[#121010]">
-          <MediaImage
-            src={movie.posterUrl}
-            alt={movie.title}
-            className="w-full h-full object-cover group-hover:scale-[1.04] transition-transform duration-300"
-          />
-        </div>
-
-        <div className="flex-1 min-w-0 px-3.5 py-2">
-          <div className="flex items-center gap-1.5">
-            <h3 className="text-[15.5px] font-semibold text-ink truncate leading-tight">
-              {movie.title}
-            </h3>
-            <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-white/8 text-ink-dim shrink-0">
-              Movie
-            </span>
-          </div>
-          <p className="text-[13px] text-ink-dim tabular-nums mt-0.5 flex items-center gap-2">
-            <span>{movie.year}</span>
-            <span>·</span>
-            <span>{movie.runtime}m</span>
-            <span className="inline-flex items-center gap-0.5 text-amber-400">
-              <Star className="w-3 h-3 fill-amber-400" />
-              {movie.rating.toFixed(1)}
-            </span>
-          </p>
-          <p className="text-[12.5px] text-ink-faint truncate mt-0.5">{movie.director}</p>
-        </div>
-
-        <div className="pr-3.5 shrink-0 flex items-center gap-2">
-          {isWatched && prog.watchCount > 1 && (
+        title={movie.title}
+        badgeLabel="Movie"
+        badgeClassName="bg-watch/15 text-watch"
+        posterUrl={movie.posterUrl}
+        primaryLine={`${movie.year} · ${movie.runtime}m`}
+        secondaryLine={movie.director}
+        progressRatio={isWatched ? 1 : 0}
+        showProgress={state.settings.showPosterProgress && isWatched}
+        isFlashing={flash}
+        flashLabel="Watched"
+        actionContent={
+          isWatched && prog.watchCount > 1 ? (
             <span className="text-xs font-bold text-watched tabular-nums">x{prog.watchCount}</span>
-          )}
-          <button
-            type="button"
-            onClick={(e) => handleQuickWatchMovie(e, movie.id)}
-            aria-label={`Toggle ${movie.title} watched`}
-            className={`h-[40px] w-[40px] rounded-full border flex items-center justify-center transition-all active:scale-90 ${
-              isWatched || flash
-                ? 'border-watched/70 bg-watched/15 text-watched animate-check-pop'
-                : 'border-white/15 bg-white/[0.02] text-ink-dim hover:border-watched/60 hover:text-watched'
-            }`}
-          >
-            <Check className="w-[18px] h-[18px]" strokeWidth={2.4} />
-          </button>
-        </div>
-      </div>
+          ) : (
+            <Check className="w-[17px] h-[17px]" strokeWidth={2.4} />
+          )
+        }
+        actionAriaLabel={`Toggle ${movie.title} watched`}
+        actionActive={isWatched}
+        onAction={(e) => handleQuickWatchMovie(e, movie.id)}
+        onOpen={() => pushRoute({ view: 'movie-detail', movieId: movie.id })}
+      />
     );
   };
 
   const renderUpcomingCard = (entry: UpcomingEntry) => {
     const flash = Boolean(justChecked[entry.id]);
+    const show = state.shows[entry.mediaId];
     return (
-      <div
+      <BingersMediaRow
         key={entry.id}
-        role="button"
-        tabIndex={0}
-        onClick={() => pushRoute({ view: 'show-detail', showId: entry.mediaId })}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') pushRoute({ view: 'show-detail', showId: entry.mediaId });
-        }}
-        className="group rounded-[20px] bg-surface hover:bg-[#1e1b1b] border border-white/[0.04] overflow-hidden flex items-center cursor-pointer transition-colors"
-      >
-        <div className="w-[104px] sm:w-[114px] h-[94px] shrink-0 overflow-hidden bg-[#121010]">
-          <MediaImage
-            src={entry.artworkUrl}
-            alt={entry.title}
-            className="w-full h-full object-cover group-hover:scale-[1.04] transition-transform duration-300"
-          />
-        </div>
-
-        <div className="flex-1 min-w-0 px-3.5 py-2">
-          <div className="flex items-center gap-1.5">
-            <h3 className="text-[15.5px] font-semibold text-ink truncate leading-tight">
-              {entry.title}
-            </h3>
-            {entry.groupCount && entry.groupCount > 1 && (
-              <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-brand/15 text-brand shrink-0">
-                <Layers className="w-2.5 h-2.5" />
-                +{entry.groupCount}
-              </span>
-            )}
-          </div>
-          <p className="text-[13.5px] text-ink-dim tabular-nums mt-0.5">{entry.subtitle}</p>
-          {entry.episodeTitle && (
-            <p className="text-[13px] text-ink-faint truncate mt-0.5">{entry.episodeTitle}</p>
-          )}
-        </div>
-
-        <div className="pr-4 shrink-0 text-center min-w-[54px]">
-          {entry.daysUntil === 0 ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setJustChecked((p) => ({ ...p, [entry.id]: true }));
-                setTimeout(() => {
-                  watchNextEpisode(entry.mediaId);
-                  showToast(`Marked ${entry.title} ${entry.subtitle} watched`);
-                }, 280);
-              }}
-              aria-label={`Mark ${entry.title} watched`}
-              className={`h-[40px] w-[40px] rounded-full border flex items-center justify-center transition-all ${
-                flash
-                  ? 'border-watched bg-watched/15 text-watched animate-check-pop'
-                  : 'border-white/15 text-ink-dim hover:border-watched hover:text-watched'
-              }`}
-            >
-              <Check className="w-[18px] h-[18px]" strokeWidth={2.4} />
-            </button>
+        title={entry.title}
+        badgeLabel={entry.groupCount && entry.groupCount > 1 ? `+${entry.groupCount}` : undefined}
+        badgeClassName="bg-brand/15 text-brand"
+        posterUrl={show?.posterUrl || entry.artworkUrl}
+        primaryLine={entry.subtitle}
+        secondaryLine={entry.episodeTitle}
+        isFlashing={flash}
+        flashLabel="Watched"
+        actionContent={
+          entry.daysUntil === 0 ? (
+            <Check className="w-[17px] h-[17px]" strokeWidth={2.4} />
           ) : (
-            <div className="flex flex-col items-center">
-              <span className="text-[19px] font-display font-bold text-ink tabular-nums leading-none">
+            <span className="flex flex-col items-center px-1">
+              <span className="text-[17px] font-display font-bold text-ink tabular-nums leading-none">
                 {entry.daysUntil}
               </span>
-              <span className="text-[11px] text-ink-dim mt-0.5">
+              <span className="text-[10px] text-ink-dim mt-0.5">
                 {entry.daysUntil === 1 ? 'day' : 'days'}
               </span>
-            </div>
-          )}
-        </div>
-      </div>
+            </span>
+          )
+        }
+        actionAriaLabel={`Mark ${entry.title} watched`}
+        actionDisabled={entry.daysUntil !== 0}
+        onAction={
+          entry.daysUntil === 0
+            ? () =>
+                triggerFlash(entry.id, () => {
+                  watchNextEpisode(entry.mediaId);
+                  showToast(`Checked off ${entry.title} ${entry.subtitle}`);
+                })
+            : undefined
+        }
+        onOpen={() => pushRoute({ view: 'show-detail', showId: entry.mediaId })}
+      />
     );
   };
 
@@ -470,173 +373,130 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
     { id: 'anime', label: 'Anime' },
   ];
 
+  const listClass = isPosterLayout
+    ? 'grid grid-cols-3 sm:grid-cols-4 gap-3.5'
+    : 'space-y-3';
+
   return (
-    <div className="min-h-dvh pb-28 md:pb-14 pt-4 md:pt-24 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto">
-      {/* Mobile Header */}
-      <div className="md:hidden flex items-center justify-between mb-4">
-        <button
-          type="button"
-          onClick={() => setFilterSheetOpen(true)}
-          aria-label="Filter and sort watch list"
-          className="glass-btn h-10 w-10 rounded-full flex items-center justify-center text-ink"
-        >
-          <ListFilter className="w-4 h-4" />
-        </button>
-
-        <h1 className="font-display font-bold text-[19px] text-ink tracking-tight">
-          {calendarMode ? 'Release dates' : 'Watch'}
-        </h1>
-
-        <button
-          type="button"
-          onClick={toggleCalendarMode}
-          aria-label="Toggle release dates calendar"
-          className={`glass-btn h-10 w-10 rounded-full flex items-center justify-center transition-colors ${
-            calendarMode ? 'text-brand border-brand/50 bg-brand/15' : 'text-ink'
-          }`}
-        >
-          <Calendar className="w-4 h-4" />
-        </button>
-      </div>
-
-      {/* Category Sub-Filter Pills */}
-      {!calendarMode && (
-        <div className="flex items-center gap-2 mb-5 overflow-x-auto no-scrollbar">
-          {filterTabs.map((t) => {
-            const active = filter === t.id;
-            return (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => updateSettings({ watchFilter: t.id })}
-                className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
-                  active
-                    ? 'bg-brand border-brand text-white'
-                    : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
-                }`}
-              >
-                {t.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {calendarMode ? (
-        <div className="animate-fade-in">
-          <ReleaseAlertBanner />
-          {upcomingGroups.today.length > 0 && (
-            <section className="mb-7">
-              <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">Today</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {upcomingGroups.today.map(renderUpcomingCard)}
-              </div>
-            </section>
-          )}
-          {upcomingGroups.thisWeek.length > 0 && (
-            <section className="mb-7">
-              <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">
-                Later this week
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {upcomingGroups.thisWeek.map(renderUpcomingCard)}
-              </div>
-            </section>
-          )}
-          {upcomingGroups.later.length > 0 && (
-            <section>
-              <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">Later</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {upcomingGroups.later.map(renderUpcomingCard)}
-              </div>
-            </section>
-          )}
-        </div>
-      ) : (
-        <div className="animate-fade-in">
-          {watchingShows.length > 0 && (
-            <section className="mb-8">
-              <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">Watch next</h2>
-              <div
-                className={
-                  isPosterLayout
-                    ? 'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3.5'
-                    : 'grid grid-cols-1 md:grid-cols-2 gap-3'
-                }
-              >
-                {watchingShows.map(renderShowCard)}
-              </div>
-            </section>
-          )}
-
-          {watchlistMovies.length > 0 && (
-            <section className="mb-8">
-              <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">
-                Movies to watch
-              </h2>
-              <div
-                className={
-                  isPosterLayout
-                    ? 'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3.5'
-                    : 'grid grid-cols-1 md:grid-cols-2 gap-3'
-                }
-              >
-                {watchlistMovies.map(renderMovieCard)}
-              </div>
-            </section>
-          )}
-
-          {notStartedShows.length > 0 && (
-            <section className="mb-8">
-              <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">
-                Not started yet
-              </h2>
-              <div
-                className={
-                  isPosterLayout
-                    ? 'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3.5'
-                    : 'grid grid-cols-1 md:grid-cols-2 gap-3'
-                }
-              >
-                {notStartedShows.map(renderShowCard)}
-              </div>
-            </section>
-          )}
-
-          {finishedShows.length + watchedMovies.length > 0 && (
-            <section>
-              <button
-                type="button"
-                onClick={() => setShowFinished((v) => !v)}
-                className="flex items-center gap-2 font-display font-bold text-[19px] text-ink-dim hover:text-ink mb-3.5 transition-colors"
-              >
-                <span>
-                  Finished & Watched ({finishedShows.length + watchedMovies.length})
-                </span>
-                {showFinished ? (
-                  <ChevronDown className="w-4 h-4" />
-                ) : (
-                  <ChevronRight className="w-4 h-4" />
-                )}
-              </button>
-              {showFinished && (
-                <div
-                  className={
-                    isPosterLayout
-                      ? 'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3.5'
-                      : 'grid grid-cols-1 md:grid-cols-2 gap-3'
-                  }
+    <>
+      <ScrollUpHistoryFeed
+        historyItems={calendarMode ? [] : watchHistory}
+        onOpenHistoryItem={openHistoryEntry}
+        resetAnchorKey={calendarMode ? 'calendar' : 'feed'}
+        stickyHeader={
+          <MobileDomainBar
+            title="Release dates"
+            calendarMode={calendarMode}
+            onOpenFilter={() => setFilterSheetOpen(true)}
+            onToggleCalendar={toggleCalendarMode}
+            filterAriaLabel="Filter and sort watch list"
+            calendarAriaLabel="Toggle release dates calendar"
+          />
+        }
+      >
+        {/* Category Sub-Filter Pills */}
+        {!calendarMode && (
+          <div className="flex items-center gap-2 mb-5 overflow-x-auto no-scrollbar">
+            {filterTabs.map((t) => {
+              const active = filter === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => updateSettings({ watchFilter: t.id })}
+                  className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
+                    active
+                      ? 'bg-brand border-brand text-brand-ink'
+                      : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                  }`}
                 >
-                  {finishedShows.map(renderShowCard)}
-                  {watchedMovies.map(renderMovieCard)}
-                </div>
-              )}
-            </section>
-          )}
-        </div>
-      )}
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {calendarMode ? (
+          <div className="animate-fade-in space-y-7">
+            <ReleaseAlertBanner />
+            {upcomingGroups.today.length > 0 && (
+              <section>
+                <h2 className="font-display font-bold text-[21px] text-ink mb-3">Today</h2>
+                <div className="space-y-3">{upcomingGroups.today.map(renderUpcomingCard)}</div>
+              </section>
+            )}
+            {upcomingGroups.thisWeek.length > 0 && (
+              <section>
+                <h2 className="font-display font-bold text-[21px] text-ink mb-3">
+                  Later this week
+                </h2>
+                <div className="space-y-3">{upcomingGroups.thisWeek.map(renderUpcomingCard)}</div>
+              </section>
+            )}
+            {upcomingGroups.later.length > 0 && (
+              <section>
+                <h2 className="font-display font-bold text-[21px] text-ink mb-3">Later</h2>
+                <div className="space-y-3">{upcomingGroups.later.map(renderUpcomingCard)}</div>
+              </section>
+            )}
+          </div>
+        ) : (
+          <div className="animate-fade-in">
+            {watchingShows.length > 0 && (
+              <section className="mb-8">
+                <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">Watch next</h2>
+                <div className={listClass}>{watchingShows.map(renderShowCard)}</div>
+              </section>
+            )}
+
+            {watchlistMovies.length > 0 && (
+              <section className="mb-8">
+                <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">
+                  Movies to watch
+                </h2>
+                <div className={listClass}>{watchlistMovies.map(renderMovieCard)}</div>
+              </section>
+            )}
+
+            {notStartedShows.length > 0 && (
+              <section className="mb-8">
+                <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">
+                  Collecting dust
+                </h2>
+                <div className={listClass}>{notStartedShows.map(renderShowCard)}</div>
+              </section>
+            )}
+
+            {finishedShows.length + watchedMovies.length > 0 && (
+              <section>
+                <button
+                  type="button"
+                  onClick={() => setShowFinished((v) => !v)}
+                  className="flex items-center gap-2 font-display font-bold text-[19px] text-ink-dim hover:text-ink mb-3.5 transition-colors"
+                >
+                  <span>
+                    Finished & Watched ({finishedShows.length + watchedMovies.length})
+                  </span>
+                  {showFinished ? (
+                    <ChevronDown className="w-4 h-4" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4" />
+                  )}
+                </button>
+                {showFinished && (
+                  <div className={listClass}>
+                    {finishedShows.map(renderShowCard)}
+                    {watchedMovies.map(renderMovieCard)}
+                  </div>
+                )}
+              </section>
+            )}
+          </div>
+        )}
+      </ScrollUpHistoryFeed>
 
       <FilterSortSheet domain="watch" />
-    </div>
+    </>
   );
 }

@@ -15,7 +15,7 @@ export const MOOD_OPTIONS: { key: PersonalMood; emoji: string; label: string }[]
 
 interface PersonalNotesSectionProps {
   domain: MediaDomain;
-  mediaKind: 'show' | 'movie' | 'book' | 'manga' | 'comic' | 'game';
+  mediaKind: 'show' | 'movie' | 'novel' | 'manga' | 'comic' | 'game';
   mediaId: string;
   mediaTitle: string;
   mediaPoster: string;
@@ -63,7 +63,6 @@ export function PersonalNotesSection({
 
   return (
     <div className="space-y-5 pt-5 border-t border-white/[0.08]">
-      {/* Personal Vibe / Mood */}
       <div>
         <div className="flex items-center justify-between mb-2.5">
           <h3 className="font-semibold text-[15px] text-ink">Your mood</h3>
@@ -72,7 +71,7 @@ export function PersonalNotesSection({
             Private
           </span>
         </div>
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-0.5">
+        <div className="flex items-center gap-2 flex-wrap">
           {MOOD_OPTIONS.map((m) => {
             const active = currentMood === m.key;
             return (
@@ -80,7 +79,7 @@ export function PersonalNotesSection({
                 key={m.key}
                 type="button"
                 onClick={() => onSelectMood(active ? undefined : m.key)}
-                className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs transition-all ${
+                className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs transition-colors ${
                   active
                     ? 'border-brand bg-brand/15 text-ink font-semibold'
                     : 'border-white/8 bg-surface text-ink-dim hover:text-ink'
@@ -94,7 +93,6 @@ export function PersonalNotesSection({
         </div>
       </div>
 
-      {/* Private Notes & Journal */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
@@ -118,13 +116,13 @@ export function PersonalNotesSection({
               type="text"
               value={contextInput}
               onChange={(e) => setContextInput(e.target.value)}
-              placeholder="Tag (e.g. S03 E03, Ch. 214, 42h)"
+              placeholder="Tag (e.g. S03 E03, Ch. 28, Issue #4, 42h)"
               className="flex-1 bg-transparent text-xs text-ink-dim placeholder:text-ink-faint outline-none"
             />
             <button
               type="submit"
               disabled={!noteText.trim()}
-              className="inline-flex items-center gap-1 px-3.5 py-1.5 rounded-full bg-brand text-white text-xs font-semibold disabled:opacity-40 hover:opacity-95"
+              className="inline-flex items-center gap-1 px-3.5 py-1.5 rounded-full bg-brand text-brand-ink text-xs font-semibold disabled:opacity-40 hover:opacity-95"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Save note</span>
@@ -137,7 +135,7 @@ export function PersonalNotesSection({
             {entries.map((entry) => (
               <div
                 key={entry.id}
-                className="rounded-2xl bg-surface/80 border border-white/[0.05] p-3.5 flex items-start justify-between gap-3"
+                className="rounded-2xl bg-surface border border-white/[0.05] p-3.5 flex items-start justify-between gap-3"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 mb-1">

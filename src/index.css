@@ -1,27 +1,78 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #0c0b0b;
-  --surface: #171515;
-  --surface-raised: #232020;
-  --brand: #ff4a2d;
-  --brand-rgb: 255 74 45;
-  --watched: #22e55c;
-  --ink: #f2efea;
-  --ink-dim: #968c8a;
-  --ink-faint: #665c5a;
-  --line: rgba(255, 255, 255, 0.08);
+  --bg: #131519;
+  --surface: #1b1e24;
+  --surface-raised: #242933;
+  --ink: #e6eaf0;
+  --ink-dim: #939ca9;
+  --ink-faint: #67707d;
+  --line: rgba(255, 255, 255, 0.07);
+
+  /* Soft domain accents */
+  --accent-watch: #6ec5d4;
+  --accent-watch-ink: #0e1a1e;
+  --accent-read: #dfb062;
+  --accent-read-ink: #1d160a;
+  --accent-play: #a894e8;
+  --accent-play-ink: #161124;
+  --accent-neutral: #c4cdd9;
+  --accent-neutral-ink: #131519;
+
+  --brand: var(--accent-watch);
+  --brand-ink: var(--accent-watch-ink);
+  --watched: var(--accent-watch);
 }
 
-@theme {
+[data-domain='watch'] {
+  --brand: var(--accent-watch);
+  --brand-ink: var(--accent-watch-ink);
+  --watched: var(--accent-watch);
+  --color-brand: var(--accent-watch);
+  --color-brand-ink: var(--accent-watch-ink);
+  --color-watched: var(--accent-watch);
+}
+
+[data-domain='read'] {
+  --brand: var(--accent-read);
+  --brand-ink: var(--accent-read-ink);
+  --watched: var(--accent-read);
+  --color-brand: var(--accent-read);
+  --color-brand-ink: var(--accent-read-ink);
+  --color-watched: var(--accent-read);
+}
+
+[data-domain='play'] {
+  --brand: var(--accent-play);
+  --brand-ink: var(--accent-play-ink);
+  --watched: var(--accent-play);
+  --color-brand: var(--accent-play);
+  --color-brand-ink: var(--accent-play-ink);
+  --color-watched: var(--accent-play);
+}
+
+[data-domain='neutral'] {
+  --brand: var(--accent-neutral);
+  --brand-ink: var(--accent-neutral-ink);
+  --watched: #7ac7a4;
+  --color-brand: var(--accent-neutral);
+  --color-brand-ink: var(--accent-neutral-ink);
+  --color-watched: #7ac7a4;
+}
+
+@theme inline {
   --color-background: var(--bg);
   --color-surface: var(--surface);
   --color-surface-raised: var(--surface-raised);
   --color-brand: var(--brand);
+  --color-brand-ink: var(--brand-ink);
   --color-watched: var(--watched);
   --color-ink: var(--ink);
   --color-ink-dim: var(--ink-dim);
   --color-ink-faint: var(--ink-faint);
+  --color-watch: var(--accent-watch);
+  --color-read: var(--accent-read);
+  --color-play: var(--accent-play);
   --font-display: "Outfit", system-ui, -apple-system, sans-serif;
   --font-sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
@@ -48,33 +99,27 @@
 }
 
 .glass-pill {
-  background: rgba(26, 24, 24, 0.78);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.11);
-  box-shadow:
-    0 12px 34px rgba(0, 0, 0, 0.6),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  background: rgba(27, 30, 36, 0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.36);
 }
 
 .glass-btn {
-  background: rgba(34, 31, 31, 0.76);
-  backdrop-filter: blur(20px) saturate(175%);
-  -webkit-backdrop-filter: blur(20px) saturate(175%);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  background: rgba(36, 41, 51, 0.9);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
 }
 
 .glass-banner {
-  background: rgba(30, 27, 27, 0.84);
-  backdrop-filter: blur(26px) saturate(180%);
-  -webkit-backdrop-filter: blur(26px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  box-shadow:
-    0 16px 40px rgba(0, 0, 0, 0.68),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  background: rgba(27, 30, 36, 0.95);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.42);
 }
 
 .tabular-nums {
@@ -91,10 +136,10 @@
 
 @keyframes checkPop {
   0% {
-    transform: scale(0.65);
+    transform: scale(0.75);
   }
   55% {
-    transform: scale(1.18);
+    transform: scale(1.12);
   }
   100% {
     transform: scale(1);
@@ -102,13 +147,13 @@
 }
 
 .animate-check-pop {
-  animation: checkPop 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: checkPop 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @keyframes sheetUp {
   from {
     opacity: 0;
-    transform: translateY(20px);
+    transform: translateY(16px);
   }
   to {
     opacity: 1;
@@ -117,7 +162,7 @@
 }
 
 .animate-sheet-up {
-  animation: sheetUp 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: sheetUp 200ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes fadeIn {
@@ -131,4 +176,27 @@
 
 .animate-fade-in {
   animation: fadeIn 180ms ease-out;
+}
+
+@keyframes completeFlash {
+  0% {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  16% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  74% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+}
+
+.animate-complete-flash {
+  animation: completeFlash 620ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }

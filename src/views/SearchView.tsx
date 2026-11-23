@@ -200,7 +200,7 @@ export function SearchView() {
     }
     if (state.readItems['dune-book']) {
       const r = state.readItems['dune-book'];
-      picks.push({ kind: 'read', id: r.id, title: r.title, subtitle: 'Book', poster: r.coverUrl });
+      picks.push({ kind: 'read', id: r.id, title: r.title, subtitle: 'Novel', poster: r.coverUrl });
     }
     if (state.games['elden-ring']) {
       const g = state.games['elden-ring'];
@@ -303,7 +303,7 @@ export function SearchView() {
             inputMode="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search shows, movies, books, manga, comics, or games…"
+            placeholder="Search shows, anime, movies, novels, manga, comics, or games…"
             aria-label="Search all media"
             className="w-full h-12 rounded-2xl bg-surface border border-white/10 pl-11 pr-20 text-[15px] text-ink placeholder:text-ink-faint outline-none focus:border-brand transition-colors"
           />
@@ -333,15 +333,21 @@ export function SearchView() {
               ] as const
             ).map((tab) => {
               const active = filter === tab.id;
+              const activeClass =
+                tab.id === 'watch'
+                  ? 'bg-watch border-watch text-brand-ink'
+                  : tab.id === 'read'
+                    ? 'bg-read border-read text-brand-ink'
+                    : tab.id === 'play'
+                      ? 'bg-play border-play text-brand-ink'
+                      : 'bg-brand border-brand text-brand-ink';
               return (
                 <button
                   key={tab.id}
                   type="button"
                   onClick={() => setFilter(tab.id)}
                   className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
-                    active
-                      ? 'bg-brand border-brand text-white'
-                      : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                    active ? activeClass : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
                   }`}
                 >
                   {tab.label}
@@ -351,7 +357,7 @@ export function SearchView() {
           </div>
 
           <span className="hidden sm:inline-flex items-center gap-1 text-[11px] text-ink-dim px-2.5 py-1 rounded-full bg-surface border border-white/8 shrink-0">
-            <Globe2 className="w-3 h-3 text-watched" />
+            <Globe2 className="w-3 h-3 text-watch" />
             All-Media Live Search
           </span>
         </div>
@@ -369,7 +375,7 @@ export function SearchView() {
               className={`px-3 py-1 rounded-full text-xs border shrink-0 transition-colors ${
                 active
                   ? 'border-white/40 bg-white/15 text-ink font-medium'
-                  : 'border-white/8 bg-[#131111] text-ink-dim hover:text-ink'
+                  : 'border-white/8 bg-surface text-ink-dim hover:text-ink'
               }`}
             >
               {genre}
@@ -405,23 +411,31 @@ export function SearchView() {
                         else pushRoute({ view: 'game-detail', gameId: item.id });
                       }
                     }}
-                    className="rounded-[20px] bg-surface hover:bg-[#1e1b1b] border border-white/[0.04] overflow-hidden flex items-center cursor-pointer transition-colors"
+                    className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] overflow-hidden flex items-center cursor-pointer transition-colors"
                   >
-                    <div className="w-[70px] h-[98px] shrink-0 overflow-hidden bg-[#121010]">
+                    <div className="w-[70px] h-[98px] shrink-0 overflow-hidden bg-surface-raised">
                       <MediaImage src={item.posterUrl} alt={item.title} className="w-full h-full object-cover" />
                     </div>
                     <div className="flex-1 min-w-0 px-3.5 py-2">
                       <div className="flex items-center gap-1.5">
                         <h3 className="text-[15px] font-semibold text-ink truncate">{item.title}</h3>
-                        <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-white/8 text-ink-dim shrink-0">
+                        <span
+                          className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded shrink-0 ${
+                            item.domain === 'watch'
+                              ? 'bg-watch/15 text-watch'
+                              : item.domain === 'read'
+                                ? 'bg-read/15 text-read'
+                                : 'bg-play/15 text-play'
+                          }`}
+                        >
                           {item.badge}
                         </span>
                       </div>
                       <p className="text-xs text-ink-dim mt-0.5 flex items-center gap-1.5">
                         <span>{item.year}</span>
                         <span>·</span>
-                        <span className="inline-flex items-center gap-0.5 text-amber-400">
-                          <Star className="w-3 h-3 fill-amber-400" />
+                        <span className="inline-flex items-center gap-0.5 text-brand">
+                          <Star className="w-3 h-3 fill-brand" />
                           {item.rating.toFixed(1)}
                         </span>
                       </p>
@@ -440,7 +454,11 @@ export function SearchView() {
                         aria-label={item.inLibrary ? 'In library' : 'Add to library'}
                         className={`h-9 w-9 rounded-full border flex items-center justify-center transition-colors ${
                           item.inLibrary
-                            ? 'border-watched/70 bg-watched/15 text-watched'
+                            ? item.domain === 'watch'
+                              ? 'border-watch/60 bg-watch/15 text-watch'
+                              : item.domain === 'read'
+                                ? 'border-read/60 bg-read/15 text-read'
+                                : 'border-play/60 bg-play/15 text-play'
                             : 'border-white/15 text-ink-dim hover:border-brand hover:text-brand'
                         }`}
                       >
@@ -482,9 +500,9 @@ export function SearchView() {
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') handleOpenLiveResult(item, false);
                       }}
-                      className="rounded-[20px] bg-surface hover:bg-[#1e1b1b] border border-white/[0.04] overflow-hidden flex items-center cursor-pointer transition-colors"
+                      className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] overflow-hidden flex items-center cursor-pointer transition-colors"
                     >
-                      <div className="w-[70px] h-[98px] shrink-0 overflow-hidden bg-[#121010]">
+                      <div className="w-[70px] h-[98px] shrink-0 overflow-hidden bg-surface-raised">
                         <MediaImage
                           src={item.posterUrl}
                           fallbackSrc={item.backdropUrl}
@@ -495,7 +513,15 @@ export function SearchView() {
                       <div className="flex-1 min-w-0 px-3.5 py-2">
                         <div className="flex items-center gap-1.5">
                           <h3 className="text-[15px] font-semibold text-ink truncate">{item.title}</h3>
-                          <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-brand/15 text-brand shrink-0">
+                          <span
+                            className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded shrink-0 ${
+                              item.domain === 'watch'
+                                ? 'bg-watch/15 text-watch'
+                                : item.domain === 'read'
+                                  ? 'bg-read/15 text-read'
+                                  : 'bg-play/15 text-play'
+                            }`}
+                          >
                             {item.mediaType}
                           </span>
                         </div>
@@ -514,7 +540,11 @@ export function SearchView() {
                           aria-label={`Add ${item.title}`}
                           className={`h-9 w-9 rounded-full border flex items-center justify-center transition-colors ${
                             alreadyInStore
-                              ? 'border-watched/70 bg-watched/15 text-watched'
+                              ? item.domain === 'watch'
+                                ? 'border-watch/60 bg-watch/15 text-watch'
+                                : item.domain === 'read'
+                                  ? 'border-read/60 bg-read/15 text-read'
+                                  : 'border-play/60 bg-play/15 text-play'
                               : 'border-white/15 text-ink-dim hover:border-brand hover:text-brand'
                           }`}
                         >

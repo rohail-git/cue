@@ -18,6 +18,18 @@ import { WatchView } from './views/WatchView';
 function CueShell() {
   const { route, toast, dismissToast } = useCueStore();
 
+  const activeDomain: 'watch' | 'read' | 'play' | 'neutral' =
+    route.view === 'watch' ||
+    route.view === 'show-detail' ||
+    route.view === 'movie-detail' ||
+    route.view === 'library-watch'
+      ? 'watch'
+      : route.view === 'read' || route.view === 'read-detail' || route.view === 'library-read'
+        ? 'read'
+        : route.view === 'play' || route.view === 'game-detail' || route.view === 'library-play'
+          ? 'play'
+          : 'neutral';
+
   const renderView = () => {
     switch (route.view) {
       case 'watch':
@@ -50,7 +62,7 @@ function CueShell() {
   };
 
   return (
-    <div className="min-h-dvh bg-background text-ink relative">
+    <div data-domain={activeDomain} className="min-h-dvh bg-background text-ink relative">
       <NavChrome />
       <main>{renderView()}</main>
 
@@ -66,7 +78,7 @@ function CueShell() {
                     toast.onAction?.();
                     dismissToast();
                   }}
-                  className="px-3 py-1 rounded-full bg-brand text-white text-xs font-semibold hover:opacity-90"
+                  className="px-3 py-1 rounded-full bg-brand text-brand-ink text-xs font-semibold hover:opacity-90"
                 >
                   {toast.actionLabel}
                 </button>

@@ -174,7 +174,7 @@ export function LibraryGridView({
               onClick={() => setFilter(f.id as typeof filter)}
               className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
                 filter === f.id
-                  ? 'bg-brand border-brand text-white'
+                  ? 'bg-brand border-brand text-brand-ink'
                   : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
               }`}
             >
@@ -255,7 +255,7 @@ export function LibraryGridView({
               onClick={() => setFilter(f.id as typeof filter)}
               className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
                 filter === f.id
-                  ? 'bg-brand border-brand text-white'
+                  ? 'bg-brand border-brand text-brand-ink'
                   : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
               }`}
             >
@@ -286,7 +286,9 @@ export function LibraryGridView({
                   )}
                 </div>
                 <p className="mt-2 text-sm font-medium text-ink truncate">{item.title}</p>
-                <p className="text-xs text-ink-dim truncate">{item.creator}</p>
+                <p className="text-xs text-ink-dim truncate capitalize">
+                  {item.format} · {item.creator}
+                </p>
               </button>
             );
           })}

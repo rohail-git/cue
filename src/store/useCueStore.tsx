@@ -6,6 +6,7 @@ import type {
   GameItem,
   GamePlatform,
   GameWatchStatus,
+  HistoryEntry,
   JournalEntry,
   MediaDomain,
   Movie,
@@ -21,35 +22,55 @@ import type {
 } from '../types';
 import { formatEpisodeCode, getAllEpisodes, getEpisodeKey, getShowStats } from '../utils/stats';
 
-const STORAGE_KEY = 'cue_state_v2';
+const STORAGE_KEY = 'cue_state_v3';
+const LEGACY_V2_KEY = 'cue_state_v2';
 const LEGACY_STORAGE_KEY = 'cue_state_v1';
 
-function hexToRgbTuple(hex: string): string {
-  const clean = hex.replace('#', '');
-  if (clean.length !== 6) return '255 74 45';
-  const r = parseInt(clean.slice(0, 2), 16);
-  const g = parseInt(clean.slice(2, 4), 16);
-  const b = parseInt(clean.slice(4, 6), 16);
-  if ([r, g, b].some(Number.isNaN)) return '255 74 45';
-  return `${r} ${g} ${b}`;
+const MAX_HISTORY_ENTRIES = 60;
+
+function appendHistory(prev: HistoryEntry[], entry: HistoryEntry): HistoryEntry[] {
+  const next = [...prev, entry];
+  return next.length > MAX_HISTORY_ENTRIES ? next.slice(next.length - MAX_HISTORY_ENTRIES) : next;
 }
 
 function loadInitialState(): CueStoreState {
   try {
-    const rawV2 = localStorage.getItem(STORAGE_KEY);
-    if (rawV2) {
-      const parsed = JSON.parse(rawV2) as CueStoreState;
+    const rawV3 = localStorage.getItem(STORAGE_KEY);
+    if (rawV3) {
+      const parsed = JSON.parse(rawV3) as CueStoreState;
       if (parsed && parsed.shows && parsed.movies && parsed.readItems && parsed.games) {
+        if (!Array.isArray(parsed.history) || parsed.history.length === 0) {
+          parsed.history = createSeedState().history;
+        }
         return parsed;
       }
     }
-    // Migrate accent color, TMDB key & profile identity cleanly if v1 exists
     const seed = createSeedState();
+    const rawV2 = localStorage.getItem(LEGACY_V2_KEY);
+    if (rawV2) {
+      const v2 = JSON.parse(rawV2) as Partial<CueStoreState>;
+      if (v2.profile) seed.profile = { ...seed.profile, ...v2.profile };
+      if (v2.settings) {
+        seed.settings = {
+          ...seed.settings,
+          watchLayout: v2.settings.watchLayout || seed.settings.watchLayout,
+          readLayout: v2.settings.readLayout || seed.settings.readLayout,
+          playLayout: v2.settings.playLayout || seed.settings.playLayout,
+          sortBy: v2.settings.sortBy || seed.settings.sortBy,
+          showPosterProgress: v2.settings.showPosterProgress ?? seed.settings.showPosterProgress,
+          tmdbApiKey: v2.settings.tmdbApiKey || '',
+        };
+      }
+      if (v2.showProgress) seed.showProgress = { ...seed.showProgress, ...v2.showProgress };
+      if (v2.movieProgress) seed.movieProgress = { ...seed.movieProgress, ...v2.movieProgress };
+      if (v2.gameProgress) seed.gameProgress = { ...seed.gameProgress, ...v2.gameProgress };
+      return seed;
+    }
     const rawV1 = localStorage.getItem(LEGACY_STORAGE_KEY);
     if (rawV1) {
       const v1 = JSON.parse(rawV1) as {
         profile?: { name?: string; handle?: string; avatarUrl?: string; bannerUrl?: string };
-        settings?: { accentColor?: string; tmdbApiKey?: string };
+        settings?: { tmdbApiKey?: string };
       };
       if (v1?.profile?.name) {
         seed.profile.name = v1.profile.name;
@@ -57,7 +78,6 @@ function loadInitialState(): CueStoreState {
         if (v1.profile.avatarUrl) seed.profile.avatarUrl = v1.profile.avatarUrl;
         if (v1.profile.bannerUrl) seed.profile.bannerUrl = v1.profile.bannerUrl;
       }
-      if (v1?.settings?.accentColor) seed.settings.accentColor = v1.settings.accentColor;
       if (v1?.settings?.tmdbApiKey) seed.settings.tmdbApiKey = v1.settings.tmdbApiKey;
     }
     return seed;
@@ -135,6 +155,7 @@ interface CueContextValue {
   toggleReadBookmark: (readId: string) => void;
   rateReadItem: (readId: string, rating: number) => void;
   setReadMood: (readId: string, mood: PersonalMood | undefined) => void;
+  updateReadTotalUnits: (readId: string, totalUnits: number) => void;
   resetReadProgress: (readId: string) => void;
 
   // Play actions
@@ -216,12 +237,6 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   }, [state]);
 
   useEffect(() => {
-    const color = state.settings.accentColor || '#FF4A2D';
-    document.documentElement.style.setProperty('--brand', color);
-    document.documentElement.style.setProperty('--brand-rgb', hexToRgbTuple(color));
-  }, [state.settings.accentColor]);
-
-  useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 4200);
     return () => clearTimeout(t);
@@ -238,9 +253,9 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     (tab: 'watch' | 'read' | 'play' | 'journal' | 'search', calendarMode = false) => {
       if (tab === 'watch' || tab === 'read' || tab === 'play') {
         setRouteStack([{ view: tab, calendarMode }]);
-      } else {
-        setRouteStack([{ view: tab }]);
+        return;
       }
+      setRouteStack([{ view: tab }]);
       window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
     },
     []
@@ -342,6 +357,17 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           ...(prog?.episodeCounts || {}),
           [epKey]: Math.max(1, (prog?.episodeCounts?.[epKey] || 0) + 1),
         };
+        const historyEntry: HistoryEntry = {
+          id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          domain: 'watch',
+          mediaKind: 'show',
+          mediaId: showId,
+          title: show.title,
+          posterUrl: show.posterUrl,
+          codeLabel: watchedLabel,
+          subtitle: targetEp.title,
+          loggedAt: new Date().toISOString(),
+        };
         return {
           ...prev,
           showProgress: {
@@ -351,6 +377,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           upcoming: prev.upcoming.filter(
             (u) => !(u.kind === 'episode' && u.mediaId === showId && u.daysUntil === 0)
           ),
+          history: appendHistory(prev.history || [], historyEntry),
         };
       });
 
@@ -613,6 +640,19 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const existing = prev.movieProgress[movieId];
         const isWatched = (existing?.watchCount || 0) > 0;
         nowWatched = !isWatched;
+        const nextHistory = nowWatched
+          ? appendHistory(prev.history || [], {
+              id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              domain: 'watch',
+              mediaKind: 'movie',
+              mediaId: movieId,
+              title: movie.title,
+              posterUrl: movie.posterUrl,
+              codeLabel: `${movie.year} · ${movie.runtime}m`,
+              subtitle: movie.director,
+              loggedAt: new Date().toISOString(),
+            })
+          : prev.history;
         return {
           ...prev,
           movieProgress: {
@@ -625,6 +665,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               mood: existing?.mood,
             },
           },
+          history: nextHistory,
         };
       });
       if (title) {
@@ -751,15 +792,30 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const item = prev.readItems[readId];
         if (!item) return prev;
         const prog = prev.readProgress[readId];
-        const step = delta ?? (item.unit === 'pages' ? 25 : 1);
+        const step = delta ?? 1;
         const nextVal = Math.min(item.totalUnits, (prog?.currentUnit || 0) + step);
         const updated = normalizeReadProgress(item, nextVal, prog);
         const unitLabel =
-          item.unit === 'pages' ? `p. ${updated.currentUnit}` : item.unit === 'chapters' ? `Ch. ${updated.currentUnit}` : `#${updated.currentUnit}`;
+          item.unit === 'issues' ? `Issue #${updated.currentUnit}` : `Ch. ${updated.currentUnit}`;
         msg = updated.status === 'finished' ? `Finished ${item.title}` : `${item.title} · ${unitLabel}`;
+        const nextHistory =
+          step > 0
+            ? appendHistory(prev.history || [], {
+                id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                domain: 'read',
+                mediaKind: 'read',
+                mediaId: readId,
+                title: item.title,
+                posterUrl: item.coverUrl,
+                codeLabel: unitLabel,
+                subtitle: item.creator,
+                loggedAt: new Date().toISOString(),
+              })
+            : prev.history;
         return {
           ...prev,
           readProgress: { ...prev.readProgress, [readId]: updated },
+          history: nextHistory,
         };
       });
       if (msg) {
@@ -780,6 +836,23 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           ...prev.readProgress,
           [readId]: normalizeReadProgress(item, currentUnit, prog),
         },
+      };
+    });
+  }, []);
+
+  const updateReadTotalUnits = useCallback((readId: string, totalUnits: number) => {
+    const safeTotal = Math.max(1, Math.round(totalUnits));
+    setState((prev) => {
+      const item = prev.readItems[readId];
+      if (!item) return prev;
+      const updatedItem = { ...item, totalUnits: safeTotal };
+      const prog = prev.readProgress[readId];
+      return {
+        ...prev,
+        readItems: { ...prev.readItems, [readId]: updatedItem },
+        readProgress: prog
+          ? { ...prev.readProgress, [readId]: normalizeReadProgress(updatedItem, prog.currentUnit, prog) }
+          : prev.readProgress,
       };
     });
   }, []);
@@ -947,6 +1020,21 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             ? prog.completionPct
             : Math.min(100, (prog?.completionPct || 0) + (hoursDelta > 0 ? 5 : 0));
         label = `${game.title} · ${nextHours}h logged`;
+        const activePlatform = prog?.platform || game.platforms[0] || 'PC';
+        const nextHistory =
+          hoursDelta > 0
+            ? appendHistory(prev.history || [], {
+                id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                domain: 'play',
+                mediaKind: 'game',
+                mediaId: gameId,
+                title: game.title,
+                posterUrl: game.coverUrl,
+                codeLabel: `+${hoursDelta}h · ${nextHours}h`,
+                subtitle: `${activePlatform} · ${game.developer}`,
+                loggedAt: new Date().toISOString(),
+              })
+            : prev.history;
         return {
           ...prev,
           gameProgress: {
@@ -957,13 +1045,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               completionPct: nextPct,
               playthroughCount: prog?.playthroughCount || 0,
               platinum: prog?.platinum ?? false,
-              platform: prog?.platform || game.platforms[0] || 'PC',
+              platform: activePlatform,
               bookmarked: prog?.bookmarked ?? true,
               lastPlayedAt: new Date().toISOString(),
               rating: prog?.rating,
               mood: prog?.mood,
             },
           },
+          history: nextHistory,
         };
       });
       if (label) showToast(label, 'Log note', () => pushRoute({ view: 'game-detail', gameId }));
@@ -1530,7 +1619,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           for (const id of Object.keys(nextMovies)) {
             nextMovies[id] = { status: 'watchlist', watchCount: 0 };
           }
-          return { ...prev, showProgress: nextShows, movieProgress: nextMovies };
+          return {
+            ...prev,
+            showProgress: nextShows,
+            movieProgress: nextMovies,
+            history: (prev.history || []).filter((h) => h.domain !== 'watch'),
+          };
         });
         showToast('Reset Watch history');
         return;
@@ -1546,7 +1640,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               bookmarked: prev.readProgress[id].bookmarked,
             };
           }
-          return { ...prev, readProgress: nextRead };
+          return {
+            ...prev,
+            readProgress: nextRead,
+            history: (prev.history || []).filter((h) => h.domain !== 'read'),
+          };
         });
         showToast('Reset Read progress');
         return;
@@ -1563,7 +1661,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             platinum: false,
           };
         }
-        return { ...prev, gameProgress: nextGames };
+        return {
+          ...prev,
+          gameProgress: nextGames,
+          history: (prev.history || []).filter((h) => h.domain !== 'play'),
+        };
       });
       showToast('Reset Play progress');
     },
@@ -1617,6 +1719,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         toggleReadBookmark,
         rateReadItem,
         setReadMood,
+        updateReadTotalUnits,
         resetReadProgress,
         logGameSession,
         updateGameProgress,

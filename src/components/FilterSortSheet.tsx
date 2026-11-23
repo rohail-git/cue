@@ -43,7 +43,7 @@ export function FilterSortSheet({ domain }: { domain: MediaDomain }) {
 
   const readFilters: { value: ReadFilter; label: string }[] = [
     { value: 'all', label: 'All' },
-    { value: 'book', label: 'Books' },
+    { value: 'novel', label: 'Novels' },
     { value: 'manga', label: 'Manga' },
     { value: 'comic', label: 'Comics' },
   ];
@@ -64,11 +64,11 @@ export function FilterSortSheet({ domain }: { domain: MediaDomain }) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/70 backdrop-blur-sm p-0 md:p-4 animate-fade-in"
+      className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/65 backdrop-blur-sm p-0 md:p-4 animate-fade-in"
       onClick={() => setFilterSheetOpen(false)}
     >
       <div
-        className="w-full md:max-w-md bg-[#161414] border border-white/10 rounded-t-[28px] md:rounded-[26px] p-5 pb-8 md:pb-6 shadow-2xl animate-sheet-up"
+        className="w-full md:max-w-md bg-surface border border-white/10 rounded-t-[28px] md:rounded-[26px] p-5 pb-8 md:pb-6 shadow-2xl animate-sheet-up"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-5">
@@ -90,10 +90,10 @@ export function FilterSortSheet({ domain }: { domain: MediaDomain }) {
             <button
               type="button"
               onClick={() => setLayout('cards')}
-              className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-medium transition-all ${
+              className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-medium transition-colors ${
                 currentLayout === 'cards'
                   ? 'border-brand bg-brand/15 text-ink'
-                  : 'border-white/10 bg-surface text-ink-dim hover:text-ink'
+                  : 'border-white/10 bg-background text-ink-dim hover:text-ink'
               }`}
             >
               <Rows3 className="w-4 h-4" />
@@ -102,10 +102,10 @@ export function FilterSortSheet({ domain }: { domain: MediaDomain }) {
             <button
               type="button"
               onClick={() => setLayout('posters')}
-              className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-medium transition-all ${
+              className={`flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-medium transition-colors ${
                 currentLayout === 'posters'
                   ? 'border-brand bg-brand/15 text-ink'
-                  : 'border-white/10 bg-surface text-ink-dim hover:text-ink'
+                  : 'border-white/10 bg-background text-ink-dim hover:text-ink'
               }`}
             >
               <Grid2x2 className="w-4 h-4" />
@@ -114,7 +114,6 @@ export function FilterSortSheet({ domain }: { domain: MediaDomain }) {
           </div>
         </div>
 
-        {/* Domain category filter */}
         <div className="mb-5">
           <p className="text-xs font-semibold uppercase tracking-wider text-ink-dim mb-2.5">
             Category
@@ -126,10 +125,10 @@ export function FilterSortSheet({ domain }: { domain: MediaDomain }) {
                   key={opt.value}
                   type="button"
                   onClick={() => updateSettings({ watchFilter: opt.value })}
-                  className={`py-2 px-2 rounded-xl text-xs font-medium border transition-all ${
+                  className={`py-2 px-2 rounded-xl text-xs font-medium border transition-colors ${
                     state.settings.watchFilter === opt.value
                       ? 'border-brand bg-brand/15 text-ink'
-                      : 'border-white/10 bg-surface text-ink-dim hover:text-ink'
+                      : 'border-white/10 bg-background text-ink-dim hover:text-ink'
                   }`}
                 >
                   {opt.label}
@@ -141,10 +140,10 @@ export function FilterSortSheet({ domain }: { domain: MediaDomain }) {
                   key={opt.value}
                   type="button"
                   onClick={() => updateSettings({ readFilter: opt.value })}
-                  className={`py-2 px-2 rounded-xl text-xs font-medium border transition-all ${
+                  className={`py-2 px-2 rounded-xl text-xs font-medium border transition-colors ${
                     state.settings.readFilter === opt.value
                       ? 'border-brand bg-brand/15 text-ink'
-                      : 'border-white/10 bg-surface text-ink-dim hover:text-ink'
+                      : 'border-white/10 bg-background text-ink-dim hover:text-ink'
                   }`}
                 >
                   {opt.label}
@@ -156,10 +155,10 @@ export function FilterSortSheet({ domain }: { domain: MediaDomain }) {
                   key={opt.value}
                   type="button"
                   onClick={() => updateSettings({ playFilter: opt.value })}
-                  className={`py-2 px-2 rounded-xl text-xs font-medium border transition-all ${
+                  className={`py-2 px-2 rounded-xl text-xs font-medium border transition-colors ${
                     state.settings.playFilter === opt.value
                       ? 'border-brand bg-brand/15 text-ink'
-                      : 'border-white/10 bg-surface text-ink-dim hover:text-ink'
+                      : 'border-white/10 bg-background text-ink-dim hover:text-ink'
                   }`}
                 >
                   {opt.label}
@@ -168,7 +167,6 @@ export function FilterSortSheet({ domain }: { domain: MediaDomain }) {
           </div>
         </div>
 
-        {/* Sort */}
         <div className="mb-5">
           <p className="text-xs font-semibold uppercase tracking-wider text-ink-dim mb-2.5">
             Sort by
@@ -200,7 +198,7 @@ export function FilterSortSheet({ domain }: { domain: MediaDomain }) {
           onClick={() =>
             updateSettings({ showPosterProgress: !state.settings.showPosterProgress })
           }
-          className="w-full flex items-center justify-between px-3.5 py-3 rounded-xl bg-surface border border-white/8 text-sm"
+          className="w-full flex items-center justify-between px-3.5 py-3 rounded-xl bg-background border border-white/8 text-sm"
         >
           <span className="text-ink font-medium">Progress bars on artwork</span>
           <span

@@ -5,6 +5,7 @@ import type {
   CustomList,
   GameItem,
   GameProgress,
+  HistoryEntry,
   JournalEntry,
   Movie,
   MovieProgress,
@@ -14,7 +15,7 @@ import type {
   ShowProgress,
   UpcomingEntry,
 } from '../types';
-import { getAllEpisodes, getEpisodeKey } from '../utils/stats';
+import { formatEpisodeCode, getAllEpisodes, getEpisodeKey } from '../utils/stats';
 
 const rawShows = generated.shows as Show[];
 const rawMovies = generated.movies as Movie[];
@@ -221,7 +222,7 @@ export function createSeedState(): CueStoreState {
   const readProgress: Record<string, ReadProgress> = {
     'dune-book': {
       status: 'reading',
-      currentUnit: 248,
+      currentUnit: 28,
       rereadCount: 0,
       bookmarked: true,
       lastReadAt: hoursAgo(3),
@@ -299,7 +300,7 @@ export function createSeedState(): CueStoreState {
     },
     piranesi: {
       status: 'finished',
-      currentUnit: 272,
+      currentUnit: 18,
       rereadCount: 1,
       bookmarked: true,
       lastReadAt: hoursAgo(150),
@@ -589,12 +590,12 @@ export function createSeedState(): CueStoreState {
     {
       id: 'j-2',
       domain: 'read',
-      mediaKind: 'book',
+      mediaKind: 'novel',
       mediaId: 'dune-book',
       mediaTitle: 'Dune',
       mediaPoster: readItems['dune-book'].coverUrl,
-      contextLabel: 'p. 248',
-      text: 'The dinner banquet scene on Arrakis says more about politics and ecology in 20 pages than most trilogies.',
+      contextLabel: 'Ch. 28',
+      text: 'The dinner banquet scene on Arrakis says more about politics and ecology in a single chapter than most trilogies.',
       rating: 5,
       mood: 'mindblown',
       createdAt: hoursAgo(5),
@@ -718,6 +719,86 @@ export function createSeedState(): CueStoreState {
     shows['house-of-the-dragon']?.cast?.[0]?.avatarUrl ||
     '';
 
+  const makeShowHistory = (
+    id: string,
+    showId: string,
+    epIndex: number,
+    loggedAt: string
+  ): HistoryEntry | null => {
+    const s = shows[showId];
+    if (!s) return null;
+    const eps = getAllEpisodes(s);
+    const ep = eps[Math.min(Math.max(0, epIndex), eps.length - 1)];
+    if (!ep) return null;
+    return {
+      id,
+      domain: 'watch',
+      mediaKind: 'show',
+      mediaId: s.id,
+      title: s.title,
+      posterUrl: s.posterUrl,
+      codeLabel: formatEpisodeCode(ep.season, ep.number),
+      subtitle: ep.title,
+      loggedAt,
+    };
+  };
+
+  const makeReadHistory = (
+    id: string,
+    readId: string,
+    codeLabel: string,
+    loggedAt: string
+  ): HistoryEntry | null => {
+    const r = readItems[readId];
+    if (!r) return null;
+    return {
+      id,
+      domain: 'read',
+      mediaKind: 'read',
+      mediaId: r.id,
+      title: r.title,
+      posterUrl: r.coverUrl,
+      codeLabel,
+      subtitle: r.creator,
+      loggedAt,
+    };
+  };
+
+  const makePlayHistory = (
+    id: string,
+    gameId: string,
+    codeLabel: string,
+    loggedAt: string
+  ): HistoryEntry | null => {
+    const g = games[gameId];
+    if (!g) return null;
+    const prog = gameProgress[gameId];
+    return {
+      id,
+      domain: 'play',
+      mediaKind: 'game',
+      mediaId: g.id,
+      title: g.title,
+      posterUrl: g.coverUrl,
+      codeLabel,
+      subtitle: `${prog?.platform || g.platforms[0] || 'PC'} · ${g.developer}`,
+      loggedAt,
+    };
+  };
+
+  const history: HistoryEntry[] = [
+    makeShowHistory('hist-w1', 'house-of-the-dragon', 18, hoursAgo(18)),
+    makeShowHistory('hist-w2', 'the-bear', 36, hoursAgo(14)),
+    makeShowHistory('hist-w3', 'severance', 14, hoursAgo(8)),
+    makeShowHistory('hist-w4', 'house-of-the-dragon', 19, hoursAgo(2)),
+    makeReadHistory('hist-r1', 'saga', 'Issue #48', hoursAgo(16)),
+    makeReadHistory('hist-r2', 'berserk', 'Ch. 214', hoursAgo(6)),
+    makeReadHistory('hist-r3', 'dune-book', 'Ch. 28', hoursAgo(3)),
+    makePlayHistory('hist-p1', 'hades-ii', '+1h · 24h', hoursAgo(19)),
+    makePlayHistory('hist-p2', 'baldurs-gate-3', '+1h · 88h', hoursAgo(11)),
+    makePlayHistory('hist-p3', 'elden-ring', '+1h · 64h', hoursAgo(4)),
+  ].filter((x): x is HistoryEntry => Boolean(x));
+
   return {
     shows,
     movies,
@@ -732,18 +813,19 @@ export function createSeedState(): CueStoreState {
     readProgress,
     gameProgress,
     upcoming,
+    history,
     journalEntries,
     lists,
     profile: {
       name: 'Alex',
       handle: '@alex',
-      bio: 'Private logbook for shows, movies, books, manga, and games.',
+      bio: 'Private logbook for shows, movies, novels, manga, comics, and games.',
       avatarUrl: walterAvatar,
       bannerUrl: shows['breaking-bad']?.backdropUrl || shows['house-of-the-dragon']?.backdropUrl || '',
     },
     notifications,
     settings: {
-      accentColor: '#FF4A2D',
+      accentColor: '#6EC5D4',
       watchLayout: 'cards',
       readLayout: 'cards',
       playLayout: 'cards',

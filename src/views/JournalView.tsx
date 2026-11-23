@@ -92,7 +92,7 @@ export function JournalView() {
     if (draftDomain === 'read') {
       return state.readOrder.map((id) => ({
         id,
-        kind: (state.readItems[id]?.format || 'book') as 'book' | 'manga' | 'comic',
+        kind: (state.readItems[id]?.format || 'novel') as 'novel' | 'manga' | 'comic',
         title: state.readItems[id]?.title || id,
         poster: state.readItems[id]?.coverUrl || '',
       }));
@@ -141,7 +141,7 @@ export function JournalView() {
           alt="Journal cover"
           className="w-full h-full object-cover object-center"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/25 to-black/30" />
+        <div className="absolute inset-0 bg-[#131519]/65 border-b border-white/[0.06]" />
 
         <button
           type="button"
@@ -151,7 +151,7 @@ export function JournalView() {
         >
           <Bell className="w-4 h-4" />
           {unreadCount > 0 && (
-            <span className="absolute top-2.5 right-2.5 h-2 w-2 rounded-full bg-brand ring-2 ring-[#1c1a1a]" />
+            <span className="absolute top-2.5 right-2.5 h-2 w-2 rounded-full bg-watch ring-2 ring-background" />
           )}
         </button>
 
@@ -205,9 +205,9 @@ export function JournalView() {
           <button
             type="button"
             onClick={() => setInsightsOpen(true)}
-            className="rounded-[20px] bg-surface hover:bg-[#1e1b1b] border border-white/[0.04] p-4 text-left transition-colors"
+            className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors"
           >
-            <p className="text-[11px] font-medium uppercase tracking-wider text-ink-dim">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-watch">
               WATCHED
             </p>
             <p className="font-display font-bold text-[24px] text-ink mt-2 tabular-nums leading-none">
@@ -221,25 +221,25 @@ export function JournalView() {
           <button
             type="button"
             onClick={() => setInsightsOpen(true)}
-            className="rounded-[20px] bg-surface hover:bg-[#1e1b1b] border border-white/[0.04] p-4 text-left transition-colors"
+            className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors"
           >
-            <p className="text-[11px] font-medium uppercase tracking-wider text-ink-dim">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-read">
               READ
             </p>
             <p className="font-display font-bold text-[24px] text-ink mt-2 tabular-nums leading-none">
-              {analytics.readPagesCount.toLocaleString()}p
+              {analytics.readChaptersCount} ch
             </p>
             <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">
-              {analytics.readChaptersCount}ch · {analytics.readFinishedCount} finished
+              {analytics.readIssuesCount} iss · {analytics.readFinishedCount} finished
             </p>
           </button>
 
           <button
             type="button"
             onClick={() => setInsightsOpen(true)}
-            className="rounded-[20px] bg-surface hover:bg-[#1e1b1b] border border-white/[0.04] p-4 text-left transition-colors"
+            className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors"
           >
-            <p className="text-[11px] font-medium uppercase tracking-wider text-ink-dim">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-play">
               PLAYED
             </p>
             <p className="font-display font-bold text-[24px] text-ink mt-2 tabular-nums leading-none">
@@ -253,7 +253,7 @@ export function JournalView() {
           <button
             type="button"
             onClick={() => setInsightsOpen(true)}
-            className="rounded-[20px] bg-surface hover:bg-[#1e1b1b] border border-white/[0.04] p-4 text-left transition-colors"
+            className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors"
           >
             <p className="text-[11px] font-medium uppercase tracking-wider text-ink-dim">
               ENTRIES
@@ -272,7 +272,7 @@ export function JournalView() {
             <button
               type="button"
               onClick={() => setComposeOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-brand text-white text-xs font-semibold hover:opacity-95"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-brand text-brand-ink text-xs font-semibold hover:opacity-95"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>Log note</span>
@@ -316,7 +316,7 @@ export function JournalView() {
                   <button
                     type="button"
                     onClick={() => openEntryTarget(entry)}
-                    className="w-12 h-[68px] rounded-xl overflow-hidden bg-[#121010] shrink-0"
+                    className="w-12 h-[68px] rounded-xl overflow-hidden bg-surface-raised shrink-0"
                   >
                     <MediaImage
                       src={entry.mediaPoster}
@@ -340,7 +340,15 @@ export function JournalView() {
                     </div>
 
                     <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                      <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-white/8 text-ink-dim">
+                      <span
+                        className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded ${
+                          entry.domain === 'watch'
+                            ? 'bg-watch/15 text-watch'
+                            : entry.domain === 'read'
+                              ? 'bg-read/15 text-read'
+                              : 'bg-play/15 text-play'
+                        }`}
+                      >
                         {entry.domain}
                       </span>
                       {entry.contextLabel && (
@@ -404,7 +412,7 @@ export function JournalView() {
                   {state.settings.showPosterProgress && (item.ratio || 0) > 0 && (
                     <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
                       <div
-                        className="h-full bg-watched"
+                        className="h-full bg-watch"
                         style={{ width: `${Math.round((item.ratio || 0) * 100)}%` }}
                       />
                     </div>
@@ -424,7 +432,7 @@ export function JournalView() {
           <button
             type="button"
             onClick={() => pushRoute({ view: 'library-read' })}
-            className="flex items-center gap-1 font-display font-bold text-[20px] text-ink hover:text-brand transition-colors mb-3"
+            className="flex items-center gap-1 font-display font-bold text-[20px] text-ink hover:text-read transition-colors mb-3"
           >
             <span>Read</span>
             <ChevronRight className="w-5 h-5 text-ink-dim" />
@@ -449,7 +457,7 @@ export function JournalView() {
                     {state.settings.showPosterProgress && st.current > 0 && (
                       <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
                         <div
-                          className="h-full bg-watched"
+                          className="h-full bg-read"
                           style={{ width: `${Math.round(st.ratio * 100)}%` }}
                         />
                       </div>
@@ -470,7 +478,7 @@ export function JournalView() {
           <button
             type="button"
             onClick={() => pushRoute({ view: 'library-play' })}
-            className="flex items-center gap-1 font-display font-bold text-[20px] text-ink hover:text-brand transition-colors mb-3"
+            className="flex items-center gap-1 font-display font-bold text-[20px] text-ink hover:text-play transition-colors mb-3"
           >
             <span>Play</span>
             <ChevronRight className="w-5 h-5 text-ink-dim" />
@@ -495,7 +503,7 @@ export function JournalView() {
                     {state.settings.showPosterProgress && (prog?.completionPct || 0) > 0 && (
                       <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
                         <div
-                          className="h-full bg-watched"
+                          className="h-full bg-play"
                           style={{ width: `${prog?.completionPct || 0}%` }}
                         />
                       </div>
@@ -533,7 +541,7 @@ export function JournalView() {
                 key={list.id}
                 type="button"
                 onClick={() => pushRoute({ view: 'list-detail', listId: list.id })}
-                className="rounded-[20px] bg-surface hover:bg-[#1e1b1b] border border-white/[0.05] p-4 text-left transition-colors flex items-center justify-between gap-3"
+                className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors flex items-center justify-between gap-3"
               >
                 <div className="min-w-0">
                   <p className="font-semibold text-[15px] text-ink truncate">{list.name}</p>
@@ -559,7 +567,7 @@ export function JournalView() {
         >
           <form
             onSubmit={handleComposeSubmit}
-            className="w-full md:max-w-lg bg-[#161414] border border-white/10 rounded-t-[28px] md:rounded-[26px] p-5 space-y-4 shadow-2xl animate-sheet-up"
+            className="w-full md:max-w-lg bg-surface-raised border border-white/10 rounded-t-[28px] md:rounded-[26px] p-5 space-y-4 shadow-2xl animate-sheet-up"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -590,7 +598,11 @@ export function JournalView() {
                   }}
                   className={`py-2 rounded-xl border text-xs font-semibold capitalize ${
                     draftDomain === dom
-                      ? 'border-brand bg-brand/15 text-ink'
+                      ? dom === 'watch'
+                        ? 'border-watch bg-watch/15 text-ink'
+                        : dom === 'read'
+                          ? 'border-read bg-read/15 text-ink'
+                          : 'border-play bg-play/15 text-ink'
                       : 'border-white/10 bg-surface text-ink-dim'
                   }`}
                 >
@@ -605,7 +617,7 @@ export function JournalView() {
               className="w-full rounded-xl bg-surface border border-white/10 px-3 py-2.5 text-sm text-ink outline-none focus:border-brand"
             >
               {domainSelectableItems.map((it) => (
-                <option key={it.id} value={it.id} className="bg-[#171515]">
+                <option key={it.id} value={it.id} className="bg-surface">
                   {it.title}
                 </option>
               ))}
@@ -614,7 +626,7 @@ export function JournalView() {
             <input
               value={draftContext}
               onChange={(e) => setDraftContext(e.target.value)}
-              placeholder="Progress tag (optional, e.g. S03 E03, Ch. 214, 64h)"
+              placeholder="Progress tag (optional, e.g. S03 E03, Ch. 214, Issue #12, 64h)"
               className="w-full rounded-xl bg-surface border border-white/10 px-3 py-2 text-sm text-ink outline-none focus:border-brand"
             />
 
@@ -647,7 +659,7 @@ export function JournalView() {
             <button
               type="submit"
               disabled={!draftText.trim()}
-              className="w-full py-2.5 rounded-full bg-brand text-white text-sm font-semibold disabled:opacity-40"
+              className="w-full py-2.5 rounded-full bg-brand text-brand-ink text-sm font-semibold disabled:opacity-40"
             >
               Save entry
             </button>
@@ -670,7 +682,7 @@ export function JournalView() {
               setListDesc('');
               setNewListOpen(false);
             }}
-            className="w-full md:max-w-md bg-[#161414] border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 space-y-3 shadow-2xl"
+            className="w-full md:max-w-md bg-surface-raised border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 space-y-3 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -699,7 +711,7 @@ export function JournalView() {
             <button
               type="submit"
               disabled={!listName.trim()}
-              className="w-full py-2.5 rounded-full bg-brand text-white text-sm font-semibold disabled:opacity-40"
+              className="w-full py-2.5 rounded-full bg-brand text-brand-ink text-sm font-semibold disabled:opacity-40"
             >
               Create list
             </button>

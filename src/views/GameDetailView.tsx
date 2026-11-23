@@ -65,14 +65,14 @@ export function GameDetailView({ gameId }: { gameId: string }) {
 
   return (
     <div className="min-h-dvh pb-20 bg-background">
-      {/* Hero */}
-      <div className="relative h-[300px] sm:h-[360px] md:h-[390px] w-full overflow-hidden">
+      {/* Flat Dark Hero (no gradient) */}
+      <div className="relative h-[290px] sm:h-[350px] md:h-[380px] w-full overflow-hidden border-b border-white/[0.06]">
         <MediaImage
           src={game.backdropUrl || game.coverUrl}
           alt={game.title}
-          className="w-full h-full object-cover object-center"
+          className="w-full h-full object-cover object-center opacity-50"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/45 to-black/30" />
+        <div className="absolute inset-0 bg-[#131519]/55" />
 
         <button
           type="button"
@@ -106,7 +106,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
           </div>
 
           {menuOpen && (
-            <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-[#1b1818] border border-white/12 p-1.5 shadow-2xl animate-sheet-up">
+            <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-surface-raised border border-white/12 p-1.5 shadow-2xl animate-sheet-up">
               <button
                 type="button"
                 onClick={() => {
@@ -135,7 +135,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                   resetGameProgress(game.id);
                   setMenuOpen(false);
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm text-red-400 hover:bg-red-500/10 text-left"
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm text-red-300 hover:bg-red-500/10 text-left"
               >
                 <RotateCcw className="w-4 h-4" />
                 <span>Reset game progress</span>
@@ -148,13 +148,13 @@ export function GameDetailView({ gameId }: { gameId: string }) {
           <p className="text-xs font-semibold uppercase tracking-wider text-brand mb-1">
             {game.developer} · {game.year}
           </p>
-          <h1 className="font-display font-extrabold text-3xl sm:text-5xl text-white tracking-tight drop-shadow-[0_4px_18px_rgba(0,0,0,0.85)]">
+          <h1 className="font-display font-extrabold text-3xl sm:text-5xl text-ink tracking-tight">
             {game.title}
           </h1>
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 pt-3">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 pt-4">
         {/* Action Bar */}
         <div className="flex items-center gap-3 mb-6">
           <button
@@ -175,12 +175,12 @@ export function GameDetailView({ gameId }: { gameId: string }) {
             onClick={() => toggleGameCompleted(game.id)}
             className={`flex-1 h-12 rounded-full font-semibold text-[15px] flex items-center justify-center gap-2 transition-all ${
               isCompleted
-                ? 'border-2 border-watched bg-watched/[0.06] text-ink'
-                : 'bg-brand text-white hover:opacity-95'
+                ? 'border-2 border-watched bg-watched/[0.08] text-ink'
+                : 'bg-brand text-brand-ink hover:opacity-95'
             }`}
           >
             <Check
-              className={`w-5 h-5 ${isCompleted ? 'text-watched' : 'text-white'}`}
+              className={`w-5 h-5 ${isCompleted ? 'text-watched' : 'text-brand-ink'}`}
               strokeWidth={2.5}
             />
             <span>
@@ -200,7 +200,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
             aria-label="Toggle 100% Platinum trophy"
             className={`h-12 px-4 rounded-full border text-sm font-semibold flex items-center gap-1.5 transition-colors ${
               progress?.platinum
-                ? 'border-amber-400 bg-amber-400/15 text-amber-300'
+                ? 'border-brand bg-brand/15 text-brand'
                 : 'border-white/12 bg-surface-raised text-ink-dim hover:text-ink'
             }`}
           >
@@ -273,7 +273,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                 updateGameProgress(game.id, { completionPct: Number(e.target.value) })
               }
               aria-label="Game completion percentage"
-              className="w-full accent-[#22E55C] cursor-pointer"
+              className="w-full accent-[#A894E8] cursor-pointer"
             />
           </div>
 
@@ -288,7 +288,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                   className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
                     platform === plat
                       ? 'border-brand bg-brand/15 text-ink'
-                      : 'border-white/8 bg-[#121010] text-ink-dim hover:text-ink'
+                      : 'border-white/8 bg-background text-ink-dim hover:text-ink'
                   }`}
                 >
                   {plat}
@@ -350,11 +350,11 @@ export function GameDetailView({ gameId }: { gameId: string }) {
 
       {listPickerOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/75 backdrop-blur-sm p-0 md:p-4"
+          className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/65 backdrop-blur-sm p-0 md:p-4"
           onClick={() => setListPickerOpen(false)}
         >
           <div
-            className="w-full md:max-w-md bg-[#161414] border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl"
+            className="w-full md:max-w-md bg-surface border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="font-display font-bold text-lg text-ink mb-3">Add to custom list</h3>
@@ -366,7 +366,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                     key={list.id}
                     type="button"
                     onClick={() => toggleItemInList(list.id, 'game', game.id)}
-                    className="w-full flex items-center justify-between p-3 rounded-xl bg-surface border border-white/8 text-left"
+                    className="w-full flex items-center justify-between p-3 rounded-xl bg-background border border-white/8 text-left"
                   >
                     <div>
                       <p className="text-sm font-semibold text-ink">{list.name}</p>
@@ -382,7 +382,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                 placeholder="New list name..."
                 value={newListName}
                 onChange={(e) => setNewListName(e.target.value)}
-                className="flex-1 rounded-xl bg-surface border border-white/10 px-3 py-2 text-sm text-ink outline-none focus:border-brand"
+                className="flex-1 rounded-xl bg-background border border-white/10 px-3 py-2 text-sm text-ink outline-none focus:border-brand"
               />
               <button
                 type="button"
@@ -391,7 +391,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                   createCustomList(newListName, '', { kind: 'game', id: game.id });
                   setNewListName('');
                 }}
-                className="px-4 py-2 rounded-xl bg-brand text-white text-sm font-semibold"
+                className="px-4 py-2 rounded-xl bg-brand text-brand-ink text-sm font-semibold"
               >
                 Create
               </button>

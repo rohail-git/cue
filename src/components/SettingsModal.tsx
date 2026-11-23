@@ -1,6 +1,5 @@
 import { useRef, useState } from 'react';
 import {
-  Check,
   Download,
   KeyRound,
   Palette,
@@ -12,15 +11,6 @@ import {
 } from 'lucide-react';
 import { testTmdbConnection } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
-
-const ACCENT_PRESETS = [
-  { name: 'Vermilion', hex: '#FF4A2D' },
-  { name: 'Cobalt', hex: '#3B82F6' },
-  { name: 'Orchid', hex: '#A855F7' },
-  { name: 'Amber', hex: '#F59E0B' },
-  { name: 'Emerald', hex: '#22E55C' },
-  { name: 'Rose', hex: '#EC4899' },
-];
 
 export function SettingsModal() {
   const {
@@ -109,11 +99,11 @@ export function SettingsModal() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/75 backdrop-blur-sm p-0 md:p-4 animate-fade-in"
+      className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/65 backdrop-blur-sm p-0 md:p-4 animate-fade-in"
       onClick={() => setSettingsOpen(false)}
     >
       <div
-        className="w-full md:max-w-xl max-h-[88dvh] flex flex-col bg-[#161414] border border-white/10 rounded-t-[28px] md:rounded-[28px] shadow-2xl animate-sheet-up overflow-hidden"
+        className="w-full md:max-w-xl max-h-[88dvh] flex flex-col bg-surface border border-white/10 rounded-t-[28px] md:rounded-[28px] shadow-2xl animate-sheet-up overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/8">
@@ -128,30 +118,34 @@ export function SettingsModal() {
         </div>
 
         <div className="p-5 overflow-y-auto space-y-6">
-          {/* Your colour */}
+          {/* Calm Section Palette Summary */}
           <section>
             <div className="flex items-center gap-2 mb-3">
-              <Palette className="w-4 h-4 text-brand" />
-              <h4 className="text-sm font-semibold text-ink">Your colour</h4>
+              <Palette className="w-4 h-4 text-ink-dim" />
+              <h4 className="text-sm font-semibold text-ink">Soft Dark Appearance</h4>
             </div>
-            <div className="grid grid-cols-6 gap-2.5">
-              {ACCENT_PRESETS.map((c) => {
-                const active = state.settings.accentColor.toLowerCase() === c.hex.toLowerCase();
-                return (
-                  <button
-                    key={c.hex}
-                    type="button"
-                    onClick={() => updateSettings({ accentColor: c.hex })}
-                    title={c.name}
-                    className={`h-11 rounded-2xl flex items-center justify-center border transition-transform active:scale-95 ${
-                      active ? 'border-white scale-105' : 'border-white/10'
-                    }`}
-                    style={{ backgroundColor: c.hex }}
-                  >
-                    {active && <Check className="w-4 h-4 text-white drop-shadow" />}
-                  </button>
-                );
-              })}
+            <div className="grid grid-cols-3 gap-2.5">
+              <div className="rounded-2xl bg-background border border-white/8 p-3 flex items-center gap-2.5">
+                <span className="h-4 w-4 rounded-full bg-watch shrink-0" />
+                <div>
+                  <p className="text-xs font-semibold text-ink">Watch</p>
+                  <p className="text-[11px] text-ink-dim">Soft Cyan</p>
+                </div>
+              </div>
+              <div className="rounded-2xl bg-background border border-white/8 p-3 flex items-center gap-2.5">
+                <span className="h-4 w-4 rounded-full bg-read shrink-0" />
+                <div>
+                  <p className="text-xs font-semibold text-ink">Read</p>
+                  <p className="text-[11px] text-ink-dim">Soft Amber</p>
+                </div>
+              </div>
+              <div className="rounded-2xl bg-background border border-white/8 p-3 flex items-center gap-2.5">
+                <span className="h-4 w-4 rounded-full bg-play shrink-0" />
+                <div>
+                  <p className="text-xs font-semibold text-ink">Play</p>
+                  <p className="text-[11px] text-ink-dim">Soft Purple</p>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -159,13 +153,13 @@ export function SettingsModal() {
           <section className="space-y-3 pt-2 border-t border-white/8">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <User className="w-4 h-4 text-brand" />
+                <User className="w-4 h-4 text-ink-dim" />
                 <h4 className="text-sm font-semibold text-ink">Journal Profile</h4>
               </div>
               <button
                 type="button"
                 onClick={handleSaveProfile}
-                className="text-xs font-semibold px-3 py-1.5 rounded-full bg-brand text-white hover:opacity-90"
+                className="text-xs font-semibold px-3 py-1.5 rounded-full bg-brand text-brand-ink hover:opacity-90"
               >
                 Save profile
               </button>
@@ -177,7 +171,7 @@ export function SettingsModal() {
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full rounded-xl bg-surface border border-white/10 px-3 py-2 text-sm text-ink focus:border-brand outline-none"
+                  className="w-full rounded-xl bg-background border border-white/10 px-3 py-2 text-sm text-ink focus:border-brand outline-none"
                 />
               </div>
               <div>
@@ -185,7 +179,7 @@ export function SettingsModal() {
                 <input
                   value={handle}
                   onChange={(e) => setHandle(e.target.value)}
-                  className="w-full rounded-xl bg-surface border border-white/10 px-3 py-2 text-sm text-ink focus:border-brand outline-none"
+                  className="w-full rounded-xl bg-background border border-white/10 px-3 py-2 text-sm text-ink focus:border-brand outline-none"
                 />
               </div>
             </div>
@@ -195,7 +189,7 @@ export function SettingsModal() {
               <input
                 value={bio}
                 onChange={(e) => setBio(e.target.value)}
-                className="w-full rounded-xl bg-surface border border-white/10 px-3 py-2 text-sm text-ink focus:border-brand outline-none"
+                className="w-full rounded-xl bg-background border border-white/10 px-3 py-2 text-sm text-ink focus:border-brand outline-none"
               />
             </div>
 
@@ -250,7 +244,7 @@ export function SettingsModal() {
               onClick={() =>
                 updateSettings({ showPosterProgress: !state.settings.showPosterProgress })
               }
-              className="w-full flex items-center justify-between px-3.5 py-3 rounded-xl bg-surface border border-white/8 text-sm"
+              className="w-full flex items-center justify-between px-3.5 py-3 rounded-xl bg-background border border-white/8 text-sm"
             >
               <span>Show progress bars on artwork</span>
               <span
@@ -267,11 +261,11 @@ export function SettingsModal() {
           <section className="space-y-2.5 pt-2 border-t border-white/8">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <KeyRound className="w-4 h-4 text-brand" />
+                <KeyRound className="w-4 h-4 text-ink-dim" />
                 <h4 className="text-sm font-semibold text-ink">Live Catalog APIs</h4>
               </div>
-              <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-watched/15 text-watched">
-                All-Media Zero-Config Active
+              <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-watch/15 text-watch">
+                English-First Active
               </span>
             </div>
             <p className="text-xs text-ink-dim">
@@ -284,7 +278,7 @@ export function SettingsModal() {
                 placeholder="TMDB v3 API key (optional)"
                 value={tmdbKey}
                 onChange={(e) => setTmdbKey(e.target.value)}
-                className="flex-1 rounded-xl bg-surface border border-white/10 px-3 py-2 text-sm text-ink focus:border-brand outline-none"
+                className="flex-1 rounded-xl bg-background border border-white/10 px-3 py-2 text-sm text-ink focus:border-brand outline-none"
               />
               <button
                 type="button"
@@ -295,10 +289,10 @@ export function SettingsModal() {
               </button>
             </div>
             {tmdbStatus === 'ok' && (
-              <p className="text-xs text-watched">TMDB API key verified and enabled.</p>
+              <p className="text-xs text-watch">TMDB API key verified and enabled.</p>
             )}
             {tmdbStatus === 'err' && (
-              <p className="text-xs text-red-400">
+              <p className="text-xs text-red-300">
                 Could not verify key; zero-config search remains active.
               </p>
             )}
@@ -315,7 +309,7 @@ export function SettingsModal() {
               <button
                 type="button"
                 onClick={handleDownloadBackup}
-                className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-surface border border-white/10 text-sm font-medium text-ink hover:bg-surface-raised"
+                className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-background border border-white/10 text-sm font-medium text-ink hover:bg-surface-raised"
               >
                 <Download className="w-4 h-4 text-ink-dim" />
                 <span>Export JSON</span>
@@ -323,7 +317,7 @@ export function SettingsModal() {
               <button
                 type="button"
                 onClick={() => fileRef.current?.click()}
-                className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-surface border border-white/10 text-sm font-medium text-ink hover:bg-surface-raised"
+                className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-background border border-white/10 text-sm font-medium text-ink hover:bg-surface-raised"
               >
                 <Upload className="w-4 h-4 text-ink-dim" />
                 <span>Import JSON</span>
@@ -359,8 +353,8 @@ export function SettingsModal() {
                   }}
                   className={`py-2 px-2.5 rounded-xl border text-xs font-medium flex items-center justify-center gap-1.5 transition-colors ${
                     confirmScope === scope
-                      ? 'bg-red-500/20 border-red-500 text-red-300'
-                      : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                      ? 'bg-red-500/20 border-red-400 text-red-300'
+                      : 'bg-background border-white/10 text-ink-dim hover:text-ink'
                   }`}
                 >
                   <RotateCcw className="w-3.5 h-3.5" />

@@ -60,7 +60,7 @@ export function NavChrome() {
           type="button"
           onClick={goBack}
           aria-label="Go back"
-          className="glass-btn h-11 w-11 rounded-full flex items-center justify-center text-ink hover:scale-105 active:scale-95 transition-transform"
+          className="glass-btn h-11 w-11 rounded-full flex items-center justify-center text-ink hover:bg-surface-raised active:scale-95 transition-all"
         >
           <ChevronLeft className="w-5 h-5" />
         </button>
@@ -72,7 +72,7 @@ export function NavChrome() {
           type="button"
           onClick={() => setFilterSheetOpen(true)}
           aria-label="Filter and sort"
-          className="glass-btn h-11 w-11 rounded-full flex items-center justify-center text-ink hover:scale-105 active:scale-95 transition-transform"
+          className="glass-btn h-11 w-11 rounded-full flex items-center justify-center text-ink hover:bg-surface-raised active:scale-95 transition-all"
         >
           <ListFilter className="w-4 h-4" />
         </button>
@@ -84,11 +84,11 @@ export function NavChrome() {
           type="button"
           onClick={() => setNotificationsOpen(true)}
           aria-label="Release alerts"
-          className="glass-btn relative h-11 w-11 rounded-full flex items-center justify-center text-ink hover:scale-105 active:scale-95 transition-transform"
+          className="glass-btn relative h-11 w-11 rounded-full flex items-center justify-center text-ink hover:bg-surface-raised active:scale-95 transition-all"
         >
           <Bell className="w-4 h-4" />
           {unreadCount > 0 && (
-            <span className="absolute top-2.5 right-2.5 h-2 w-2 rounded-full bg-brand ring-2 ring-[#1c1a1a]" />
+            <span className="absolute top-2.5 right-2.5 h-2 w-2 rounded-full bg-watch ring-2 ring-surface" />
           )}
         </button>
       );
@@ -104,8 +104,10 @@ export function NavChrome() {
           onClick={toggleCalendarMode}
           aria-label="Toggle release calendar"
           title="Upcoming releases"
-          className={`glass-btn h-11 w-11 rounded-full flex items-center justify-center transition-all hover:scale-105 active:scale-95 ${
-            isCalendarActive ? 'text-brand border-brand/50 bg-brand/15' : 'text-ink'
+          className={`glass-btn h-11 w-11 rounded-full flex items-center justify-center transition-all active:scale-95 ${
+            isCalendarActive
+              ? 'text-brand border-brand/50 bg-brand/15'
+              : 'text-ink hover:bg-surface-raised'
           }`}
         >
           <Calendar className="w-4 h-4" />
@@ -118,7 +120,7 @@ export function NavChrome() {
           type="button"
           onClick={() => setSettingsOpen(true)}
           aria-label="Settings"
-          className="glass-btn h-11 w-11 rounded-full flex items-center justify-center text-ink hover:scale-105 active:scale-95 transition-transform"
+          className="glass-btn h-11 w-11 rounded-full flex items-center justify-center text-ink hover:bg-surface-raised active:scale-95 transition-all"
         >
           <Settings className="w-4 h-4" />
         </button>
@@ -128,10 +130,10 @@ export function NavChrome() {
   };
 
   const navItems = [
-    { id: 'watch' as const, label: 'Watch', Icon: Tv },
-    { id: 'read' as const, label: 'Read', Icon: BookOpen },
-    { id: 'play' as const, label: 'Play', Icon: Gamepad2 },
-    { id: 'journal' as const, label: 'Journal', Icon: NotebookText },
+    { id: 'watch' as const, label: 'Watch', Icon: Tv, activeColor: 'text-watch' },
+    { id: 'read' as const, label: 'Read', Icon: BookOpen, activeColor: 'text-read' },
+    { id: 'play' as const, label: 'Play', Icon: Gamepad2, activeColor: 'text-play' },
+    { id: 'journal' as const, label: 'Journal', Icon: NotebookText, activeColor: 'text-ink' },
   ];
 
   return (
@@ -154,17 +156,17 @@ export function NavChrome() {
           aria-label="Primary navigation"
           className="pointer-events-auto glass-pill rounded-full p-1.5 flex items-center gap-1"
         >
-          {navItems.map(({ id, label, Icon }) => {
+          {navItems.map(({ id, label, Icon, activeColor }) => {
             const active = activeMainTab === id;
             return (
               <button
                 key={id}
                 type="button"
                 onClick={() => switchTab(id, false)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-colors ${
                   active
-                    ? 'bg-white/10 text-brand'
-                    : 'text-ink/85 hover:text-ink hover:bg-white/5'
+                    ? `bg-white/[0.08] ${activeColor}`
+                    : 'text-ink-dim hover:text-ink hover:bg-white/[0.04]'
                 }`}
               >
                 <Icon className="w-4 h-4" />
@@ -177,10 +179,10 @@ export function NavChrome() {
             type="button"
             onClick={() => switchTab('search')}
             aria-label="Search"
-            className={`flex items-center justify-center w-9 h-9 rounded-full transition-all ${
+            className={`flex items-center justify-center w-9 h-9 rounded-full transition-colors ${
               activeMainTab === 'search'
-                ? 'bg-white/10 text-brand'
-                : 'text-ink/85 hover:text-ink hover:bg-white/5'
+                ? 'bg-white/[0.08] text-ink'
+                : 'text-ink-dim hover:text-ink hover:bg-white/[0.04]'
             }`}
           >
             <Search className="w-4 h-4" />
@@ -192,28 +194,26 @@ export function NavChrome() {
         </div>
       </header>
 
-      {/* Mobile Bottom Floating Liquid Glass Pill (Watch, Read, Play, Journal) + Detached Search Circle */}
+      {/* Mobile Bottom Floating Pill + Detached Search Circle */}
       {showMobileBottomNav && (
         <nav
           aria-label="Mobile navigation"
           className="md:hidden fixed bottom-0 inset-x-0 z-40 pointer-events-none px-3.5 pb-5 pt-2 flex items-center justify-center gap-2.5"
         >
           <div className="pointer-events-auto glass-pill rounded-full p-1 flex items-center flex-1 max-w-[308px] justify-between">
-            {navItems.map(({ id, label, Icon }) => {
+            {navItems.map(({ id, label, Icon, activeColor }) => {
               const active = activeMainTab === id;
               return (
                 <button
                   key={id}
                   type="button"
                   onClick={() => switchTab(id, false)}
-                  className={`flex-1 min-w-0 flex flex-col items-center justify-center py-1.5 px-1.5 rounded-full transition-all ${
-                    active ? 'bg-white/10 text-brand' : 'text-ink/85 hover:text-ink'
+                  className={`flex-1 min-w-0 flex flex-col items-center justify-center py-1.5 px-1.5 rounded-full transition-colors ${
+                    active ? `bg-white/[0.08] ${activeColor}` : 'text-ink-dim hover:text-ink'
                   }`}
                 >
                   <Icon className="w-[18px] h-[18px] mb-0.5" />
-                  <span className="text-[10.5px] font-medium leading-none truncate">
-                    {label}
-                  </span>
+                  <span className="text-[10.5px] font-medium leading-none truncate">{label}</span>
                 </button>
               );
             })}
@@ -223,8 +223,8 @@ export function NavChrome() {
             type="button"
             onClick={() => switchTab('search')}
             aria-label="Search catalog"
-            className={`pointer-events-auto glass-pill h-[52px] w-[52px] rounded-full flex items-center justify-center shrink-0 transition-all active:scale-95 ${
-              activeMainTab === 'search' ? 'text-brand border-brand/50' : 'text-ink'
+            className={`pointer-events-auto glass-pill h-[52px] w-[52px] rounded-full flex items-center justify-center shrink-0 transition-transform active:scale-95 ${
+              activeMainTab === 'search' ? 'text-ink border-white/25' : 'text-ink-dim hover:text-ink'
             }`}
           >
             <Search className="w-[19px] h-[19px]" />
