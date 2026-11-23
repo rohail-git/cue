@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Bookmark,
   Check,
@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
+import { fetchComicEditionCovers, formatDisplayTitle } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import { COMIC_EDITIONS, getComicEditionLabel, isDcComic } from '../utils/editions';
 import { getReadStats } from '../utils/stats';
@@ -29,6 +30,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
     rateReadItem,
     setReadMood,
     setReadEdition,
+    updateReadEditionCovers,
     updateReadTotalUnits,
     resetReadProgress,
     toggleItemInList,
@@ -41,9 +43,31 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const [newListName, setNewListName] = useState('');
   const [editingTotal, setEditingTotal] = useState(false);
   const [totalDraft, setTotalDraft] = useState('');
+  const fetchedCoversRef = useRef<Set<string>>(new Set());
 
   const item = state.readItems[readId];
   const progress = state.readProgress[readId];
+
+  useEffect(() => {
+    if (!item || item.format !== 'comic') return;
+    if (fetchedCoversRef.current.has(item.id)) return;
+    const uniqueCoverCount = item.editionCovers ? new Set(Object.values(item.editionCovers)).size : 0;
+    const formattedTitle = formatDisplayTitle(item.title);
+    const needsTitleFix = formattedTitle !== item.title;
+    if (uniqueCoverCount > 1 && !needsTitleFix) return;
+
+    let cancelled = false;
+    fetchComicEditionCovers(item.title, item.creator).then((covers) => {
+      if (cancelled) return;
+      fetchedCoversRef.current.add(item.id);
+      if (Object.keys(covers).length > 0 || needsTitleFix) {
+        updateReadEditionCovers(item.id, covers, needsTitleFix ? formattedTitle : undefined);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [item, updateReadEditionCovers]);
 
   if (!item) {
     return (

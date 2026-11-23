@@ -53,7 +53,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     [state.history]
   );
 
-  const { allBookmarked, readingList, wantToReadList, finishedList } = useMemo(() => {
+  const { readingList, wantToReadList, finishedList } = useMemo(() => {
     const sortMode = state.settings.sortBy;
     const all = state.readOrder
       .map((id) => state.readItems[id])
@@ -101,25 +101,11 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     }
 
     return {
-      allBookmarked: sortedAll,
       readingList: reading,
       wantToReadList: want,
       finishedList: done,
     };
   }, [state.readOrder, state.readItems, state.readProgress, state.settings.sortBy, filter]);
-
-  const novelSection = useMemo(
-    () => allBookmarked.filter((i) => i.format === 'novel'),
-    [allBookmarked]
-  );
-  const mangaSection = useMemo(
-    () => allBookmarked.filter((i) => i.format === 'manga'),
-    [allBookmarked]
-  );
-  const comicSection = useMemo(
-    () => allBookmarked.filter((i) => i.format === 'comic'),
-    [allBookmarked]
-  );
 
   const upcomingReads = useMemo(
     () => state.upcoming.filter((u) => u.domain === 'read'),
@@ -305,50 +291,22 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
               ))}
             </div>
           </div>
-        ) : filter === 'all' ? (
-          <div className="animate-fade-in space-y-8">
-            {novelSection.length > 0 && (
-              <section>
-                <div className="flex items-baseline justify-between mb-3.5">
-                  <h2 className="font-display font-bold text-[22px] text-ink">Novels</h2>
-                  <span className="text-xs text-ink-dim">Chapters</span>
-                </div>
-                <div className={listClass}>{novelSection.map(renderReadCard)}</div>
-              </section>
-            )}
-
-            {mangaSection.length > 0 && (
-              <section>
-                <div className="flex items-baseline justify-between mb-3.5">
-                  <h2 className="font-display font-bold text-[22px] text-ink">Manga</h2>
-                  <span className="text-xs text-ink-dim">Chapters</span>
-                </div>
-                <div className={listClass}>{mangaSection.map(renderReadCard)}</div>
-              </section>
-            )}
-
-            {comicSection.length > 0 && (
-              <section>
-                <div className="flex items-baseline justify-between mb-3.5">
-                  <h2 className="font-display font-bold text-[22px] text-ink">Comics</h2>
-                  <span className="text-xs text-ink-dim">Issues</span>
-                </div>
-                <div className={listClass}>{comicSection.map(renderReadCard)}</div>
-              </section>
-            )}
-          </div>
         ) : (
           <div className="animate-fade-in">
             {readingList.length > 0 && (
               <section className="mb-8">
-                <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">Reading now</h2>
+                <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">
+                  Currently reading
+                </h2>
                 <div className={listClass}>{readingList.map(renderReadCard)}</div>
               </section>
             )}
 
             {wantToReadList.length > 0 && (
               <section className="mb-8">
-                <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">Want to read</h2>
+                <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">
+                  Collecting dust
+                </h2>
                 <div className={listClass}>{wantToReadList.map(renderReadCard)}</div>
               </section>
             )}

@@ -23,6 +23,7 @@ export function SearchView() {
     addLiveShowToStore,
     addLiveMovieToStore,
     addLiveReadToStore,
+    updateReadEditionCovers,
     addLiveGameToStore,
     toggleShowBookmark,
     toggleMovieWatchlist,
@@ -270,7 +271,11 @@ export function SearchView() {
     }
     if (item.kind === 'read') {
       const readItem = hydrateLiveReadItem(item);
-      if (andAdd || !state.readItems[readItem.id]) addLiveReadToStore(readItem, 'want_to_read');
+      if (andAdd || !state.readItems[readItem.id]) {
+        addLiveReadToStore(readItem, 'want_to_read');
+      } else {
+        updateReadEditionCovers(readItem.id, readItem.editionCovers || {}, readItem.title);
+      }
       if (!andAdd) pushRoute({ view: 'read-detail', readId: readItem.id });
       return;
     }

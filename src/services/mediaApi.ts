@@ -93,7 +93,7 @@ function formatHyphenWord(word: string, forceCapitalize: boolean): string {
     .join('-');
 }
 
-function formatDisplayTitle(raw: string): string {
+export function formatDisplayTitle(raw: string): string {
   const collapsed = raw.replace(/\s+/g, ' ').trim();
   if (!collapsed) return '';
   const words = collapsed.split(' ');
@@ -445,6 +445,39 @@ async function searchItunesMovies(query: string): Promise<LiveSearchResult[]> {
   return itunesResults;
 }
 
+interface OpenLibraryDoc {
+  key: string;
+  title: string;
+  author_name?: string[];
+  first_publish_year?: number;
+  cover_i?: number;
+  number_of_pages_median?: number;
+  subject?: string[];
+  edition_count?: number;
+}
+
+function buildComicEditionCovers(
+  docs: OpenLibraryDoc[],
+  earliestYear: number,
+  primaryCover: string
+): Partial<Record<ComicEditionId, string>> {
+  const editionCovers: Partial<Record<ComicEditionId, string>> = {};
+  if (primaryCover) {
+    editionCovers.digital = primaryCover;
+  }
+  for (const d of docs) {
+    if (!d.cover_i) continue;
+    const ed = detectComicEdition(d.title, d.first_publish_year, earliestYear);
+    if (!editionCovers[ed]) {
+      editionCovers[ed] = `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg`;
+    }
+  }
+  if (primaryCover && !editionCovers.tpb) {
+    editionCovers.tpb = primaryCover;
+  }
+  return editionCovers;
+}
+
 async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
   const queryIsLatin = !hasNonLatinScript(query);
   try {
@@ -453,19 +486,9 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
     );
     if (!res.ok) return [];
     const data = (await res.json()) as {
-      docs?: Array<{
-        key: string;
-        title: string;
-        author_name?: string[];
-        first_publish_year?: number;
-        cover_i?: number;
-        number_of_pages_median?: number;
-        subject?: string[];
-        edition_count?: number;
-      }>;
+      docs?: OpenLibraryDoc[];
     };
 
-    type OlDoc = NonNullable<typeof data.docs>[number];
     const filteredDocs = (data.docs || []).filter((d) => {
       if (!d.title || !d.cover_i) return false;
       if (queryIsLatin && hasNonLatinScript(d.title)) return false;
@@ -497,7 +520,7 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
     });
 
     // Collapse editions of the same canonical work (e.g. Vol 02, Absolute, 2024 Compact)
-    const groups = new Map<string, OlDoc[]>();
+    const groups = new Map<string, OpenLibraryDoc[]>();
     for (const doc of filteredDocs) {
       const workKey = canonicalReadWorkKey(doc.title);
       const authorKey = normalizeTitleKey(doc.author_name?.[0] || '');
@@ -535,18 +558,7 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
         docs.some((d) => /\b(absolute|omnibus|tpb|vol\.?\s*\d+)\b/i.test(d.title));
 
       const primaryCover = `https://covers.openlibrary.org/b/id/${primary.cover_i}-L.jpg`;
-      const editionCovers: Partial<Record<ComicEditionId, string>> = {};
-      if (isComic) {
-        editionCovers.digital = primaryCover;
-        for (const d of docs) {
-          if (!d.cover_i) continue;
-          const ed = detectComicEdition(d.title, d.first_publish_year, earliestYear);
-          if (!editionCovers[ed]) {
-            editionCovers[ed] = `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg`;
-          }
-        }
-        if (!editionCovers.tpb) editionCovers.tpb = primaryCover;
-      }
+      const editionCovers = isComic ? buildComicEditionCovers(docs, earliestYear, primaryCover) : undefined;
 
       const cleanKey = primary.key.replace('/works/', '');
       const authorName = primary.author_name?.[0] || 'Author';
@@ -575,7 +587,7 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
         overview: `${baseTitle} by ${authorName}.`,
         director: authorName,
         totalUnits: isComic ? 12 : estimatedChapters,
-        editionCovers: isComic ? editionCovers : undefined,
+        editionCovers,
         popularity: Math.max(totalEditions, docs.length * 3) * 5000,
       });
     }
@@ -583,6 +595,83 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
     return collapsed.slice(0, 6);
   } catch {
     return [];
+  }
+}
+
+/** Fetches per-edition cover URLs for an existing/cached comic run via Open Library works + editions API. */
+export async function fetchComicEditionCovers(
+  title: string,
+  creator?: string
+): Promise<Partial<Record<ComicEditionId, string>>> {
+  const cleanTitle = stripEditionAffixes(title);
+  const targetKey = canonicalReadWorkKey(cleanTitle);
+  const firstAuthor = creator && creator !== 'Author' ? creator.split(/[&,]/)[0]?.trim() : '';
+  const query = firstAuthor ? `${cleanTitle} ${firstAuthor}` : cleanTitle;
+  try {
+    const res = await fetch(
+      `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&language=eng&limit=18&fields=key,title,author_name,first_publish_year,cover_i`
+    );
+    if (!res.ok) return {};
+    const data = (await res.json()) as { docs?: OpenLibraryDoc[] };
+    const allWorkMatches = (data.docs || []).filter(
+      (d) => d.title && !hasNonLatinScript(d.title) && canonicalReadWorkKey(d.title) === targetKey
+    );
+    const matching = allWorkMatches.filter((d) => Boolean(d.cover_i));
+    if (allWorkMatches.length === 0) return {};
+
+    const years = allWorkMatches
+      .map((d) => d.first_publish_year)
+      .filter((y): y is number => typeof y === 'number' && y > 1900);
+    const earliestYear = years.length > 0 ? Math.min(...years) : 2020;
+    const primary = [...allWorkMatches].sort((a, b) => {
+      const aWrap = /\b(vol\.?|volume|absolute|deluxe|omnibus|compact)\b/i.test(a.title) ? 1 : 0;
+      const bWrap = /\b(vol\.?|volume|absolute|deluxe|omnibus|compact)\b/i.test(b.title) ? 1 : 0;
+      if (aWrap !== bWrap) return aWrap - bWrap;
+      return (a.first_publish_year || 9999) - (b.first_publish_year || 9999);
+    })[0];
+    const primaryWithCover = matching[0];
+    const primaryCover = primaryWithCover?.cover_i
+      ? `https://covers.openlibrary.org/b/id/${primaryWithCover.cover_i}-L.jpg`
+      : '';
+    const covers = buildComicEditionCovers(matching, earliestYear, primaryCover);
+
+    if (primary?.key?.startsWith('/works/')) {
+      try {
+        const edRes = await fetch(`https://openlibrary.org${primary.key}/editions.json?limit=35`);
+        if (edRes.ok) {
+          const edData = (await edRes.json()) as {
+            entries?: Array<{
+              title?: string;
+              publish_date?: string;
+              physical_format?: string;
+              covers?: number[];
+            }>;
+          };
+          for (const e of edData.entries || []) {
+            const coverId = e.covers?.find((c) => c > 0);
+            if (!coverId) continue;
+            const yearMatch = (e.publish_date || '').match(/\b(19\d\d|20\d\d)\b/);
+            const pubYear = yearMatch ? Number(yearMatch[1]) : undefined;
+            const fmtLower = `${e.title || ''} ${e.physical_format || ''}`.toLowerCase();
+            let ed: ComicEditionId = detectComicEdition(e.title || '', pubYear, earliestYear);
+            if (ed === 'digital') {
+              if (fmtLower.includes('hardcover') || fmtLower.includes('capa dura')) ed = 'hardcover';
+              else if (fmtLower.includes('paperback') || fmtLower.includes('softcover')) ed = 'tpb';
+            }
+            const url = `https://covers.openlibrary.org/b/id/${coverId}-L.jpg`;
+            if (!covers[ed] || (ed === 'hardcover' && fmtLower.includes('hardcover'))) {
+              covers[ed] = covers[ed] || url;
+            }
+          }
+        }
+      } catch {
+        // ignore editions fallback failure
+      }
+    }
+
+    return covers;
+  } catch {
+    return {};
   }
 }
 

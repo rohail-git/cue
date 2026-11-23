@@ -158,6 +158,11 @@ interface CueContextValue {
   rateReadItem: (readId: string, rating: number) => void;
   setReadMood: (readId: string, mood: PersonalMood | undefined) => void;
   setReadEdition: (readId: string, edition: ComicEditionId) => void;
+  updateReadEditionCovers: (
+    readId: string,
+    editionCovers: Partial<Record<ComicEditionId, string>>,
+    cleanTitle?: string
+  ) => void;
   updateReadTotalUnits: (readId: string, totalUnits: number) => void;
   resetReadProgress: (readId: string) => void;
 
@@ -802,6 +807,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const unitLabel =
           item.unit === 'issues' ? `Issue #${updated.currentUnit}` : `Ch. ${updated.currentUnit}`;
         msg = updated.status === 'finished' ? `Finished ${item.title}` : `${item.title} · ${unitLabel}`;
+        const activeCover = (updated.edition && item.editionCovers?.[updated.edition]) || item.coverUrl;
         const nextHistory =
           step > 0
             ? appendHistory(prev.history || [], {
@@ -810,7 +816,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 mediaKind: 'read',
                 mediaId: readId,
                 title: item.title,
-                posterUrl: item.coverUrl,
+                posterUrl: activeCover,
                 codeLabel: unitLabel,
                 subtitle: item.creator,
                 loggedAt: new Date().toISOString(),
@@ -1000,6 +1006,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const item = prev.readItems[readId];
         const existing = prev.readProgress[readId];
         label = getComicEditionLabel(edition, item);
+        const nextCover = item?.editionCovers?.[edition] || item?.coverUrl;
+        const nextHistory = nextCover
+          ? (prev.history || []).map((h) =>
+              h.domain === 'read' && h.mediaId === readId ? { ...h, posterUrl: nextCover } : h
+            )
+          : prev.history;
         return {
           ...prev,
           readProgress: {
@@ -1015,11 +1027,47 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               mood: existing?.mood,
             },
           },
+          history: nextHistory,
         };
       });
       if (label) showToast(`Edition set to ${label}`);
     },
     [showToast]
+  );
+
+  const updateReadEditionCovers = useCallback(
+    (
+      readId: string,
+      editionCovers: Partial<Record<ComicEditionId, string>>,
+      cleanTitle?: string
+    ) => {
+      setState((prev) => {
+        const item = prev.readItems[readId];
+        if (!item) return prev;
+        const mergedCovers = { ...(item.editionCovers || {}), ...editionCovers };
+        const nextTitle = cleanTitle || item.title;
+        const activeEdition = prev.readProgress[readId]?.edition;
+        const nextCover = (activeEdition && mergedCovers[activeEdition]) || item.coverUrl;
+        const nextHistory = (prev.history || []).map((h) =>
+          h.domain === 'read' && h.mediaId === readId
+            ? { ...h, title: nextTitle, posterUrl: nextCover }
+            : h
+        );
+        return {
+          ...prev,
+          readItems: {
+            ...prev.readItems,
+            [readId]: {
+              ...item,
+              title: nextTitle,
+              editionCovers: mergedCovers,
+            },
+          },
+          history: nextHistory,
+        };
+      });
+    },
+    []
   );
 
   const resetReadProgress = useCallback(
@@ -1759,6 +1807,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         rateReadItem,
         setReadMood,
         setReadEdition,
+        updateReadEditionCovers,
         updateReadTotalUnits,
         resetReadProgress,
         logGameSession,
