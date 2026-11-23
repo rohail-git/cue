@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Bell, ChevronRight, Lock, Plus, Settings, Trash2, X } from 'lucide-react';
+import { Bell, ChevronRight, Lock, Plus, QrCode, Settings, Trash2, X } from 'lucide-react';
+import { DeviceSyncModal } from '../components/DeviceSyncModal';
 import { MediaImage } from '../components/MediaImage';
 import { MOOD_OPTIONS } from '../components/PersonalNotesSection';
 import { useCueStore } from '../store/useCueStore';
@@ -16,10 +17,12 @@ export function JournalView() {
     addJournalEntry,
     deleteJournalEntry,
     createCustomList,
+    syncCode,
   } = useCueStore();
 
   const [diaryFilter, setDiaryFilter] = useState<'all' | MediaDomain>('all');
   const [composeOpen, setComposeOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
   const [draftDomain, setDraftDomain] = useState<MediaDomain>('watch');
   const [draftMediaId, setDraftMediaId] = useState('house-of-the-dragon');
   const [draftContext, setDraftContext] = useState('');
@@ -175,13 +178,24 @@ export function JournalView() {
               className="w-full h-full object-cover"
             />
           </div>
-          <button
-            type="button"
-            onClick={() => setSettingsOpen(true)}
-            className="px-4 py-1.5 rounded-full bg-surface border border-white/10 text-xs font-semibold text-ink hover:bg-surface-raised transition-colors"
-          >
-            Edit profile
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSyncOpen(true)}
+              className="px-3.5 py-1.5 rounded-full bg-surface border border-white/10 text-xs font-semibold text-ink hover:bg-surface-raised transition-colors inline-flex items-center gap-1.5"
+            >
+              <QrCode className="w-3.5 h-3.5 text-watch" />
+              <span>{syncCode ? 'Synced' : 'Sync devices'}</span>
+              {syncCode && <span className="h-1.5 w-1.5 rounded-full bg-watch" />}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              className="px-4 py-1.5 rounded-full bg-surface border border-white/10 text-xs font-semibold text-ink hover:bg-surface-raised transition-colors"
+            >
+              Edit profile
+            </button>
+          </div>
         </div>
 
         {/* Name, Label & Bio (100% private — no followers/following) */}
@@ -718,6 +732,7 @@ export function JournalView() {
           </form>
         </div>
       )}
+      <DeviceSyncModal open={syncOpen} onClose={() => setSyncOpen(false)} />
     </div>
   );
 }

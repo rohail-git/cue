@@ -1,5 +1,12 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { createSeedState } from '../data/seedState';
+import {
+  generateSyncCode,
+  isValidSyncCode,
+  normalizeSyncCode,
+  pullCloudLibrary,
+  pushCloudLibrary,
+} from '../services/syncApi';
 import type {
   AppSettings,
   ComicEditionId,
@@ -27,6 +34,9 @@ import { formatEpisodeCode, getAllEpisodes, getEpisodeKey, getShowStats } from '
 const STORAGE_KEY = 'cue_state_v3';
 const LEGACY_V2_KEY = 'cue_state_v2';
 const LEGACY_STORAGE_KEY = 'cue_state_v1';
+const SYNC_CODE_KEY = 'cue_sync_code_v1';
+const SYNC_TS_KEY = 'cue_sync_ts_v1';
+const LOCAL_EDIT_TS_KEY = 'cue_local_ts_v1';
 
 const MAX_HISTORY_ENTRIES = 60;
 
@@ -211,6 +221,16 @@ interface CueContextValue {
   exportLibraryJson: () => string;
   importLibraryJson: (rawJson: string) => { ok: boolean; summary: string };
   selectiveReset: (scope: 'watch' | 'read' | 'play' | 'all') => void;
+
+  // No-account cloud sync
+  syncCode: string | null;
+  syncStatus: 'idle' | 'syncing' | 'synced' | 'error';
+  lastSyncedAt: number | null;
+  syncError: string | null;
+  createSyncCode: () => Promise<string | null>;
+  linkSyncCode: (rawCode: string) => Promise<{ ok: boolean; message: string }>;
+  syncNow: () => Promise<void>;
+  unlinkSyncCode: () => void;
 }
 
 const CueContext = createContext<CueContextValue | null>(null);
@@ -233,8 +253,90 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
 
+  const [syncCode, setSyncCode] = useState<string | null>(() => {
+    try {
+      const saved = localStorage.getItem(SYNC_CODE_KEY);
+      return saved && isValidSyncCode(saved) ? normalizeSyncCode(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(() => {
+    try {
+      const val = Number(localStorage.getItem(SYNC_TS_KEY));
+      return Number.isFinite(val) && val > 0 ? val : null;
+    } catch {
+      return null;
+    }
+  });
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const syncCodeRef = useRef(syncCode);
+  syncCodeRef.current = syncCode;
+  const lastSyncedAtRef = useRef(lastSyncedAt);
+  lastSyncedAtRef.current = lastSyncedAt;
+  const localEditedAtRef = useRef<number>(
+    (() => {
+      try {
+        return Number(localStorage.getItem(LOCAL_EDIT_TS_KEY) || 0) || 0;
+      } catch {
+        return 0;
+      }
+    })()
+  );
+  const isInitialMountRef = useRef(true);
+  const suppressNextPushRef = useRef(false);
+  const pushTimerRef = useRef<number | null>(null);
+
   const route = routeStack[routeStack.length - 1];
   const canGoBack = routeStack.length > 1;
+
+  const showToast = useCallback((message: string, actionLabel?: string, onAction?: () => void) => {
+    setToast({ id: String(Date.now()), message, actionLabel, onAction });
+  }, []);
+
+  const hydrateFromCloud = useCallback((cloudState: CueStoreState, cloudTs: number) => {
+    if (!Array.isArray(cloudState.history) || cloudState.history.length === 0) {
+      cloudState.history = createSeedState().history;
+    }
+    suppressNextPushRef.current = true;
+    localEditedAtRef.current = cloudTs;
+    try {
+      localStorage.setItem(LOCAL_EDIT_TS_KEY, String(cloudTs));
+      localStorage.setItem(SYNC_TS_KEY, String(cloudTs));
+    } catch {
+      // ignore storage quota
+    }
+    setState(cloudState);
+    setLastSyncedAt(cloudTs);
+    setSyncStatus('synced');
+    setSyncError(null);
+  }, []);
+
+  const persistPush = useCallback(async (code: string, snapshot: CueStoreState, updatedAt: number) => {
+    setSyncStatus('syncing');
+    setSyncError(null);
+    const res = await pushCloudLibrary(code, snapshot, updatedAt);
+    if (res.ok) {
+      try {
+        localStorage.setItem(SYNC_TS_KEY, String(res.updatedAt));
+        localStorage.setItem(LOCAL_EDIT_TS_KEY, String(res.updatedAt));
+      } catch {
+        // ignore storage quota
+      }
+      localEditedAtRef.current = res.updatedAt;
+      setLastSyncedAt(res.updatedAt);
+      setSyncStatus('synced');
+      setSyncError(null);
+      return res;
+    }
+    setSyncStatus('error');
+    setSyncError(res.error || 'Failed to sync to cloud.');
+    return res;
+  }, []);
 
   useEffect(() => {
     try {
@@ -242,17 +344,168 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore storage quota
     }
-  }, [state]);
+
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false;
+      return;
+    }
+    if (suppressNextPushRef.current) {
+      suppressNextPushRef.current = false;
+      return;
+    }
+
+    const editedAt = Date.now();
+    localEditedAtRef.current = editedAt;
+    try {
+      localStorage.setItem(LOCAL_EDIT_TS_KEY, String(editedAt));
+    } catch {
+      // ignore
+    }
+
+    const activeCode = syncCodeRef.current;
+    if (!activeCode) return;
+
+    if (pushTimerRef.current) window.clearTimeout(pushTimerRef.current);
+    pushTimerRef.current = window.setTimeout(() => {
+      void persistPush(activeCode, stateRef.current, editedAt);
+    }, 1400);
+  }, [state, persistPush]);
+
+  useEffect(() => {
+    return () => {
+      if (pushTimerRef.current) window.clearTimeout(pushTimerRef.current);
+    };
+  }, []);
+
+  const createSyncCode = useCallback(async () => {
+    const code = generateSyncCode();
+    const res = await persistPush(code, stateRef.current, Date.now());
+    if (!res.ok) return null;
+    try {
+      localStorage.setItem(SYNC_CODE_KEY, code);
+    } catch {
+      // ignore
+    }
+    setSyncCode(code);
+    showToast('Sync code created');
+    return code;
+  }, [persistPush, showToast]);
+
+  const linkSyncCode = useCallback(
+    async (rawCode: string): Promise<{ ok: boolean; message: string }> => {
+      const code = normalizeSyncCode(rawCode);
+      if (!isValidSyncCode(code)) {
+        const message = 'Enter a valid sync code (e.g. CUE-XXXX-XXXX-XXXX).';
+        setSyncError(message);
+        return { ok: false, message };
+      }
+
+      setSyncStatus('syncing');
+      setSyncError(null);
+      const pulled = await pullCloudLibrary(code);
+      if (pulled.error) {
+        setSyncStatus('error');
+        setSyncError(pulled.error);
+        return { ok: false, message: pulled.error };
+      }
+
+      try {
+        localStorage.setItem(SYNC_CODE_KEY, code);
+      } catch {
+        // ignore
+      }
+      setSyncCode(code);
+
+      if (pulled.exists && pulled.state) {
+        hydrateFromCloud(pulled.state, pulled.updatedAt || Date.now());
+        showToast('Synced library from cloud');
+        return { ok: true, message: 'Paired and loaded your cloud library.' };
+      }
+
+      const pushed = await persistPush(code, stateRef.current, Date.now());
+      if (!pushed.ok) {
+        return { ok: false, message: pushed.error || 'Could not upload local library.' };
+      }
+      showToast('Device linked to cloud');
+      return { ok: true, message: 'Device linked cleanly.' };
+    },
+    [hydrateFromCloud, persistPush, showToast]
+  );
+
+  const pullIfCloudNewer = useCallback(
+    async (code: string, pushIfLocalNewer = false) => {
+      setSyncStatus('syncing');
+      const pulled = await pullCloudLibrary(code);
+      if (pulled.error) {
+        setSyncStatus('error');
+        setSyncError(pulled.error);
+        return;
+      }
+      const localBaseline = Math.max(lastSyncedAtRef.current || 0, localEditedAtRef.current);
+      if (pulled.exists && pulled.state && (pulled.updatedAt || 0) > localBaseline) {
+        hydrateFromCloud(pulled.state, pulled.updatedAt || Date.now());
+        showToast('Library updated from cloud');
+        return;
+      }
+      if (pushIfLocalNewer || !pulled.exists) {
+        await persistPush(code, stateRef.current, Date.now());
+        return;
+      }
+      setSyncStatus('synced');
+      setSyncError(null);
+    },
+    [hydrateFromCloud, persistPush, showToast]
+  );
+
+  const syncNow = useCallback(async () => {
+    const code = syncCodeRef.current;
+    if (!code) return;
+    await pullIfCloudNewer(code, true);
+  }, [pullIfCloudNewer]);
+
+  const unlinkSyncCode = useCallback(() => {
+    if (pushTimerRef.current) window.clearTimeout(pushTimerRef.current);
+    try {
+      localStorage.removeItem(SYNC_CODE_KEY);
+      localStorage.removeItem(SYNC_TS_KEY);
+    } catch {
+      // ignore
+    }
+    setSyncCode(null);
+    setLastSyncedAt(null);
+    setSyncStatus('idle');
+    setSyncError(null);
+    showToast('Unlinked cloud sync');
+  }, [showToast]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const pairParam = params.get('pair');
+    if (pairParam && isValidSyncCode(pairParam)) {
+      window.history.replaceState({}, '', `${window.location.pathname}${window.location.hash}`);
+      void linkSyncCode(pairParam);
+      return;
+    }
+    if (syncCodeRef.current) {
+      void pullIfCloudNewer(syncCodeRef.current, false);
+    }
+  }, [linkSyncCode, pullIfCloudNewer]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && syncCodeRef.current) {
+        void pullIfCloudNewer(syncCodeRef.current, false);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [pullIfCloudNewer]);
 
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 4200);
     return () => clearTimeout(t);
   }, [toast]);
-
-  const showToast = useCallback((message: string, actionLabel?: string, onAction?: () => void) => {
-    setToast({ id: String(Date.now()), message, actionLabel, onAction });
-  }, []);
 
   const dismissToast = useCallback(() => setToast(null), []);
   const dismissBanner = useCallback(() => setActiveBanner(null), []);
@@ -1833,6 +2086,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         exportLibraryJson,
         importLibraryJson,
         selectiveReset,
+        syncCode,
+        syncStatus,
+        lastSyncedAt,
+        syncError,
+        createSyncCode,
+        linkSyncCode,
+        syncNow,
+        unlinkSyncCode,
       }}
     >
       {children}
