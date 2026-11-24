@@ -3,6 +3,7 @@ import { MediaInsightsModal } from './components/MediaInsightsModal';
 import { NavChrome } from './components/NavChrome';
 import { NotificationsSheet } from './components/NotificationsSheet';
 import { SettingsModal } from './components/SettingsModal';
+import { SmartImportModal } from './components/SmartImportModal';
 import { CueProvider, useCueStore } from './store/useCueStore';
 import { GameDetailView } from './views/GameDetailView';
 import { JournalView } from './views/JournalView';
@@ -75,8 +76,9 @@ function CueShell() {
                 <button
                   type="button"
                   onClick={() => {
-                    toast.onAction?.();
+                    const action = toast.onAction;
                     dismissToast();
+                    action?.();
                   }}
                   className="px-3 py-1 rounded-full bg-brand text-brand-ink text-xs font-semibold hover:opacity-90"
                 >
@@ -98,6 +100,7 @@ function CueShell() {
 
       <NotificationsSheet />
       <SettingsModal />
+      <SmartImportModal />
       <MediaInsightsModal />
     </div>
   );

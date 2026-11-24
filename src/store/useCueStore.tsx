@@ -37,6 +37,11 @@ import {
   resolveComicEditionTotal,
 } from '../utils/editions';
 import { lookupKnownGameChapters } from '../utils/gameChapters';
+import {
+  annotateImportDuplicates,
+  type ImportConflictPolicy,
+  type PreparedImportEntry,
+} from '../utils/mediaImport';
 import { formatEpisodeCode, getAllEpisodes, getEpisodeKey, getShowStats } from '../utils/stats';
 
 const STORAGE_KEY = 'cue_state_v3';
@@ -150,6 +155,8 @@ interface CueContextValue {
   setSettingsOpen: (open: boolean) => void;
   insightsOpen: boolean;
   setInsightsOpen: (open: boolean) => void;
+  importModalOpen: boolean;
+  setImportModalOpen: (open: boolean) => void;
 
   // Watch actions
   watchNextEpisode: (showId: string) => void;
@@ -241,6 +248,12 @@ interface CueContextValue {
   updateSettings: (patch: Partial<AppSettings>) => void;
   exportLibraryJson: () => string;
   importLibraryJson: (rawJson: string) => { ok: boolean; summary: string };
+  restoreCueBackup: (backupState: CueStoreState) => void;
+  importSmartBatch: (
+    entries: PreparedImportEntry[],
+    policy: ImportConflictPolicy
+  ) => { added: number; updated: number; skipped: number };
+  undoLastImport: () => void;
   selectiveReset: (scope: 'watch' | 'read' | 'play' | 'all') => void;
   clearAllData: () => void;
 
@@ -267,6 +280,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const lastPreImportStateRef = useRef<CueStoreState | null>(null);
 
   const [syncCode, setSyncCode] = useState<string | null>(() => {
     try {
@@ -2121,6 +2136,299 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     );
   }, [state]);
 
+  const undoLastImport = useCallback(() => {
+    const snapshot = lastPreImportStateRef.current;
+    if (!snapshot) return;
+    lastPreImportStateRef.current = null;
+    setState(snapshot);
+    showToast('Import undone');
+  }, [showToast]);
+
+  const restoreCueBackup = useCallback(
+    (backupState: CueStoreState) => {
+      lastPreImportStateRef.current = stateRef.current;
+      setState(backupState);
+      showToast('Restored cue library backup', 'Undo', undoLastImport);
+    },
+    [showToast, undoLastImport]
+  );
+
+  const importSmartBatch = useCallback(
+    (
+      rawEntries: PreparedImportEntry[],
+      policy: ImportConflictPolicy
+    ): { added: number; updated: number; skipped: number } => {
+      const selectedEntries = rawEntries.filter((e) => e.selected);
+      if (selectedEntries.length === 0) {
+        return { added: 0, updated: 0, skipped: 0 };
+      }
+
+      const prev = stateRef.current;
+      lastPreImportStateRef.current = prev;
+
+      const annotated = annotateImportDuplicates(
+        selectedEntries.map((e) => e.candidate),
+        prev
+      );
+
+      const nextShows = { ...prev.shows };
+      const nextMovies = { ...prev.movies };
+      const nextReadItems = { ...prev.readItems };
+      const nextGames = { ...prev.games };
+      const nextShowProgress = { ...prev.showProgress };
+      const nextMovieProgress = { ...prev.movieProgress };
+      const nextReadProgress = { ...prev.readProgress };
+      const nextGameProgress = { ...prev.gameProgress };
+
+      const newShowIds: string[] = [];
+      const newMovieIds: string[] = [];
+      const newReadIds: string[] = [];
+      const newGameIds: string[] = [];
+      const historyAdds: HistoryEntry[] = [];
+
+      let added = 0;
+      let updated = 0;
+      let skipped = 0;
+      const nowIso = new Date().toISOString();
+
+      selectedEntries.forEach((entry, idx) => {
+        const c = annotated[idx];
+        const existingId = c.existingId;
+
+        if (existingId) {
+          if (policy === 'skip_existing') {
+            skipped += 1;
+            return;
+          }
+
+          let changed = false;
+          if (c.kind === 'show' && nextShows[existingId]) {
+            const ep = nextShowProgress[existingId];
+            if (ep && !ep.rating && c.userRating) {
+              nextShowProgress[existingId] = { ...ep, rating: c.userRating };
+              changed = true;
+            }
+          } else if (c.kind === 'movie' && nextMovies[existingId]) {
+            const mp = nextMovieProgress[existingId];
+            const patched = {
+              status: mp?.status || 'watchlist',
+              watchCount: mp?.watchCount || 0,
+              watchedAt: mp?.watchedAt,
+              rating: mp?.rating,
+              mood: mp?.mood,
+            };
+            if (!patched.rating && c.userRating) {
+              patched.rating = c.userRating;
+              changed = true;
+            }
+            if (patched.watchCount === 0 && c.completed) {
+              patched.status = 'watched';
+              patched.watchCount = 1;
+              patched.watchedAt = patched.watchedAt || c.dateStr || nowIso;
+              changed = true;
+            }
+            if (changed) nextMovieProgress[existingId] = patched;
+          } else if (c.kind === 'read' && nextReadItems[existingId]) {
+            const rp = nextReadProgress[existingId];
+            const item = nextReadItems[existingId];
+            if (rp) {
+              const patched = { ...rp };
+              if (!patched.rating && c.userRating) {
+                patched.rating = c.userRating;
+                changed = true;
+              }
+              if (rp.status === 'want_to_read' && c.completed) {
+                patched.status = 'finished';
+                patched.currentUnit = item.totalUnits;
+                patched.maxCompletedUnit = Math.max(item.totalUnits, rp.maxCompletedUnit || 0);
+                patched.rereadCount = Math.max(1, rp.rereadCount || 0);
+                changed = true;
+              }
+              if (changed) nextReadProgress[existingId] = patched;
+            }
+          } else if (c.kind === 'game' && nextGames[existingId]) {
+            const gp = nextGameProgress[existingId];
+            if (gp) {
+              const patched = { ...gp };
+              if (!patched.rating && c.userRating) {
+                patched.rating = c.userRating;
+                changed = true;
+              }
+              if (gp.status === 'backlog' && c.completed) {
+                patched.status = 'completed';
+                patched.completionPct = 100;
+                patched.playthroughCount = Math.max(1, gp.playthroughCount || 0);
+                changed = true;
+              }
+              if (changed) nextGameProgress[existingId] = patched;
+            }
+          }
+
+          if (changed) updated += 1;
+          else skipped += 1;
+          return;
+        }
+
+        if (c.kind === 'show' && entry.show) {
+          const show = entry.show;
+          const sid = nextShows[show.id] ? `${show.id}-${idx}` : show.id;
+          const storedShow = sid === show.id ? show : { ...show, id: sid };
+          nextShows[sid] = storedShow;
+          newShowIds.push(sid);
+          const epCounts: Record<string, number> = {};
+          if (c.completed) {
+            for (const ep of getAllEpisodes(storedShow)) {
+              epCounts[getEpisodeKey(ep.season, ep.number)] = 1;
+            }
+          }
+          nextShowProgress[sid] = {
+            status: c.completed ? 'finished' : 'not_started',
+            episodeCounts: epCounts,
+            bookmarked: true,
+            notifications: true,
+            lastWatchedAt: c.completed ? c.dateStr || nowIso : undefined,
+            rating: c.userRating,
+          };
+          if (c.completed) {
+            historyAdds.push({
+              id: `hist-imp-${sid}-${Date.now()}`,
+              domain: 'watch',
+              mediaKind: 'show',
+              mediaId: sid,
+              title: storedShow.title,
+              posterUrl: storedShow.posterUrl,
+              codeLabel: 'Imported · Finished',
+              subtitle: storedShow.mediaType === 'anime' ? 'Anime' : 'Show',
+              loggedAt: c.dateStr || nowIso,
+            });
+          }
+          added += 1;
+        } else if (c.kind === 'movie' && entry.movie) {
+          const movie = entry.movie;
+          const mid = nextMovies[movie.id] ? `${movie.id}-${idx}` : movie.id;
+          const storedMovie = mid === movie.id ? movie : { ...movie, id: mid };
+          nextMovies[mid] = storedMovie;
+          newMovieIds.push(mid);
+          nextMovieProgress[mid] = {
+            status: c.completed ? 'watched' : 'watchlist',
+            watchCount: c.completed ? 1 : 0,
+            watchedAt: c.completed ? c.dateStr || nowIso : undefined,
+            rating: c.userRating,
+          };
+          if (c.completed) {
+            historyAdds.push({
+              id: `hist-imp-${mid}-${Date.now()}`,
+              domain: 'watch',
+              mediaKind: 'movie',
+              mediaId: mid,
+              title: storedMovie.title,
+              posterUrl: storedMovie.posterUrl,
+              codeLabel: 'Watched',
+              subtitle: `${storedMovie.year} · ${storedMovie.runtime}m`,
+              loggedAt: c.dateStr || nowIso,
+            });
+          }
+          added += 1;
+        } else if (c.kind === 'read' && entry.read) {
+          const read = entry.read;
+          const rid = nextReadItems[read.id] ? `${read.id}-${idx}` : read.id;
+          const storedRead = rid === read.id ? read : { ...read, id: rid };
+          nextReadItems[rid] = storedRead;
+          newReadIds.push(rid);
+          const finished = c.readStatus === 'finished' || c.completed;
+          const reading = c.readStatus === 'reading';
+          nextReadProgress[rid] = {
+            status: finished ? 'finished' : reading ? 'reading' : 'want_to_read',
+            currentUnit: finished ? storedRead.totalUnits : reading ? 1 : 0,
+            maxCompletedUnit: finished ? storedRead.totalUnits : reading ? 1 : 0,
+            rereadCount: finished ? 1 : 0,
+            bookmarked: true,
+            lastReadAt: finished || reading ? c.dateStr || nowIso : undefined,
+            rating: c.userRating,
+          };
+          if (finished) {
+            historyAdds.push({
+              id: `hist-imp-${rid}-${Date.now()}`,
+              domain: 'read',
+              mediaKind: 'read',
+              mediaId: rid,
+              title: storedRead.title,
+              posterUrl: storedRead.coverUrl,
+              codeLabel: 'Finished',
+              subtitle: storedRead.creator,
+              loggedAt: c.dateStr || nowIso,
+            });
+          }
+          added += 1;
+        } else if (c.kind === 'game' && entry.game) {
+          const game = entry.game;
+          const gid = nextGames[game.id] ? `${game.id}-${idx}` : game.id;
+          const storedGame = gid === game.id ? game : { ...game, id: gid };
+          nextGames[gid] = storedGame;
+          newGameIds.push(gid);
+          nextGameProgress[gid] = {
+            status: c.completed ? 'completed' : 'backlog',
+            hoursPlayed: 0,
+            completionPct: c.completed ? 100 : 0,
+            currentChapter: c.completed && storedGame.totalChapters ? storedGame.totalChapters : 0,
+            playthroughCount: c.completed ? 1 : 0,
+            platinum: false,
+            platform: storedGame.platforms[0] || 'PC',
+            bookmarked: true,
+            lastPlayedAt: c.completed ? c.dateStr || nowIso : undefined,
+            rating: c.userRating,
+          };
+          if (c.completed) {
+            historyAdds.push({
+              id: `hist-imp-${gid}-${Date.now()}`,
+              domain: 'play',
+              mediaKind: 'game',
+              mediaId: gid,
+              title: storedGame.title,
+              posterUrl: storedGame.coverUrl,
+              codeLabel: 'Completed',
+              subtitle: storedGame.developer,
+              loggedAt: c.dateStr || nowIso,
+            });
+          }
+          added += 1;
+        }
+      });
+
+      const cappedHistory = [...(prev.history || []), ...historyAdds.slice(-15)];
+      const trimmedHistory =
+        cappedHistory.length > MAX_HISTORY_ENTRIES
+          ? cappedHistory.slice(cappedHistory.length - MAX_HISTORY_ENTRIES)
+          : cappedHistory;
+
+      setState({
+        ...prev,
+        shows: nextShows,
+        movies: nextMovies,
+        readItems: nextReadItems,
+        games: nextGames,
+        showOrder: [...newShowIds, ...prev.showOrder],
+        movieOrder: [...newMovieIds, ...prev.movieOrder],
+        readOrder: [...newReadIds, ...prev.readOrder],
+        gameOrder: [...newGameIds, ...prev.gameOrder],
+        showProgress: nextShowProgress,
+        movieProgress: nextMovieProgress,
+        readProgress: nextReadProgress,
+        gameProgress: nextGameProgress,
+        history: trimmedHistory,
+      });
+
+      const summaryParts: string[] = [];
+      if (added > 0) summaryParts.push(`Added ${added}`);
+      if (updated > 0) summaryParts.push(`Updated ${updated}`);
+      if (skipped > 0) summaryParts.push(`${skipped} skipped`);
+      showToast(summaryParts.join(' · ') || 'Nothing changed', 'Undo', undoLastImport);
+
+      return { added, updated, skipped };
+    },
+    [showToast, undoLastImport]
+  );
+
   const importLibraryJson = useCallback(
     (rawJson: string): { ok: boolean; summary: string } => {
       try {
@@ -2345,6 +2653,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         setSettingsOpen,
         insightsOpen,
         setInsightsOpen,
+        importModalOpen,
+        setImportModalOpen,
         watchNextEpisode,
         toggleEpisodeWatched,
         incrementEpisodeRewatch,
@@ -2397,6 +2707,9 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         updateSettings,
         exportLibraryJson,
         importLibraryJson,
+        restoreCueBackup,
+        importSmartBatch,
+        undoLastImport,
         selectiveReset,
         clearAllData,
         syncCode,

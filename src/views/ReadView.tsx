@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Check, ChevronDown, ChevronRight, Plus, Search } from 'lucide-react';
+import { BookOpen, Check, ChevronDown, ChevronRight, Plus, Search, Upload } from 'lucide-react';
 import { BingersMediaRow } from '../components/BingersMediaRow';
 import { FilterSortSheet } from '../components/FilterSortSheet';
 import { MediaImage } from '../components/MediaImage';
@@ -16,6 +16,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     switchTab,
     toggleCalendarMode,
     setFilterSheetOpen,
+    setImportModalOpen,
     updateSettings,
     advanceReadProgress,
   } = useCueStore();
@@ -236,6 +237,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
         stickyHeader={
           <MobileDomainBar
             title="Upcoming reads"
+            domainLabel="Read"
             calendarMode={calendarMode}
             onOpenFilter={() => setFilterSheetOpen(true)}
             onToggleCalendar={toggleCalendarMode}
@@ -317,14 +319,24 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
                   <p className="text-sm text-ink-dim mt-1 max-w-sm mx-auto">
                     Search for novels, manga, or comic editions to track chapters and issues.
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => switchTab('search')}
-                    className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-brand text-brand-ink text-sm font-semibold hover:opacity-95 transition-opacity"
-                  >
-                    <Search className="w-4 h-4" />
-                    <span>Search Read</span>
-                  </button>
+                  <div className="mt-4 flex items-center justify-center gap-2.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => switchTab('search')}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-brand text-brand-ink text-sm font-semibold hover:opacity-95 transition-opacity"
+                    >
+                      <Search className="w-4 h-4" />
+                      <span>Search Read</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setImportModalOpen(true)}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full bg-surface-raised border border-white/10 text-ink text-sm font-semibold hover:bg-white/10 transition-colors"
+                    >
+                      <Upload className="w-4 h-4 text-read" />
+                      <span>Import Goodreads / CSV</span>
+                    </button>
+                  </div>
                 </div>
               )}
 

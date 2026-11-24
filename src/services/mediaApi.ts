@@ -8,6 +8,14 @@ import {
   lookupKnownGameChapters,
   parseChapterCountFromText,
 } from '../utils/gameChapters';
+import {
+  buildFallbackGameItem,
+  buildFallbackMovie,
+  buildFallbackReadItem,
+  buildFallbackShow,
+  type ImportCandidate,
+  type PreparedImportEntry,
+} from '../utils/mediaImport';
 
 export type SearchMediaFilter =
   | 'all'
@@ -1568,4 +1576,135 @@ export function hydrateLiveGameItem(item: LiveSearchResult): GameItem {
     chapterSource: known?.source,
     chapterNote: known?.note,
   };
+}
+
+/** Resolves an imported CSV/JSON row into a hydrated Show/Movie/ReadItem/GameItem, falling back safely offline or on mismatch. */
+export async function enrichImportCandidate(
+  candidate: ImportCandidate,
+  tmdbApiKey?: string
+): Promise<PreparedImportEntry> {
+  const targetNorm = normalizeTitleKey(candidate.title);
+
+  const pickBestMatch = (hits: LiveSearchResult[], expectedKind: LiveSearchResult['kind']) => {
+    const matchingKind = hits.filter((h) => h.kind === expectedKind);
+    const exact = matchingKind.find((h) => {
+      const norm = normalizeTitleKey(h.title);
+      const yearOk = !h.year || !candidate.year || Math.abs(h.year - candidate.year) <= 2;
+      return norm === targetNorm && yearOk;
+    });
+    if (exact) return exact;
+
+    return matchingKind.find((h) => {
+      const norm = normalizeTitleKey(h.title);
+      const yearOk = !h.year || !candidate.year || Math.abs(h.year - candidate.year) <= 2;
+      return yearOk && (norm.startsWith(targetNorm) || targetNorm.startsWith(norm));
+    });
+  };
+
+  try {
+    if (candidate.kind === 'show') {
+      const isAnimationGenre = candidate.genres.some((g) => g.toLowerCase() === 'animation');
+      let hits: LiveSearchResult[] = [];
+      if (candidate.mediaType === 'anime') {
+        hits = await searchLiveMedia(candidate.title, 'anime', tmdbApiKey);
+      } else if (isAnimationGenre) {
+        const [animeHits, tvHits] = await Promise.all([
+          searchLiveMedia(candidate.title, 'anime', tmdbApiKey),
+          searchLiveMedia(candidate.title, 'tv', tmdbApiKey),
+        ]);
+        hits = [...animeHits, ...tvHits];
+      } else {
+        hits = await searchLiveMedia(candidate.title, 'tv', tmdbApiKey);
+      }
+      const best = pickBestMatch(hits, 'show');
+      if (best) {
+        const show = await hydrateLiveShow(best, tmdbApiKey);
+        return {
+          candidate: { ...candidate, mediaType: show.mediaType },
+          selected: !candidate.existingId,
+          show: {
+            ...show,
+            genres: show.genres.length > 0 ? show.genres : candidate.genres,
+            rating: show.rating || candidate.communityRating || 7.8,
+          },
+        };
+      }
+      return {
+        candidate,
+        selected: !candidate.existingId,
+        show: buildFallbackShow(candidate),
+      };
+    }
+
+    if (candidate.kind === 'movie') {
+      const hits = await searchLiveMedia(candidate.title, 'movie', tmdbApiKey);
+      const best = pickBestMatch(hits, 'movie');
+      if (best) {
+        const movie = hydrateLiveMovie(best);
+        return {
+          candidate,
+          selected: !candidate.existingId,
+          movie: {
+            ...movie,
+            director:
+              candidate.creator && movie.director === 'Feature Film'
+                ? candidate.creator
+                : movie.director,
+            genres: candidate.genres.length > 0 ? candidate.genres : movie.genres,
+            rating: candidate.communityRating || movie.rating,
+          },
+        };
+      }
+      return {
+        candidate,
+        selected: !candidate.existingId,
+        movie: buildFallbackMovie(candidate),
+      };
+    }
+
+    if (candidate.kind === 'read') {
+      const hits = await searchLiveMedia(candidate.title, candidate.mediaType, tmdbApiKey);
+      const best = pickBestMatch(hits, 'read');
+      if (best) {
+        return {
+          candidate,
+          selected: !candidate.existingId,
+          read: hydrateLiveReadItem(best),
+        };
+      }
+      return {
+        candidate,
+        selected: !candidate.existingId,
+        read: buildFallbackReadItem(candidate),
+      };
+    }
+
+    const hits = await searchLiveMedia(candidate.title, 'game', tmdbApiKey);
+    const best = pickBestMatch(hits, 'game');
+    if (best) {
+      return {
+        candidate,
+        selected: !candidate.existingId,
+        game: hydrateLiveGameItem(best),
+      };
+    }
+  } catch {
+    // gracefully fall back below
+  }
+
+  return buildFallbackPreparedEntry(candidate);
+}
+
+export function buildFallbackPreparedEntry(candidate: ImportCandidate): PreparedImportEntry {
+  const selected = !candidate.existingId;
+  if (candidate.kind === 'show') {
+    return { candidate, selected, show: buildFallbackShow(candidate) };
+  }
+  if (candidate.kind === 'movie') {
+    return { candidate, selected, movie: buildFallbackMovie(candidate) };
+  }
+  if (candidate.kind === 'read') {
+    return { candidate, selected, read: buildFallbackReadItem(candidate) };
+  }
+  return { candidate, selected, game: buildFallbackGameItem(candidate) };
 }

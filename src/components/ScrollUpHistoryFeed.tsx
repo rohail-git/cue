@@ -3,9 +3,11 @@ import type React from 'react';
 import { Calendar, ListFilter } from 'lucide-react';
 import type { HistoryEntry } from '../types';
 import { BingersMediaRow } from './BingersMediaRow';
+import { CueWordmark } from './CueLogo';
 
 interface MobileDomainBarProps {
   title: string;
+  domainLabel: string;
   calendarMode: boolean;
   onOpenFilter: () => void;
   onToggleCalendar: () => void;
@@ -13,9 +15,10 @@ interface MobileDomainBarProps {
   calendarAriaLabel: string;
 }
 
-/** Minimal mobile-only sticky utility bar matching Bingers' uncluttered header. */
+/** Minimal mobile-only sticky utility bar matching desktop branding without clutter. */
 export function MobileDomainBar({
   title,
+  domainLabel,
   calendarMode,
   onOpenFilter,
   onToggleCalendar,
@@ -24,10 +27,16 @@ export function MobileDomainBar({
 }: MobileDomainBarProps) {
   return (
     <div className="md:hidden sticky top-0 z-30 h-[52px] px-4 flex items-center justify-between bg-background/95 backdrop-blur-md">
-      <span className="text-[13px] font-semibold tracking-tight text-ink-dim">
-        {calendarMode ? title : ''}
-      </span>
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-2 min-w-0">
+        <CueWordmark className="text-[20px] leading-none" />
+        <span className="text-ink-faint text-xs select-none" aria-hidden="true">
+          ·
+        </span>
+        <span className="text-[12.5px] font-semibold tracking-tight text-brand truncate">
+          {calendarMode ? title : domainLabel}
+        </span>
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
         <button
           type="button"
           onClick={onOpenFilter}

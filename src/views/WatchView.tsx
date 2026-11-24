@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Search, Tv } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Search, Tv, Upload } from 'lucide-react';
 import { BingersMediaRow } from '../components/BingersMediaRow';
 import { FilterSortSheet } from '../components/FilterSortSheet';
 import { MediaImage } from '../components/MediaImage';
@@ -16,6 +16,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
     switchTab,
     toggleCalendarMode,
     setFilterSheetOpen,
+    setImportModalOpen,
     updateSettings,
     watchNextEpisode,
     toggleMovieWatched,
@@ -225,7 +226,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
       <BingersMediaRow
         key={show.id}
         title={show.title}
-        badgeLabel={show.mediaType === 'anime' ? 'Anime' : undefined}
+        badgeLabel={show.mediaType === 'anime' ? 'Anime' : 'Show'}
         badgeClassName="bg-watch/15 text-watch"
         posterUrl={show.posterUrl}
         posterTag={next?.number === 1 ? 'PREMIERE' : undefined}
@@ -387,6 +388,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
         stickyHeader={
           <MobileDomainBar
             title="Release dates"
+            domainLabel="Watch"
             calendarMode={calendarMode}
             onOpenFilter={() => setFilterSheetOpen(true)}
             onToggleCalendar={toggleCalendarMode}
@@ -468,14 +470,24 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
                   <p className="text-sm text-ink-dim mt-1 max-w-sm mx-auto">
                     Search for TV shows, movies, or anime to start tracking episodes and rewatches.
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => switchTab('search')}
-                    className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-brand text-brand-ink text-sm font-semibold hover:opacity-95 transition-opacity"
-                  >
-                    <Search className="w-4 h-4" />
-                    <span>Search Watch</span>
-                  </button>
+                  <div className="mt-4 flex items-center justify-center gap-2.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => switchTab('search')}
+                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-brand text-brand-ink text-sm font-semibold hover:opacity-95 transition-opacity"
+                    >
+                      <Search className="w-4 h-4" />
+                      <span>Search Watch</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setImportModalOpen(true)}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full bg-surface-raised border border-white/10 text-ink text-sm font-semibold hover:bg-white/10 transition-colors"
+                    >
+                      <Upload className="w-4 h-4 text-watch" />
+                      <span>Import IMDb / CSV</span>
+                    </button>
+                  </div>
                 </div>
               )}
 

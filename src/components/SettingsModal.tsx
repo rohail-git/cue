@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Download,
   KeyRound,
@@ -18,10 +18,10 @@ export function SettingsModal() {
     state,
     settingsOpen,
     setSettingsOpen,
+    setImportModalOpen,
     updateProfile,
     updateSettings,
     exportLibraryJson,
-    importLibraryJson,
     selectiveReset,
     clearAllData,
     showToast,
@@ -33,7 +33,6 @@ export function SettingsModal() {
   const [tmdbKey, setTmdbKey] = useState(state.settings.tmdbApiKey);
   const [tmdbStatus, setTmdbStatus] = useState<'idle' | 'testing' | 'ok' | 'err'>('idle');
   const [confirmScope, setConfirmScope] = useState<'watch' | 'read' | 'play' | 'all' | 'wipe' | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!settingsOpen) {
@@ -86,14 +85,6 @@ export function SettingsModal() {
     a.click();
     URL.revokeObjectURL(url);
     showToast('Exported cue backup JSON');
-  };
-
-  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const text = await file.text();
-    importLibraryJson(text);
-    e.target.value = '';
   };
 
   const handleTestTmdb = async () => {
@@ -332,10 +323,10 @@ export function SettingsModal() {
 
           {/* Data Import / Export */}
           <section className="space-y-2.5 pt-2 border-t border-white/8">
-            <h4 className="text-sm font-semibold text-ink">Local Backup & Import</h4>
+            <h4 className="text-sm font-semibold text-ink">Local Backup & Smart Import</h4>
             <p className="text-xs text-ink-dim">
-              Your entire Watch, Read, Play & Journal log stays privately on your device. Export a
-              JSON backup anytime or import a cue / TV Time / Trakt JSON file.
+              Export a JSON backup anytime or safely import IMDb CSV, Letterboxd CSV, Goodreads CSV,
+              Trakt / TV Time, or cue JSON with preview and Undo.
             </p>
             <div className="grid grid-cols-2 gap-2.5">
               <button
@@ -348,19 +339,15 @@ export function SettingsModal() {
               </button>
               <button
                 type="button"
-                onClick={() => fileRef.current?.click()}
+                onClick={() => {
+                  setSettingsOpen(false);
+                  setImportModalOpen(true);
+                }}
                 className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-background border border-white/10 text-sm font-medium text-ink hover:bg-surface-raised"
               >
-                <Upload className="w-4 h-4 text-ink-dim" />
-                <span>Import JSON</span>
+                <Upload className="w-4 h-4 text-watch" />
+                <span>Smart Import</span>
               </button>
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".json,application/json"
-                className="hidden"
-                onChange={handleImportFile}
-              />
             </div>
           </section>
 
