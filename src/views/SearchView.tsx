@@ -74,8 +74,6 @@ const SEARCH_FILTER_PILLS: FilterPillConfig[] = [
   },
 ];
 
-const GENRE_PILLS = ['Sci-Fi', 'Fantasy', 'Drama', 'Action', 'RPG', 'Dark Fantasy', 'Thriller'];
-
 export function SearchView() {
   const {
     state,
@@ -93,7 +91,6 @@ export function SearchView() {
 
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<SearchMediaFilter>('all');
-  const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
   const [liveResults, setLiveResults] = useState<LiveSearchResult[]>([]);
   const [loadingLive, setLoadingLive] = useState(false);
   const [hydratingId, setHydratingId] = useState<string | null>(null);
@@ -153,7 +150,6 @@ export function SearchView() {
         if (!s) continue;
         if (filter === 'tv' && s.mediaType !== 'tv') continue;
         if (filter === 'anime' && s.mediaType !== 'anime') continue;
-        if (selectedGenre && !s.genres.some((g) => g.toLowerCase().includes(selectedGenre.toLowerCase()))) continue;
         if (q && !s.title.toLowerCase().includes(q) && !s.genres.some((g) => g.toLowerCase().includes(q))) continue;
         items.push({
           domain: 'watch',
@@ -162,7 +158,7 @@ export function SearchView() {
           id: s.id,
           title: s.title,
           year: s.year,
-          badge: s.mediaType === 'anime' ? 'Anime' : 'TV',
+          badge: s.mediaType === 'anime' ? 'Anime' : 'Show',
           genres: s.genres,
           rating: s.rating,
           posterUrl: s.posterUrl,
@@ -175,7 +171,6 @@ export function SearchView() {
       for (const id of state.movieOrder) {
         const m = state.movies[id];
         if (!m) continue;
-        if (selectedGenre && !m.genres.some((g) => g.toLowerCase().includes(selectedGenre.toLowerCase()))) continue;
         if (q && !m.title.toLowerCase().includes(q) && !m.genres.some((g) => g.toLowerCase().includes(q))) continue;
         items.push({
           domain: 'watch',
@@ -198,7 +193,6 @@ export function SearchView() {
         const r = state.readItems[id];
         if (!r) continue;
         if (filter !== 'all' && r.format !== filter) continue;
-        if (selectedGenre && !r.genres.some((g) => g.toLowerCase().includes(selectedGenre.toLowerCase()))) continue;
         if (
           q &&
           !r.title.toLowerCase().includes(q) &&
@@ -226,12 +220,11 @@ export function SearchView() {
       for (const id of state.gameOrder) {
         const g = state.games[id];
         if (!g) continue;
-        if (selectedGenre && !g.genres.some((gen) => gen.toLowerCase().includes(selectedGenre.toLowerCase()))) continue;
         if (
           q &&
           !g.title.toLowerCase().includes(q) &&
           !g.developer.toLowerCase().includes(q) &&
-          !g.genres.some((gen) => gen.toLowerCase().includes(selectedGenre?.toLowerCase() || q))
+          !g.genres.some((gen) => gen.toLowerCase().includes(q))
         )
           continue;
         items.push({
@@ -251,7 +244,7 @@ export function SearchView() {
     }
 
     return items;
-  }, [state, query, filter, selectedGenre]);
+  }, [state, query, filter]);
 
   const dedupedLive = useMemo(() => {
     const localIds = new Set(localMatches.map((m) => m.id));
@@ -299,7 +292,7 @@ export function SearchView() {
           kind: 'show',
           id: s.id,
           title: s.title,
-          subtitle: s.mediaType === 'anime' ? 'Anime' : 'TV',
+          subtitle: s.mediaType === 'anime' ? 'Anime' : 'Show',
           poster: s.posterUrl,
         });
       }
@@ -402,7 +395,7 @@ export function SearchView() {
     }
   };
 
-  const hasActiveFilter = query.trim().length > 0 || selectedGenre !== null || filter !== 'all';
+  const hasActiveFilter = query.trim().length > 0 || filter !== 'all';
 
   return (
     <div className="min-h-dvh pb-28 md:pb-14 pt-2 md:pt-20 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto">
@@ -461,27 +454,6 @@ export function SearchView() {
         </div>
       </div>
 
-      {/* Genre Pills */}
-      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2 mb-5">
-        {GENRE_PILLS.map((genre) => {
-          const active = selectedGenre === genre;
-          return (
-            <button
-              key={genre}
-              type="button"
-              onClick={() => setSelectedGenre(active ? null : genre)}
-              className={`px-3 py-1 rounded-full text-xs border shrink-0 transition-colors ${
-                active
-                  ? 'border-white/40 bg-white/15 text-ink font-medium'
-                  : 'border-white/8 bg-surface text-ink-dim hover:text-ink'
-              }`}
-            >
-              {genre}
-            </button>
-          );
-        })}
-      </div>
-
       {hasActiveFilter ? (
         <div className="space-y-6 animate-fade-in">
           {localMatches.length > 0 && (
@@ -509,16 +481,18 @@ export function SearchView() {
                         else pushRoute({ view: 'game-detail', gameId: item.id });
                       }
                     }}
-                    className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] overflow-hidden flex items-center cursor-pointer transition-colors"
+                    className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] overflow-hidden flex items-stretch min-h-[100px] cursor-pointer transition-colors"
                   >
-                    <div className="w-[70px] h-[98px] shrink-0 overflow-hidden bg-surface-raised">
+                    <div className="w-[70px] min-h-[100px] shrink-0 overflow-hidden bg-surface-raised self-stretch">
                       <MediaImage src={item.posterUrl} alt={item.title} className="w-full h-full object-cover" />
                     </div>
-                    <div className="flex-1 min-w-0 px-3.5 py-2">
-                      <div className="flex items-center gap-1.5">
-                        <h3 className="text-[15px] font-semibold text-ink truncate">{item.title}</h3>
+                    <div className="flex-1 min-w-0 px-3 py-2.5 flex flex-col justify-center">
+                      <h3 className="text-[15px] font-semibold text-ink leading-[1.28] line-clamp-2">
+                        {item.title}
+                      </h3>
+                      <div className="flex items-center gap-1.5 mt-1 min-w-0">
                         <span
-                          className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded shrink-0 ${
+                          className={`text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-[2px] rounded shrink-0 leading-none ${
                             item.domain === 'watch'
                               ? 'bg-watch/15 text-watch'
                               : item.domain === 'read'
@@ -528,18 +502,20 @@ export function SearchView() {
                         >
                           {item.badge}
                         </span>
+                        <p className="text-xs text-ink-dim truncate flex items-center gap-1.5">
+                          <span>{item.year}</span>
+                          <span>·</span>
+                          <span className="inline-flex items-center gap-0.5 text-brand">
+                            <Star className="w-3 h-3 fill-brand" />
+                            {item.rating.toFixed(1)}
+                          </span>
+                        </p>
                       </div>
-                      <p className="text-xs text-ink-dim mt-0.5 flex items-center gap-1.5">
-                        <span>{item.year}</span>
-                        <span>·</span>
-                        <span className="inline-flex items-center gap-0.5 text-brand">
-                          <Star className="w-3 h-3 fill-brand" />
-                          {item.rating.toFixed(1)}
-                        </span>
-                      </p>
-                      <p className="text-xs text-ink-faint truncate mt-1">{item.genres.join(' · ')}</p>
+                      {item.genres.length > 0 && (
+                        <p className="text-xs text-ink-faint truncate mt-1">{item.genres.join(' · ')}</p>
+                      )}
                     </div>
-                    <div className="pr-3.5 shrink-0">
+                    <div className="pr-3 shrink-0 flex items-center">
                       <button
                         type="button"
                         onClick={(e) => {
@@ -598,9 +574,9 @@ export function SearchView() {
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') handleOpenLiveResult(item, false);
                       }}
-                      className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] overflow-hidden flex items-center cursor-pointer transition-colors"
+                      className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] overflow-hidden flex items-stretch min-h-[100px] cursor-pointer transition-colors"
                     >
-                      <div className="w-[70px] h-[98px] shrink-0 overflow-hidden bg-surface-raised">
+                      <div className="w-[70px] min-h-[100px] shrink-0 overflow-hidden bg-surface-raised self-stretch">
                         <MediaImage
                           src={item.posterUrl}
                           fallbackSrc={item.backdropUrl}
@@ -608,11 +584,13 @@ export function SearchView() {
                           className="w-full h-full object-cover"
                         />
                       </div>
-                      <div className="flex-1 min-w-0 px-3.5 py-2">
-                        <div className="flex items-center gap-1.5">
-                          <h3 className="text-[15px] font-semibold text-ink truncate">{item.title}</h3>
+                      <div className="flex-1 min-w-0 px-3 py-2.5 flex flex-col justify-center">
+                        <h3 className="text-[15px] font-semibold text-ink leading-[1.28] line-clamp-2">
+                          {item.title}
+                        </h3>
+                        <div className="flex items-center gap-1.5 mt-1 min-w-0">
                           <span
-                            className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded shrink-0 ${
+                            className={`text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-[2px] rounded shrink-0 leading-none ${
                               item.domain === 'watch'
                                 ? 'bg-watch/15 text-watch'
                                 : item.domain === 'read'
@@ -620,15 +598,17 @@ export function SearchView() {
                                   : 'bg-play/15 text-play'
                             }`}
                           >
-                            {item.mediaType === 'tv' ? 'TV' : item.mediaType}
+                            {item.mediaType === 'tv' ? 'Show' : item.mediaType}
                           </span>
+                          <p className="text-xs text-ink-dim truncate">
+                            {item.year} · {item.subtitle || item.genres.slice(0, 2).join(' · ')}
+                          </p>
                         </div>
-                        <p className="text-xs text-ink-dim mt-0.5 truncate">
-                          {item.year} · {item.subtitle || item.genres.slice(0, 2).join(' · ')}
-                        </p>
-                        <p className="text-xs text-ink-faint truncate mt-1">{item.overview}</p>
+                        {item.overview && (
+                          <p className="text-xs text-ink-faint truncate mt-1">{item.overview}</p>
+                        )}
                       </div>
-                      <div className="pr-3.5 shrink-0">
+                      <div className="pr-3 shrink-0 flex items-center">
                         <button
                           type="button"
                           onClick={(e) => {
