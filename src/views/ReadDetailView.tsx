@@ -3,8 +3,10 @@ import {
   Bookmark,
   BookOpen,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Layers,
   ListPlus,
   Maximize2,
@@ -13,6 +15,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Star,
 } from 'lucide-react';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
@@ -71,7 +74,13 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
     () => sessionDetailModeByReadId.get(readId) || state.settings.detailMode || 'simple'
   );
+  const [expandedBuckets, setExpandedBuckets] = useState<Record<number, boolean>>({ 0: true });
   const fetchedCoversRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    setDetailMode(sessionDetailModeByReadId.get(readId) || state.settings.detailMode || 'simple');
+    setExpandedBuckets({ 0: true });
+  }, [readId, state.settings.detailMode]);
 
   const handleDetailModeChange = (nextMode: DetailCardMode) => {
     sessionDetailModeByReadId.set(readId, nextMode);
@@ -158,10 +167,41 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const editionLabel =
     item.format === 'comic' ? getComicEditionLabel(progress?.edition, item, progress) : '';
 
+  const BUCKET_SIZE = 25;
+  const simpleBuckets: Array<{ idx: number; label: string; start: number; end: number }> = [];
+  if (stats.total <= BUCKET_SIZE) {
+    simpleBuckets.push({
+      idx: 0,
+      label: item.unit === 'issues' ? 'Issues' : 'Chapters',
+      start: 1,
+      end: stats.total,
+    });
+  } else {
+    let idx = 0;
+    for (let s = 1; s <= stats.total; s += BUCKET_SIZE) {
+      const e = Math.min(stats.total, s + BUCKET_SIZE - 1);
+      simpleBuckets.push({
+        idx,
+        label: `${item.unit === 'issues' ? 'Issues' : 'Chapters'} ${s}–${e}`,
+        start: s,
+        end: e,
+      });
+      idx += 1;
+    }
+  }
+  const activeBucketIdx = simpleBuckets.findIndex((b) => {
+    for (let u = b.start; u <= b.end; u += 1) {
+      if (!completedSet.has(u)) return true;
+    }
+    return false;
+  });
+  const defaultOpenBucket =
+    activeBucketIdx >= 0 ? activeBucketIdx : Math.max(0, simpleBuckets.length - 1);
+
   return (
     <div className="min-h-dvh pb-20 bg-background">
       {/* Flat Dark Hero (no gradient) */}
-      <div className="relative h-[300px] sm:h-[360px] w-full overflow-hidden border-b border-white/[0.06]">
+      <div className="relative h-[270px] sm:h-[340px] w-full overflow-hidden border-b border-white/[0.06]">
         <MediaImage
           src={activeCover || item.backdropUrl || item.coverUrl}
           alt={item.title}
@@ -179,29 +219,30 @@ export function ReadDetailView({ readId }: { readId: string }) {
         </button>
 
         <div className="fixed top-4 md:top-20 right-4 md:right-8 z-30">
-          <div className="glass-pill rounded-full px-1.5 py-1 flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => toggleReadBookmark(item.id)}
-              aria-label="Bookmark"
-              className={`h-8 w-8 rounded-full flex items-center justify-center transition-colors ${
-                progress?.bookmarked ? 'text-watched' : 'text-ink'
-              }`}
-            >
-              <Bookmark className="w-4 h-4" fill={progress?.bookmarked ? 'currentColor' : 'none'} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setMenuOpen((o) => !o)}
-              aria-label="More options"
-              className="h-8 w-8 rounded-full flex items-center justify-center text-ink hover:bg-white/10"
-            >
-              <MoreHorizontal className="w-4 h-4" />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setMenuOpen((o) => !o)}
+            aria-label="More options"
+            className="glass-btn h-10 w-10 rounded-full flex items-center justify-center text-ink"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
 
           {menuOpen && (
             <div className="absolute right-0 mt-2 w-52 rounded-2xl bg-surface-raised border border-white/12 p-1.5 shadow-2xl animate-sheet-up">
+              {!stats.isFinished && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    markReadFinished(item.id);
+                    setMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm text-ink hover:bg-white/8 text-left"
+                >
+                  <Check className="w-4 h-4 text-watched" />
+                  <span>Mark all complete</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -272,52 +313,47 @@ export function ReadDetailView({ readId }: { readId: string }) {
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 pt-4">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 pt-3.5">
         {/* Action Bar */}
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex items-center gap-3 mb-3">
           <button
             type="button"
             onClick={() => toggleReadBookmark(item.id)}
             aria-label="Toggle library bookmark"
-            className={`h-12 w-12 rounded-full border-2 flex items-center justify-center shrink-0 transition-all ${
+            className={`h-11 w-11 rounded-full border-2 flex items-center justify-center shrink-0 transition-all ${
               progress?.bookmarked
                 ? 'border-watched text-watched bg-watched/10'
                 : 'border-white/20 text-ink-dim hover:border-white/40'
             }`}
           >
-            <Bookmark className="w-5 h-5" fill={progress?.bookmarked ? 'currentColor' : 'none'} />
+            <Bookmark className="w-4.5 h-4.5" fill={progress?.bookmarked ? 'currentColor' : 'none'} />
           </button>
 
           {stats.isFinished ? (
             <button
               type="button"
               onClick={() => incrementReread(item.id, 1)}
-              className="flex-1 h-12 rounded-full border-2 border-watched text-ink font-semibold text-[15px] flex items-center justify-center gap-2 bg-watched/[0.08] hover:bg-watched/15 transition-colors"
+              className="flex-1 h-11 rounded-full border-2 border-watched text-ink font-semibold text-sm flex items-center justify-center gap-2 bg-watched/[0.08] hover:bg-watched/15 transition-colors"
             >
-              <Check className="w-5 h-5 text-watched" strokeWidth={2.5} />
+              <Check className="w-4.5 h-4.5 text-watched" strokeWidth={2.5} />
               <span>Finished</span>
               {stats.rereadCount > 1 && (
-                <span className="text-watched font-bold text-sm ml-1">· x{stats.rereadCount}</span>
+                <span className="text-watched font-bold text-xs ml-0.5">· x{stats.rereadCount}</span>
               )}
             </button>
           ) : (
             <button
               type="button"
               onClick={() => advanceReadProgress(item.id, 1)}
-              className="flex-1 h-12 rounded-full bg-brand text-brand-ink font-semibold text-[15px] flex items-center justify-center gap-2 hover:opacity-95 transition-opacity"
+              className="flex-1 h-11 rounded-full bg-brand text-brand-ink font-semibold text-sm flex items-center justify-center gap-2 hover:opacity-95 transition-opacity"
             >
-              <Plus className="w-5 h-5" strokeWidth={2.5} />
-              <span>Log +1 {stats.unitSingular}</span>
-            </button>
-          )}
-
-          {!stats.isFinished && (
-            <button
-              type="button"
-              onClick={() => markReadFinished(item.id)}
-              className="h-12 px-4 rounded-full bg-surface-raised border border-white/12 text-sm font-semibold text-watched hover:bg-white/10"
-            >
-              Finish
+              <Plus className="w-4.5 h-4.5" strokeWidth={2.5} />
+              <span>
+                Log +1 {stats.unitSingular}{' '}
+                <span className="opacity-75 tabular-nums">
+                  ({stats.current}/{stats.total})
+                </span>
+              </span>
             </button>
           )}
         </div>
@@ -326,47 +362,186 @@ export function ReadDetailView({ readId }: { readId: string }) {
 
         <div key={detailMode} data-detail-mode={detailMode} className="animate-detail-flip">
           {detailMode === 'simple' ? (
-            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5">
-              <div className="flex items-center justify-between gap-3 mb-2.5">
-                <span className="text-sm font-semibold text-ink">
-                  {item.format === 'comic' ? 'Issue run progress' : 'Reading progress'}
-                </span>
-                <span className="text-sm font-bold text-watched tabular-nums">
-                  {stats.current} / {stats.total} {stats.unitLabel} ({Math.round(stats.ratio * 100)}%)
-                </span>
-              </div>
-              <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden mb-3">
-                <div
-                  className="h-full bg-watched transition-all duration-300"
-                  style={{ width: `${Math.round(stats.ratio * 100)}%` }}
-                />
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setReadProgress(item.id, stats.current - 1)}
-                    className="h-9 px-3 rounded-full bg-white/8 text-xs font-semibold text-ink hover:bg-white/12 flex items-center gap-1"
-                  >
-                    <Minus className="w-3.5 h-3.5" />1 {stats.unitSingular}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => advanceReadProgress(item.id, 1)}
-                    className="h-9 px-3 rounded-full bg-watched/15 text-xs font-semibold text-watched hover:bg-watched/25 flex items-center gap-1"
-                  >
-                    <Plus className="w-3.5 h-3.5" />1 {stats.unitSingular}
-                  </button>
+            <>
+              {/* Simple Clean Meta, Overview & Compact Pills */}
+              <section className="pb-4 border-b border-white/[0.08]">
+                <p className="text-[13px] text-ink-dim tabular-nums">
+                  {[
+                    formatLabel,
+                    editionLabel || null,
+                    item.year,
+                    item.creator,
+                    `${stats.total} ${stats.unitLabel}`,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+
+                {item.overview && (
+                  <div className="mt-2">
+                    <p
+                      className={`text-[13.5px] text-ink/85 leading-relaxed ${
+                        expanded ? '' : 'line-clamp-2'
+                      }`}
+                    >
+                      {item.overview}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setExpanded((v) => !v)}
+                      className="text-xs font-medium text-ink-dim hover:text-ink mt-1"
+                    >
+                      {expanded ? 'Show less' : 'See more'}
+                    </button>
+                  </div>
+                )}
+
+                {item.genres.length > 0 && (
+                  <p className="text-[12.5px] text-ink-faint mt-1.5">
+                    {item.genres.slice(0, 3).join(' · ')}
+                  </p>
+                )}
+
+                <div className="flex items-center gap-2 flex-wrap mt-3">
+                  <span className="bg-surface border border-white/[0.08] rounded-full px-3 py-1 text-xs font-semibold text-ink inline-flex items-center gap-1.5 tabular-nums">
+                    <Star className="w-3.5 h-3.5 fill-brand text-brand" />
+                    {item.rating.toFixed(1)}/5
+                  </span>
+                  <span className="bg-surface border border-white/[0.08] rounded-full px-3 py-1 text-xs font-medium text-ink-dim tabular-nums">
+                    {stats.current}/{stats.total} {stats.unitLabel} ({Math.round(stats.ratio * 100)}%)
+                  </span>
+                  {typeof progress?.rating === 'number' && progress.rating > 0 && (
+                    <span className="bg-surface border border-brand/35 rounded-full px-3 py-1 text-xs font-semibold text-brand inline-flex items-center gap-1 tabular-nums">
+                      Your rating ★ {formatRating(progress.rating)}/5
+                    </span>
+                  )}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => handleDetailModeChange('advanced')}
-                  className="text-xs font-medium text-ink-dim hover:text-brand transition-colors"
-                >
-                  Edit total, rereads & notes →
-                </button>
-              </div>
-            </section>
+              </section>
+
+              {/* Simple Accordion Issue / Chapter Checklist */}
+              <section className="pt-2 pb-4 divide-y divide-white/[0.06]">
+                {simpleBuckets.map((bucket) => {
+                  const totalInBucket = bucket.end - bucket.start + 1;
+                  let doneInBucket = 0;
+                  const unitNums: number[] = [];
+                  for (let u = bucket.start; u <= bucket.end; u += 1) {
+                    unitNums.push(u);
+                    if (completedSet.has(u)) doneInBucket += 1;
+                  }
+                  const bucketDone = doneInBucket >= totalInBucket;
+                  const bucketRatio = Math.min(1, doneInBucket / Math.max(1, totalInBucket));
+                  const isOpen =
+                    expandedBuckets[bucket.idx] !== undefined
+                      ? expandedBuckets[bucket.idx]
+                      : bucket.idx === defaultOpenBucket;
+
+                  return (
+                    <div key={bucket.idx} className="py-2">
+                      <div className="flex items-center justify-between gap-3 py-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedBuckets((prev) => ({
+                              ...prev,
+                              [bucket.idx]: !isOpen,
+                            }))
+                          }
+                          aria-expanded={isOpen}
+                          className="flex items-center gap-1.5 font-display font-bold text-[15px] text-ink text-left"
+                        >
+                          <span>{bucket.label}</span>
+                          {isOpen ? (
+                            <ChevronUp className="w-4 h-4 text-ink-dim" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-ink-dim" />
+                          )}
+                        </button>
+
+                        <div className="flex items-center gap-3 shrink-0">
+                          <span
+                            className={`text-xs font-semibold tabular-nums ${
+                              bucketDone ? 'text-watched' : 'text-ink-dim'
+                            }`}
+                          >
+                            {doneInBucket}/{totalInBucket}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (simpleBuckets.length === 1) {
+                                if (bucketDone) setReadProgress(item.id, 0);
+                                else markReadFinished(item.id);
+                              } else {
+                                if (bucketDone) setReadProgress(item.id, bucket.start - 1);
+                                else setReadProgress(item.id, Math.max(stats.current, bucket.end));
+                              }
+                            }}
+                            aria-label={`Toggle ${bucket.label} complete`}
+                            className={`h-7 w-7 rounded-full flex items-center justify-center transition-colors ${
+                              bucketDone
+                                ? 'text-watched'
+                                : 'text-ink-faint hover:text-watched'
+                            }`}
+                          >
+                            <Check className="w-[17px] h-[17px]" strokeWidth={2.5} />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="h-[2.5px] w-full rounded-full bg-white/10 overflow-hidden mb-1">
+                        <div
+                          className="h-full bg-watched transition-all duration-300"
+                          style={{ width: `${Math.round(bucketRatio * 100)}%` }}
+                        />
+                      </div>
+
+                      {isOpen && (
+                        <div className="divide-y divide-white/[0.06] pt-1">
+                          {unitNums.map((u) => {
+                            const done = completedSet.has(u);
+                            const label =
+                              item.unit === 'issues' ? `Issue #${u}` : `Chapter ${u}`;
+                            return (
+                              <div
+                                key={u}
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => toggleReadUnit(item.id, u)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    toggleReadUnit(item.id, u);
+                                  }
+                                }}
+                                className="py-2.5 flex items-center justify-between gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors"
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-[14px] font-medium text-ink truncate">
+                                    {label}
+                                  </p>
+                                  {done && (
+                                    <p className="text-[11.5px] text-watched">Read</p>
+                                  )}
+                                </div>
+                                <span
+                                  className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+                                    done
+                                      ? 'text-watched'
+                                      : 'text-ink-faint hover:text-watched'
+                                  }`}
+                                >
+                                  <Check className="w-[17px] h-[17px]" strokeWidth={2.5} />
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </section>
+            </>
           ) : (
             <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5">
               <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
@@ -443,6 +618,15 @@ export function ReadDetailView({ readId }: { readId: string }) {
                   >
                     <Plus className="w-3.5 h-3.5" />1 {stats.unitSingular}
                   </button>
+                  {!stats.isFinished && (
+                    <button
+                      type="button"
+                      onClick={() => markReadFinished(item.id)}
+                      className="h-9 px-3 rounded-full bg-white/8 border border-white/10 text-xs font-semibold text-watched hover:bg-white/12"
+                    >
+                      Finish
+                    </button>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -703,26 +887,25 @@ export function ReadDetailView({ readId }: { readId: string }) {
             </section>
           )}
 
-          {/* Info & Star Rating */}
-          <section className="pb-5">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2 className="font-semibold text-[16px] text-ink">About</h2>
-                <p className="text-[13.5px] text-ink-dim mt-0.5">
-                  {item.genres.join(' · ')} · {item.totalUnits} {stats.unitLabel}
-                </p>
+          {/* Advanced Info & Star Rating */}
+          {detailMode === 'advanced' && (
+            <section className="pb-5">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="font-semibold text-[16px] text-ink">About</h2>
+                  <p className="text-[13.5px] text-ink-dim mt-0.5">
+                    {item.genres.join(' · ')} · {item.totalUnits} {stats.unitLabel}
+                  </p>
+                </div>
+                <RatingControl
+                  value={progress?.rating}
+                  onChange={(r) => rateReadItem(item.id, r, 'manual')}
+                  labelPrefix="Rate title"
+                  allowClear
+                />
               </div>
-              <RatingControl
-                value={progress?.rating}
-                onChange={(r) => rateReadItem(item.id, r, 'manual')}
-                labelPrefix="Rate title"
-                allowClear
-              />
-            </div>
 
-            {unitAvg &&
-              unitAvg.count > 0 &&
-              (detailMode === 'advanced' || (stats.isFinished && !progress?.rating)) && (
+              {unitAvg && unitAvg.count > 0 && (
                 <div className="mt-3">
                   <SuggestedRatingBanner
                     compact
@@ -738,28 +921,18 @@ export function ReadDetailView({ readId }: { readId: string }) {
                 </div>
               )}
 
-            <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>
-              {item.overview}
-            </p>
-            <div className="flex items-center justify-between gap-2 mt-1">
+              <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>
+                {item.overview}
+              </p>
               <button
                 type="button"
                 onClick={() => setExpanded((v) => !v)}
-                className="text-xs font-medium text-brand"
+                className="text-xs font-medium text-brand mt-1"
               >
                 {expanded ? 'Show less' : 'More'}
               </button>
-              {detailMode === 'simple' && (
-                <button
-                  type="button"
-                  onClick={() => setDetailMode('advanced')}
-                  className="text-xs font-medium text-ink-dim hover:text-brand transition-colors"
-                >
-                  Editions, checklist, ratings & notes →
-                </button>
-              )}
-            </div>
-          </section>
+            </section>
+          )}
 
           {detailMode === 'advanced' && (
             <PersonalNotesSection

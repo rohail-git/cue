@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Bell,
   BellOff,
@@ -6,6 +6,7 @@ import {
   Check,
   ChevronDown,
   ChevronLeft,
+  ChevronUp,
   ListPlus,
   Maximize2,
   Minus,
@@ -35,6 +36,8 @@ import {
   getShowStats,
   pad2,
 } from '../utils/stats';
+
+const sessionDetailModeByShowId = new Map<string, DetailCardMode>();
 
 export function ShowDetailView({ showId }: { showId: string }) {
   const {
@@ -76,8 +79,29 @@ export function ShowDetailView({ showId }: { showId: string }) {
   const [epNoteText, setEpNoteText] = useState('');
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
-    () => state.settings.detailMode || 'simple'
+    () => sessionDetailModeByShowId.get(showId) || state.settings.detailMode || 'simple'
   );
+  const [expandedSeasons, setExpandedSeasons] = useState<Record<number, boolean>>(() => {
+    if (!show || show.seasons.length === 0) return {};
+    const st = getShowStats(show, progress);
+    const activeNum = st.nextEpisode?.season ?? show.seasons[show.seasons.length - 1].number;
+    return { [activeNum]: true };
+  });
+
+  useEffect(() => {
+    setDetailMode(sessionDetailModeByShowId.get(showId) || state.settings.detailMode || 'simple');
+    if (show && show.seasons.length > 0) {
+      const st = getShowStats(show, progress);
+      const activeNum = st.nextEpisode?.season ?? show.seasons[show.seasons.length - 1].number;
+      setExpandedSeasons({ [activeNum]: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showId]);
+
+  const handleDetailModeChange = (nextMode: DetailCardMode) => {
+    sessionDetailModeByShowId.set(showId, nextMode);
+    setDetailMode(nextMode);
+  };
 
   const stats = useMemo(() => {
     if (!show) return null;
@@ -306,13 +330,20 @@ export function ShowDetailView({ showId }: { showId: string }) {
   return (
     <div className="min-h-dvh pb-20 bg-background">
       {/* Flat Dark Hero (no gradient) */}
-      <div className="relative h-[290px] sm:h-[350px] md:h-[380px] w-full overflow-hidden border-b border-white/[0.06]">
-        <MediaImage
-          src={show.backdropUrl || show.posterUrl}
-          alt={show.title}
-          className="w-full h-full object-cover object-center opacity-55"
-        />
-        <div className="absolute inset-0 bg-[#131519]/50" />
+      <div className="relative h-[270px] sm:h-[340px] md:h-[380px] w-full overflow-hidden border-b border-white/[0.06]">
+        <button
+          type="button"
+          onClick={() => setLightboxOpen(true)}
+          aria-label="View poster fullscreen"
+          className="block w-full h-full relative cursor-zoom-in text-left"
+        >
+          <MediaImage
+            src={show.backdropUrl || show.posterUrl}
+            alt={show.title}
+            className="w-full h-full object-cover object-center opacity-55"
+          />
+          <div className="absolute inset-0 bg-[#131519]/50" />
+        </button>
 
         <button
           type="button"
@@ -324,26 +355,14 @@ export function ShowDetailView({ showId }: { showId: string }) {
         </button>
 
         <div className="fixed top-4 md:top-20 right-4 md:right-8 z-30">
-          <div className="glass-pill rounded-full px-1.5 py-1 flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => toggleShowBookmark(show.id)}
-              aria-label="Bookmark show"
-              className={`h-8 w-8 rounded-full flex items-center justify-center transition-colors ${
-                progress?.bookmarked ? 'text-watched' : 'text-ink'
-              }`}
-            >
-              <Bookmark className="w-4 h-4" fill={progress?.bookmarked ? 'currentColor' : 'none'} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setMenuOpen((o) => !o)}
-              aria-label="Show options"
-              className="h-8 w-8 rounded-full flex items-center justify-center text-ink hover:bg-white/10"
-            >
-              <MoreHorizontal className="w-4 h-4" />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setMenuOpen((o) => !o)}
+            aria-label="Show options"
+            className="glass-btn h-10 w-10 rounded-full flex items-center justify-center text-ink"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
 
           {menuOpen && (
             <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-surface-raised border border-white/12 p-1.5 shadow-2xl animate-sheet-up">
@@ -412,254 +431,459 @@ export function ShowDetailView({ showId }: { showId: string }) {
           )}
         </div>
 
-        <div className="absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto flex items-end gap-4">
-          <button
-            type="button"
-            onClick={() => setLightboxOpen(true)}
-            aria-label="View cover fullscreen"
-            className="group relative w-20 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface cursor-zoom-in"
-          >
-            <MediaImage src={show.posterUrl} alt={show.title} className="w-full h-full object-cover" />
-            <span className="absolute bottom-1.5 right-1.5 h-6 w-6 rounded-full bg-black/70 border border-white/15 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity">
-              <Maximize2 className="w-3 h-3" />
-            </span>
-          </button>
-          <div className="min-w-0 pb-1">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-brand mb-1">
+        {detailMode === 'simple' ? (
+          <div className="pointer-events-none absolute bottom-5 inset-x-0 px-6 max-w-3xl mx-auto text-center">
+            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-ink-dim mb-1">
               {show.mediaType === 'anime' ? 'Anime' : 'Series'} · {show.year}
             </p>
             <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-ink tracking-tight leading-tight">
               {show.title}
             </h1>
+            <span className="pointer-events-auto inline-flex items-center justify-center mt-2 h-6 w-6 rounded-full bg-black/55 border border-white/15 text-ink-dim">
+              <Maximize2 className="w-3 h-3" />
+            </span>
           </div>
-        </div>
+        ) : (
+          <div className="pointer-events-none absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto flex items-end gap-4">
+            <button
+              type="button"
+              onClick={() => setLightboxOpen(true)}
+              aria-label="View cover fullscreen"
+              className="pointer-events-auto group relative w-20 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface cursor-zoom-in"
+            >
+              <MediaImage src={show.posterUrl} alt={show.title} className="w-full h-full object-cover" />
+              <span className="absolute bottom-1.5 right-1.5 h-6 w-6 rounded-full bg-black/70 border border-white/15 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                <Maximize2 className="w-3 h-3" />
+              </span>
+            </button>
+            <div className="min-w-0 pb-1">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-brand mb-1">
+                {show.mediaType === 'anime' ? 'Anime' : 'Series'} · {show.year}
+              </p>
+              <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-ink tracking-tight leading-tight">
+                {show.title}
+              </h1>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Main Content */}
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 pt-3">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 pt-3.5">
         {/* Primary Action Bar */}
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex items-center gap-3 mb-3">
           <button
             type="button"
             onClick={() => toggleShowBookmark(show.id)}
             aria-label="Toggle library bookmark"
-            className={`h-12 w-12 rounded-full border-2 flex items-center justify-center shrink-0 transition-all active:scale-95 ${
+            className={`h-11 w-11 rounded-full border-2 flex items-center justify-center shrink-0 transition-all active:scale-95 ${
               progress?.bookmarked
                 ? 'border-watched text-watched bg-watched/10'
                 : 'border-white/20 text-ink-dim hover:border-white/40'
             }`}
           >
-            <Bookmark className="w-5 h-5" fill={progress?.bookmarked ? 'currentColor' : 'none'} />
+            <Bookmark className="w-4.5 h-4.5" fill={progress?.bookmarked ? 'currentColor' : 'none'} />
           </button>
 
           {stats.isFinished ? (
             <button
               type="button"
               onClick={() => startShowRewatch(show.id)}
-              className="flex-1 h-12 rounded-full border-2 border-watched text-ink font-semibold text-[15px] flex items-center justify-center gap-2 bg-watched/[0.06] hover:bg-watched/15 transition-colors"
+              className="flex-1 h-11 rounded-full border-2 border-watched text-ink font-semibold text-sm flex items-center justify-center gap-2 bg-watched/[0.06] hover:bg-watched/15 transition-colors"
             >
-              <Check className="w-5 h-5 text-watched" strokeWidth={2.5} />
+              <Check className="w-4.5 h-4.5 text-watched" strokeWidth={2.5} />
               <span>Finished</span>
               {stats.rewatchCount > 1 && (
-                <span className="text-watched font-bold text-sm ml-1">· x{stats.rewatchCount}</span>
+                <span className="text-watched font-bold text-xs ml-0.5">· x{stats.rewatchCount}</span>
               )}
             </button>
           ) : stats.nextEpisode ? (
             <button
               type="button"
               onClick={() => watchNextEpisode(show.id)}
-              className="flex-1 h-12 rounded-full bg-brand text-brand-ink font-semibold text-[15px] flex items-center justify-center gap-2 hover:opacity-95 transition-opacity"
+              className={`flex-1 h-11 rounded-full font-semibold text-sm flex items-center justify-center gap-2 transition-colors ${
+                stats.watchedUnique > 0
+                  ? 'border border-white/15 bg-surface hover:bg-surface-raised text-ink'
+                  : 'bg-brand text-brand-ink hover:opacity-95'
+              }`}
             >
-              <Check className="w-5 h-5" strokeWidth={2.5} />
+              <Check
+                className={`w-4.5 h-4.5 ${stats.watchedUnique > 0 ? 'text-watched' : 'text-brand-ink'}`}
+                strokeWidth={2.5}
+              />
               <span>
-                Watch {formatEpisodeCode(stats.nextEpisode.season, stats.nextEpisode.number)}
+                {stats.watchedUnique > 0
+                  ? `${stats.watchedUnique}/${stats.totalEpisodes} watched`
+                  : `Watch ${formatEpisodeCode(stats.nextEpisode.season, stats.nextEpisode.number)}`}
               </span>
             </button>
           ) : (
             <button
               type="button"
               onClick={() => toggleShowBookmark(show.id)}
-              className="flex-1 h-12 rounded-full border border-white/20 text-ink font-semibold text-[15px]"
+              className="flex-1 h-11 rounded-full border border-white/20 text-ink font-semibold text-sm"
             >
               + Add to Watch
             </button>
           )}
         </div>
 
-        <DetailModeToggle mode={detailMode} onChange={setDetailMode} />
+        <DetailModeToggle mode={detailMode} onChange={handleDetailModeChange} />
 
         <div key={detailMode} data-detail-mode={detailMode} className="animate-detail-flip">
-          {detailMode === 'advanced' && (
-            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 grid grid-cols-3 gap-3 text-center">
-              <div>
-                <p className="text-[11px] text-ink-dim uppercase tracking-wider font-semibold">Progress</p>
-                <p className="font-display font-bold text-lg text-watched tabular-nums mt-0.5">
-                  {stats.watchedUnique} / {stats.totalEpisodes}
+          {detailMode === 'simple' ? (
+            <>
+              {/* Simple Clean Meta, Overview & Compact Pills */}
+              <section className="pb-4 border-b border-white/[0.08]">
+                <p className="text-[13px] text-ink-dim tabular-nums">
+                  {[show.year, `${show.runtimeAvg} min`, show.network].filter(Boolean).join(' · ')}
                 </p>
-              </div>
-              <div>
-                <p className="text-[11px] text-ink-dim uppercase tracking-wider font-semibold">Runtime</p>
-                <p className="font-display font-bold text-lg text-ink tabular-nums mt-0.5">
-                  {show.runtimeAvg}m avg
-                </p>
-              </div>
-              <div>
-                <p className="text-[11px] text-ink-dim uppercase tracking-wider font-semibold">Network</p>
-                <p className="font-display font-bold text-sm text-ink truncate mt-1">
-                  {show.network || 'Streaming'}
-                </p>
-              </div>
-            </section>
-          )}
 
-          {/* Show Info */}
-          <section className="pb-4 border-b border-white/[0.08]">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2 className="font-semibold text-[16px] text-ink">Show info</h2>
-                <p className="text-[13.5px] text-ink-dim mt-0.5 flex items-center gap-1.5 flex-wrap">
-                  <span>{show.year}</span>
-                  <span>·</span>
-                  <span>{show.genres.slice(0, 2).join(', ')}</span>
-                  <span>·</span>
-                  <span className="tabular-nums">
-                    {stats.watchedUnique}/{stats.totalEpisodes} ep
-                  </span>
-                  <span>·</span>
-                  <span className="inline-flex items-center gap-1 text-brand">
-                    <Star className="w-3.5 h-3.5 fill-brand" />
-                    {show.rating.toFixed(1)}
-                  </span>
-                </p>
-              </div>
-
-              <RatingControl
-                value={progress?.rating}
-                onChange={(r) => rateShow(show.id, r, 'manual')}
-                labelPrefix="Rate show"
-                allowClear
-              />
-            </div>
-
-            {showCalcAvg &&
-              showCalcAvg.count > 0 &&
-              (detailMode === 'advanced' || (stats.isFinished && !progress?.rating)) && (
-                <div className="mt-3">
-                  <SuggestedRatingBanner
-                    compact
-                    label={show.title}
-                    calculatedAvg={showCalcAvg.avg}
-                    ratedCount={showCalcAvg.count}
-                    unitWord={showCalcAvg.basis}
-                    currentRating={progress?.rating}
-                    ratingSource={progress?.ratingSource}
-                    onAcceptAvg={(avg) => rateShow(show.id, avg, 'auto')}
-                    onManualRate={(r) => rateShow(show.id, r, 'manual')}
-                  />
-                </div>
-              )}
-
-            {show.overview && (
-              <div className="mt-2.5">
-                <p
-                  className={`text-[13.5px] text-ink-dim leading-relaxed ${
-                    expandedOverview ? '' : 'line-clamp-2'
-                  }`}
-                >
-                  {show.overview}
-                </p>
-                <div className="flex items-center justify-between gap-2 mt-1">
-                  <button
-                    type="button"
-                    onClick={() => setExpandedOverview((e) => !e)}
-                    className="text-xs font-medium text-brand"
-                  >
-                    {expandedOverview ? 'Show less' : 'More'}
-                  </button>
-                  {detailMode === 'simple' && (
+                {show.overview && (
+                  <div className="mt-2">
+                    <p
+                      className={`text-[13.5px] text-ink/85 leading-relaxed ${
+                        expandedOverview ? '' : 'line-clamp-2'
+                      }`}
+                    >
+                      {show.overview}
+                    </p>
                     <button
                       type="button"
-                      onClick={() => setDetailMode('advanced')}
-                      className="text-xs font-medium text-ink-dim hover:text-brand transition-colors"
+                      onClick={() => setExpandedOverview((e) => !e)}
+                      className="text-xs font-medium text-ink-dim hover:text-ink mt-1"
                     >
-                      Cast, stats, moods & notes →
+                      {expandedOverview ? 'Show less' : 'See more'}
                     </button>
+                  </div>
+                )}
+
+                {show.genres.length > 0 && (
+                  <p className="text-[12.5px] text-ink-faint mt-1.5">
+                    {show.genres.slice(0, 3).join(' · ')}
+                  </p>
+                )}
+
+                <div className="flex items-center gap-2 flex-wrap mt-3">
+                  <span className="bg-surface border border-white/[0.08] rounded-full px-3 py-1 text-xs font-semibold text-ink inline-flex items-center gap-1.5 tabular-nums">
+                    <Star className="w-3.5 h-3.5 fill-brand text-brand" />
+                    {show.rating.toFixed(1)}/10
+                  </span>
+                  <span className="bg-surface border border-white/[0.08] rounded-full px-3 py-1 text-xs font-medium text-ink-dim tabular-nums">
+                    {stats.watchedUnique}/{stats.totalEpisodes} episodes
+                  </span>
+                  {typeof progress?.rating === 'number' && progress.rating > 0 && (
+                    <span className="bg-surface border border-brand/35 rounded-full px-3 py-1 text-xs font-semibold text-brand inline-flex items-center gap-1 tabular-nums">
+                      Your rating ★ {formatRating(progress.rating)}/5
+                    </span>
                   )}
                 </div>
-              </div>
-            )}
+              </section>
 
-            {detailMode === 'advanced' && show.cast.length > 0 && (
-              <div className="mt-3.5 flex items-center gap-3 overflow-x-auto no-scrollbar pb-1">
-                {show.cast.map((c) => (
-                  <div key={c.id} className="w-16 shrink-0 text-center">
-                    <div className="w-12 h-12 mx-auto rounded-full overflow-hidden bg-surface border border-white/10">
-                      <MediaImage
-                        src={c.avatarUrl}
-                        alt={c.character}
-                        className="w-full h-full object-cover"
-                      />
+              {/* Simple Accordion Seasons & Bare-Checkmark Episodes */}
+              <section className="pt-2 pb-4 divide-y divide-white/[0.06]">
+                {show.seasons.map((season) => {
+                  const sp = getSeasonProgress(show, season.number, progress);
+                  const isOpen = Boolean(expandedSeasons[season.number]);
+                  const seasonDone = sp.total > 0 && sp.watched === sp.total;
+                  return (
+                    <div key={season.number} className="py-2">
+                      <div className="flex items-center justify-between gap-3 py-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedSeasons((prev) => ({
+                              ...prev,
+                              [season.number]: !prev[season.number],
+                            }))
+                          }
+                          aria-expanded={isOpen}
+                          className="flex items-center gap-1.5 font-display font-bold text-[15px] text-ink text-left"
+                        >
+                          <span>Season {season.number}</span>
+                          {isOpen ? (
+                            <ChevronUp className="w-4 h-4 text-ink-dim" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-ink-dim" />
+                          )}
+                        </button>
+
+                        <div className="flex items-center gap-3 shrink-0">
+                          <span
+                            className={`text-xs font-semibold tabular-nums ${
+                              seasonDone ? 'text-watched' : 'text-ink-dim'
+                            }`}
+                          >
+                            {sp.watched}/{sp.total}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => markSeasonWatched(show.id, season.number, false)}
+                            aria-label={`Mark Season ${season.number} watched`}
+                            className={`h-7 w-7 rounded-full flex items-center justify-center transition-colors ${
+                              seasonDone
+                                ? 'text-watched'
+                                : 'text-ink-faint hover:text-watched'
+                            }`}
+                          >
+                            <Check className="w-[17px] h-[17px]" strokeWidth={2.5} />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="h-[2.5px] w-full rounded-full bg-white/10 overflow-hidden mb-1">
+                        <div
+                          className="h-full bg-watched transition-all duration-300"
+                          style={{ width: `${Math.round(sp.ratio * 100)}%` }}
+                        />
+                      </div>
+
+                      {isOpen && (
+                        <div className="divide-y divide-white/[0.06] pt-1">
+                          {season.episodes.map((ep) => {
+                            const epKey = getEpisodeKey(ep.season, ep.number);
+                            const count = progress?.episodeCounts?.[epKey] || 0;
+                            const isWatched = count > 0;
+                            return (
+                              <div
+                                key={ep.id}
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => toggleEpisodeWatched(show.id, ep.season, ep.number)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    toggleEpisodeWatched(show.id, ep.season, ep.number);
+                                  }
+                                }}
+                                className="py-2.5 flex items-center gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors"
+                              >
+                                <div className="w-[84px] h-[48px] rounded-lg overflow-hidden bg-surface shrink-0">
+                                  <MediaImage
+                                    src={ep.stillUrl}
+                                    alt={ep.title}
+                                    className="w-full h-full object-cover"
+                                  />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[14px] font-medium text-ink truncate leading-snug">
+                                    {ep.title}
+                                  </p>
+                                  <p className="text-[12px] text-ink-dim tabular-nums mt-0.5">
+                                    E{pad2(ep.number)} · {formatAirDate(ep.airdate)}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleEpisodeWatched(show.id, ep.season, ep.number);
+                                  }}
+                                  aria-label={
+                                    isWatched
+                                      ? `Unmark ${ep.title} watched`
+                                      : `Mark ${ep.title} watched`
+                                  }
+                                  className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+                                    isWatched
+                                      ? 'text-watched'
+                                      : 'text-ink-faint hover:text-watched'
+                                  }`}
+                                >
+                                  <Check className="w-[17px] h-[17px]" strokeWidth={2.5} />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                    <p className="text-[11px] font-medium text-ink truncate mt-1">{c.character}</p>
-                    <p className="text-[10px] text-ink-faint truncate">{c.actor}</p>
+                  );
+                })}
+              </section>
+
+              {/* Simple Portrait Cast Strip */}
+              {show.cast.length > 0 && (
+                <section className="pt-3 pb-2">
+                  <h2 className="font-display font-bold text-[16px] text-ink mb-3">Cast</h2>
+                  <div className="flex items-start gap-3 overflow-x-auto no-scrollbar pb-1">
+                    {show.cast.map((c) => (
+                      <div key={c.id} className="w-[104px] shrink-0 text-left">
+                        <div className="aspect-[3/4] rounded-xl overflow-hidden bg-surface border border-white/[0.06]">
+                          <MediaImage
+                            src={c.avatarUrl}
+                            alt={c.actor}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <p className="text-xs font-semibold text-ink truncate mt-1.5">{c.actor}</p>
+                        <p className="text-[10px] uppercase tracking-wider text-ink-faint truncate">
+                          {c.character}
+                        </p>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Seasons & Episodes */}
-          <section className="pt-5 pb-6">
-            <div className="lg:hidden">{activeSeasonObj && renderSeasonColumn(activeSeasonObj, true)}</div>
-
-            <div className="hidden lg:block">
-              {show.seasons.length > 2 && (
-                <div className="flex items-center gap-2 mb-4 overflow-x-auto no-scrollbar">
-                  {Array.from({ length: Math.ceil(show.seasons.length / 2) }, (_, idx) => {
-                    const sStart = idx * 2;
-                    const s1 = show.seasons[sStart];
-                    const s2 = show.seasons[sStart + 1];
-                    const active = seasonPairStart === sStart;
-                    return (
-                      <button
-                        key={sStart}
-                        type="button"
-                        onClick={() => setSeasonPairStart(sStart)}
-                        className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                          active
-                            ? 'bg-brand text-brand-ink'
-                            : 'bg-surface border border-white/10 text-ink-dim hover:text-ink'
-                        }`}
-                      >
-                        {s2 ? `Seasons ${s1.number}–${s2.number}` : `Season ${s1.number}`}
-                      </button>
-                    );
-                  })}
-                </div>
+                </section>
               )}
-              <div className="grid grid-cols-2 gap-8">
-                {desktopSeasons.map((season) => renderSeasonColumn(season, false))}
-              </div>
-            </div>
-          </section>
+            </>
+          ) : (
+            <>
+              <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 grid grid-cols-3 gap-3 text-center">
+                <div>
+                  <p className="text-[11px] text-ink-dim uppercase tracking-wider font-semibold">Progress</p>
+                  <p className="font-display font-bold text-lg text-watched tabular-nums mt-0.5">
+                    {stats.watchedUnique} / {stats.totalEpisodes}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-ink-dim uppercase tracking-wider font-semibold">Runtime</p>
+                  <p className="font-display font-bold text-lg text-ink tabular-nums mt-0.5">
+                    {show.runtimeAvg}m avg
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-ink-dim uppercase tracking-wider font-semibold">Network</p>
+                  <p className="font-display font-bold text-sm text-ink truncate mt-1">
+                    {show.network || 'Streaming'}
+                  </p>
+                </div>
+              </section>
 
-          {/* Private Personal Mood & Notes */}
-          {detailMode === 'advanced' && (
-            <PersonalNotesSection
-              domain="watch"
-              mediaKind="show"
-              mediaId={show.id}
-              mediaTitle={show.title}
-              mediaPoster={show.posterUrl}
-              defaultContext={
-                stats.nextEpisode
-                  ? formatEpisodeCode(stats.nextEpisode.season, stats.nextEpisode.number)
-                  : undefined
-              }
-              currentRating={progress?.rating}
-              currentMood={progress?.mood}
-              onSelectMood={(mood) => setShowMood(show.id, mood)}
-            />
+              {/* Show Info */}
+              <section className="pb-4 border-b border-white/[0.08]">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h2 className="font-semibold text-[16px] text-ink">Show info</h2>
+                    <p className="text-[13.5px] text-ink-dim mt-0.5 flex items-center gap-1.5 flex-wrap">
+                      <span>{show.year}</span>
+                      <span>·</span>
+                      <span>{show.genres.slice(0, 2).join(', ')}</span>
+                      <span>·</span>
+                      <span className="tabular-nums">
+                        {stats.watchedUnique}/{stats.totalEpisodes} ep
+                      </span>
+                      <span>·</span>
+                      <span className="inline-flex items-center gap-1 text-brand">
+                        <Star className="w-3.5 h-3.5 fill-brand" />
+                        {show.rating.toFixed(1)}
+                      </span>
+                    </p>
+                  </div>
+
+                  <RatingControl
+                    value={progress?.rating}
+                    onChange={(r) => rateShow(show.id, r, 'manual')}
+                    labelPrefix="Rate show"
+                    allowClear
+                  />
+                </div>
+
+                {showCalcAvg && showCalcAvg.count > 0 && (
+                  <div className="mt-3">
+                    <SuggestedRatingBanner
+                      compact
+                      label={show.title}
+                      calculatedAvg={showCalcAvg.avg}
+                      ratedCount={showCalcAvg.count}
+                      unitWord={showCalcAvg.basis}
+                      currentRating={progress?.rating}
+                      ratingSource={progress?.ratingSource}
+                      onAcceptAvg={(avg) => rateShow(show.id, avg, 'auto')}
+                      onManualRate={(r) => rateShow(show.id, r, 'manual')}
+                    />
+                  </div>
+                )}
+
+                {show.overview && (
+                  <div className="mt-2.5">
+                    <p
+                      className={`text-[13.5px] text-ink-dim leading-relaxed ${
+                        expandedOverview ? '' : 'line-clamp-2'
+                      }`}
+                    >
+                      {show.overview}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setExpandedOverview((e) => !e)}
+                      className="text-xs font-medium text-brand mt-1"
+                    >
+                      {expandedOverview ? 'Show less' : 'More'}
+                    </button>
+                  </div>
+                )}
+
+                {show.cast.length > 0 && (
+                  <div className="mt-3.5 flex items-start gap-3 overflow-x-auto no-scrollbar pb-1">
+                    {show.cast.map((c) => (
+                      <div key={c.id} className="w-16 shrink-0 text-center">
+                        <div className="w-12 h-12 mx-auto rounded-full overflow-hidden bg-surface border border-white/10">
+                          <MediaImage
+                            src={c.avatarUrl}
+                            alt={c.character}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <p className="text-[11px] font-medium text-ink truncate mt-1">{c.character}</p>
+                        <p className="text-[10px] text-ink-faint truncate">{c.actor}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              {/* Seasons & Episodes */}
+              <section className="pt-5 pb-6">
+                <div className="lg:hidden">{activeSeasonObj && renderSeasonColumn(activeSeasonObj, true)}</div>
+
+                <div className="hidden lg:block">
+                  {show.seasons.length > 2 && (
+                    <div className="flex items-center gap-2 mb-4 overflow-x-auto no-scrollbar">
+                      {Array.from({ length: Math.ceil(show.seasons.length / 2) }, (_, idx) => {
+                        const sStart = idx * 2;
+                        const s1 = show.seasons[sStart];
+                        const s2 = show.seasons[sStart + 1];
+                        const active = seasonPairStart === sStart;
+                        return (
+                          <button
+                            key={sStart}
+                            type="button"
+                            onClick={() => setSeasonPairStart(sStart)}
+                            className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                              active
+                                ? 'bg-brand text-brand-ink'
+                                : 'bg-surface border border-white/10 text-ink-dim hover:text-ink'
+                            }`}
+                          >
+                            {s2 ? `Seasons ${s1.number}–${s2.number}` : `Season ${s1.number}`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-8">
+                    {desktopSeasons.map((season) => renderSeasonColumn(season, false))}
+                  </div>
+                </div>
+              </section>
+
+              {/* Private Personal Mood & Notes */}
+              <PersonalNotesSection
+                domain="watch"
+                mediaKind="show"
+                mediaId={show.id}
+                mediaTitle={show.title}
+                mediaPoster={show.posterUrl}
+                defaultContext={
+                  stats.nextEpisode
+                    ? formatEpisodeCode(stats.nextEpisode.season, stats.nextEpisode.number)
+                    : undefined
+                }
+                currentRating={progress?.rating}
+                currentMood={progress?.mood}
+                onSelectMood={(mood) => setShowMood(show.id, mood)}
+              />
+            </>
           )}
         </div>
       </div>

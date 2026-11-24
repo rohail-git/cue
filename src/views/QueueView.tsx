@@ -300,7 +300,6 @@ export function QueueView() {
       stickyHeader={
         <MobileDomainBar
           title="Active Rotation"
-          domainLabel="Cue"
           rightSlot={
             <button
               type="button"
