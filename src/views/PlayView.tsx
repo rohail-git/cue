@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Plus, Trophy } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Gamepad2, Plus, Search, Trophy } from 'lucide-react';
 import { BingersMediaRow } from '../components/BingersMediaRow';
 import { FilterSortSheet } from '../components/FilterSortSheet';
 import { MediaImage } from '../components/MediaImage';
@@ -11,6 +11,7 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
   const {
     state,
     pushRoute,
+    switchTab,
     toggleCalendarMode,
     setFilterSheetOpen,
     updateSettings,
@@ -248,31 +249,65 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
               Upcoming patches & releases
             </h2>
             <div className="space-y-3">
-              {upcomingGames.map((u) => {
-                const game = state.games[u.mediaId];
-                return (
-                  <BingersMediaRow
-                    key={u.id}
-                    title={u.title}
-                    posterUrl={game?.coverUrl || u.artworkUrl}
-                    primaryLine={u.subtitle}
-                    actionDisabled
-                    actionContent={
-                      <span className="flex flex-col items-center px-1">
-                        <span className="text-[17px] font-display font-bold text-ink tabular-nums leading-none">
-                          {u.daysUntil}
+              {upcomingGames.length === 0 ? (
+                <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center">
+                  <Gamepad2 className="w-7 h-7 text-play mx-auto mb-2.5 opacity-80" />
+                  <p className="font-display font-bold text-lg text-ink">
+                    No upcoming game releases yet
+                  </p>
+                  <p className="text-xs text-ink-dim mt-1">
+                    Add games from Search to track story chapters, hours, and updates.
+                  </p>
+                </div>
+              ) : (
+                upcomingGames.map((u) => {
+                  const game = state.games[u.mediaId];
+                  return (
+                    <BingersMediaRow
+                      key={u.id}
+                      title={u.title}
+                      posterUrl={game?.coverUrl || u.artworkUrl}
+                      primaryLine={u.subtitle}
+                      actionDisabled
+                      actionContent={
+                        <span className="flex flex-col items-center px-1">
+                          <span className="text-[17px] font-display font-bold text-ink tabular-nums leading-none">
+                            {u.daysUntil}
+                          </span>
+                          <span className="text-[10px] text-ink-dim mt-0.5">days</span>
                         </span>
-                        <span className="text-[10px] text-ink-dim mt-0.5">days</span>
-                      </span>
-                    }
-                    onOpen={() => pushRoute({ view: 'game-detail', gameId: u.mediaId })}
-                  />
-                );
-              })}
+                      }
+                      onOpen={() => pushRoute({ view: 'game-detail', gameId: u.mediaId })}
+                    />
+                  );
+                })
+              )}
             </div>
           </div>
         ) : (
           <div className="animate-fade-in">
+            {playingList.length === 0 &&
+              backlogList.length === 0 &&
+              completedList.length === 0 && (
+                <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center my-4">
+                  <Gamepad2 className="w-8 h-8 text-play mx-auto mb-3 opacity-85" />
+                  <h2 className="font-display font-bold text-[20px] text-ink">
+                    Nothing in Play yet
+                  </h2>
+                  <p className="text-sm text-ink-dim mt-1 max-w-sm mx-auto">
+                    Search for any game to track story chapters, playtime, and completion.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => switchTab('search')}
+                    className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-brand text-brand-ink text-sm font-semibold hover:opacity-95 transition-opacity"
+                  >
+                    <Search className="w-4 h-4" />
+                    <span>Search Games</span>
+                  </button>
+                </div>
+              )}
+
             {playingList.length > 0 && (
               <section className="mb-8">
                 <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">Playing now</h2>

@@ -25,7 +25,7 @@ export function JournalView() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
   const [draftDomain, setDraftDomain] = useState<MediaDomain>('watch');
-  const [draftMediaId, setDraftMediaId] = useState('house-of-the-dragon');
+  const [draftMediaId, setDraftMediaId] = useState('');
   const [draftContext, setDraftContext] = useState('');
   const [draftText, setDraftText] = useState('');
   const [draftMood, setDraftMood] = useState<PersonalMood | undefined>('loved');
@@ -139,13 +139,19 @@ export function JournalView() {
   return (
     <div className="min-h-dvh pb-28 md:pb-14 bg-background">
       {/* Cover Banner */}
-      <div className="relative h-[185px] sm:h-[220px] md:h-[240px] w-full overflow-hidden bg-surface">
-        <MediaImage
-          src={state.profile.bannerUrl}
-          alt="Journal cover"
-          className="w-full h-full object-cover object-center"
-        />
-        <div className="absolute inset-0 bg-[#131519]/65 border-b border-white/[0.06]" />
+      <div className="relative h-[185px] sm:h-[220px] md:h-[240px] w-full overflow-hidden bg-surface border-b border-white/[0.06]">
+        {state.profile.bannerUrl ? (
+          <>
+            <MediaImage
+              src={state.profile.bannerUrl}
+              alt="Journal cover"
+              className="w-full h-full object-cover object-center"
+            />
+            <div className="absolute inset-0 bg-[#131519]/65" />
+          </>
+        ) : (
+          <div className="absolute inset-0 bg-surface-raised/40" />
+        )}
 
         <button
           type="button"
@@ -172,12 +178,18 @@ export function JournalView() {
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10">
         {/* Avatar + Edit Profile */}
         <div className="-mt-12 relative z-10 flex items-end justify-between mb-3">
-          <div className="w-24 h-24 rounded-full overflow-hidden ring-4 ring-background bg-surface shadow-xl">
-            <MediaImage
-              src={state.profile.avatarUrl}
-              alt={state.profile.name}
-              className="w-full h-full object-cover"
-            />
+          <div className="w-24 h-24 rounded-full overflow-hidden ring-4 ring-background bg-surface-raised shadow-xl flex items-center justify-center">
+            {state.profile.avatarUrl ? (
+              <MediaImage
+                src={state.profile.avatarUrl}
+                alt={state.profile.name}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <span className="font-display font-bold text-3xl text-ink select-none">
+                {(state.profile.name || 'Y').trim().charAt(0).toUpperCase()}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -319,7 +331,15 @@ export function JournalView() {
           </div>
 
           <div className="space-y-2.5">
-            {visibleEntries.map((entry) => {
+            {visibleEntries.length === 0 ? (
+              <div className="rounded-[20px] bg-surface border border-white/[0.05] p-6 text-center">
+                <p className="text-sm font-semibold text-ink">No diary notes yet</p>
+                <p className="text-xs text-ink-dim mt-1">
+                  Log private reflections as you watch, read, or play titles.
+                </p>
+              </div>
+            ) : (
+              visibleEntries.map((entry) => {
               const moodObj = entry.mood
                 ? MOOD_OPTIONS.find((m) => m.key === entry.mood)
                 : undefined;
@@ -391,7 +411,8 @@ export function JournalView() {
                   </button>
                 </div>
               );
-            })}
+              })
+            )}
           </div>
         </section>
 
@@ -406,40 +427,44 @@ export function JournalView() {
             <ChevronRight className="w-5 h-5 text-ink-dim" />
           </button>
 
-          <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
-            {watchShelf.map((item) => (
-              <button
-                key={`${item.kind}-${item.id}`}
-                type="button"
-                onClick={() =>
-                  item.kind === 'show'
-                    ? pushRoute({ view: 'show-detail', showId: item.id })
-                    : pushRoute({ view: 'movie-detail', movieId: item.id })
-                }
-                className="w-[116px] sm:w-[134px] shrink-0 text-left group"
-              >
-                <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
-                  <MediaImage
-                    src={item.poster}
-                    alt={item.title}
-                    className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                  />
-                  {state.settings.showPosterProgress && (item.ratio || 0) > 0 && (
-                    <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
-                      <div
-                        className="h-full bg-watch"
-                        style={{ width: `${Math.round((item.ratio || 0) * 100)}%` }}
-                      />
-                    </div>
-                  )}
-                </div>
-                <p className="mt-2 text-[13.5px] font-medium text-ink truncate leading-tight">
-                  {item.title}
-                </p>
-                <p className="text-[12px] text-ink-dim tabular-nums">{item.year}</p>
-              </button>
-            ))}
-          </div>
+          {watchShelf.length === 0 ? (
+            <p className="text-xs text-ink-faint">No Watch titles added yet.</p>
+          ) : (
+            <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
+              {watchShelf.map((item) => (
+                <button
+                  key={`${item.kind}-${item.id}`}
+                  type="button"
+                  onClick={() =>
+                    item.kind === 'show'
+                      ? pushRoute({ view: 'show-detail', showId: item.id })
+                      : pushRoute({ view: 'movie-detail', movieId: item.id })
+                  }
+                  className="w-[116px] sm:w-[134px] shrink-0 text-left group"
+                >
+                  <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
+                    <MediaImage
+                      src={item.poster}
+                      alt={item.title}
+                      className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+                    />
+                    {state.settings.showPosterProgress && (item.ratio || 0) > 0 && (
+                      <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
+                        <div
+                          className="h-full bg-watch"
+                          style={{ width: `${Math.round((item.ratio || 0) * 100)}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <p className="mt-2 text-[13.5px] font-medium text-ink truncate leading-tight">
+                    {item.title}
+                  </p>
+                  <p className="text-[12px] text-ink-dim tabular-nums">{item.year}</p>
+                </button>
+              ))}
+            </div>
+          )}
         </section>
 
         {/* Read Shelf */}
@@ -453,39 +478,43 @@ export function JournalView() {
             <ChevronRight className="w-5 h-5 text-ink-dim" />
           </button>
 
-          <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
-            {readShelf.map((item) => {
-              const st = getReadStats(item, state.readProgress[item.id]);
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => pushRoute({ view: 'read-detail', readId: item.id })}
-                  className="w-[116px] sm:w-[134px] shrink-0 text-left group"
-                >
-                  <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
-                    <MediaImage
-                      src={resolveComicEditionCover(item, state.readProgress[item.id]?.edition)}
-                      alt={item.title}
-                      className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                    />
-                    {state.settings.showPosterProgress && st.current > 0 && (
-                      <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
-                        <div
-                          className="h-full bg-read"
-                          style={{ width: `${Math.round(st.ratio * 100)}%` }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  <p className="mt-2 text-[13.5px] font-medium text-ink truncate leading-tight">
-                    {item.title}
-                  </p>
-                  <p className="text-[12px] text-ink-dim tabular-nums">{item.creator}</p>
-                </button>
-              );
-            })}
-          </div>
+          {readShelf.length === 0 ? (
+            <p className="text-xs text-ink-faint">No Read titles added yet.</p>
+          ) : (
+            <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
+              {readShelf.map((item) => {
+                const st = getReadStats(item, state.readProgress[item.id]);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => pushRoute({ view: 'read-detail', readId: item.id })}
+                    className="w-[116px] sm:w-[134px] shrink-0 text-left group"
+                  >
+                    <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
+                      <MediaImage
+                        src={resolveComicEditionCover(item, state.readProgress[item.id]?.edition)}
+                        alt={item.title}
+                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+                      />
+                      {state.settings.showPosterProgress && st.current > 0 && (
+                        <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
+                          <div
+                            className="h-full bg-read"
+                            style={{ width: `${Math.round(st.ratio * 100)}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <p className="mt-2 text-[13.5px] font-medium text-ink truncate leading-tight">
+                      {item.title}
+                    </p>
+                    <p className="text-[12px] text-ink-dim tabular-nums">{item.creator}</p>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </section>
 
         {/* Play Shelf */}
@@ -499,41 +528,45 @@ export function JournalView() {
             <ChevronRight className="w-5 h-5 text-ink-dim" />
           </button>
 
-          <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
-            {playShelf.map((game) => {
-              const prog = state.gameProgress[game.id];
-              return (
-                <button
-                  key={game.id}
-                  type="button"
-                  onClick={() => pushRoute({ view: 'game-detail', gameId: game.id })}
-                  className="w-[116px] sm:w-[134px] shrink-0 text-left group"
-                >
-                  <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
-                    <MediaImage
-                      src={game.coverUrl}
-                      alt={game.title}
-                      className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                    />
-                    {state.settings.showPosterProgress && (prog?.completionPct || 0) > 0 && (
-                      <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
-                        <div
-                          className="h-full bg-play"
-                          style={{ width: `${prog?.completionPct || 0}%` }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  <p className="mt-2 text-[13.5px] font-medium text-ink truncate leading-tight">
-                    {game.title}
-                  </p>
-                  <p className="text-[12px] text-ink-dim tabular-nums">
-                    {prog?.hoursPlayed || 0}h · {prog?.platform || game.platforms[0]}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
+          {playShelf.length === 0 ? (
+            <p className="text-xs text-ink-faint">No Play titles added yet.</p>
+          ) : (
+            <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
+              {playShelf.map((game) => {
+                const prog = state.gameProgress[game.id];
+                return (
+                  <button
+                    key={game.id}
+                    type="button"
+                    onClick={() => pushRoute({ view: 'game-detail', gameId: game.id })}
+                    className="w-[116px] sm:w-[134px] shrink-0 text-left group"
+                  >
+                    <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
+                      <MediaImage
+                        src={game.coverUrl}
+                        alt={game.title}
+                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+                      />
+                      {state.settings.showPosterProgress && (prog?.completionPct || 0) > 0 && (
+                        <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
+                          <div
+                            className="h-full bg-play"
+                            style={{ width: `${prog?.completionPct || 0}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <p className="mt-2 text-[13.5px] font-medium text-ink truncate leading-tight">
+                      {game.title}
+                    </p>
+                    <p className="text-[12px] text-ink-dim tabular-nums">
+                      {prog?.hoursPlayed || 0}h · {prog?.platform || game.platforms[0]}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </section>
 
         {/* Custom Lists */}
@@ -550,27 +583,36 @@ export function JournalView() {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {state.lists.map((list) => (
-              <button
-                key={list.id}
-                type="button"
-                onClick={() => pushRoute({ view: 'list-detail', listId: list.id })}
-                className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors flex items-center justify-between gap-3"
-              >
-                <div className="min-w-0">
-                  <p className="font-semibold text-[15px] text-ink truncate">{list.name}</p>
-                  <p className="text-xs text-ink-dim truncate mt-0.5">
-                    {list.description || `${list.items.length} titles`}
-                  </p>
-                  <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">
-                    {list.items.length} items
-                  </p>
-                </div>
-                <ChevronRight className="w-4 h-4 text-ink-dim shrink-0" />
-              </button>
-            ))}
-          </div>
+          {state.lists.length === 0 ? (
+            <div className="rounded-[20px] bg-surface border border-white/[0.05] p-6 text-center">
+              <p className="text-sm font-semibold text-ink">No custom lists yet</p>
+              <p className="text-xs text-ink-dim mt-1">
+                Group favorite shows, comics, novels, or games into custom collections.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {state.lists.map((list) => (
+                <button
+                  key={list.id}
+                  type="button"
+                  onClick={() => pushRoute({ view: 'list-detail', listId: list.id })}
+                  className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors flex items-center justify-between gap-3"
+                >
+                  <div className="min-w-0">
+                    <p className="font-semibold text-[15px] text-ink truncate">{list.name}</p>
+                    <p className="text-xs text-ink-dim truncate mt-0.5">
+                      {list.description || `${list.items.length} titles`}
+                    </p>
+                    <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">
+                      {list.items.length} items
+                    </p>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-ink-dim shrink-0" />
+                </button>
+              ))}
+            </div>
+          )}
         </section>
       </div>
 
@@ -626,17 +668,23 @@ export function JournalView() {
               ))}
             </div>
 
-            <select
-              value={draftMediaId}
-              onChange={(e) => setDraftMediaId(e.target.value)}
-              className="w-full rounded-xl bg-surface border border-white/10 px-3 py-2.5 text-sm text-ink outline-none focus:border-brand"
-            >
-              {domainSelectableItems.map((it) => (
-                <option key={it.id} value={it.id} className="bg-surface">
-                  {it.title}
-                </option>
-              ))}
-            </select>
+            {domainSelectableItems.length === 0 ? (
+              <p className="text-xs text-ink-dim py-2">
+                Add a title to this section first to log a note.
+              </p>
+            ) : (
+              <select
+                value={draftMediaId}
+                onChange={(e) => setDraftMediaId(e.target.value)}
+                className="w-full rounded-xl bg-surface border border-white/10 px-3 py-2.5 text-sm text-ink outline-none focus:border-brand"
+              >
+                {domainSelectableItems.map((it) => (
+                  <option key={it.id} value={it.id} className="bg-surface">
+                    {it.title}
+                  </option>
+                ))}
+              </select>
+            )}
 
             <input
               value={draftContext}
@@ -673,7 +721,7 @@ export function JournalView() {
 
             <button
               type="submit"
-              disabled={!draftText.trim()}
+              disabled={!draftText.trim() || domainSelectableItems.length === 0}
               className="w-full py-2.5 rounded-full bg-brand text-brand-ink text-sm font-semibold disabled:opacity-40"
             >
               Save entry

@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { createSeedState } from '../data/seedState';
+import { createEmptyState } from '../data/seedState';
 import {
   generateSyncCode,
   isValidSyncCode,
@@ -59,8 +59,8 @@ function loadInitialState(): CueStoreState {
     if (rawV3) {
       const parsed = JSON.parse(rawV3) as CueStoreState;
       if (parsed && parsed.shows && parsed.movies && parsed.readItems && parsed.games) {
-        if (!Array.isArray(parsed.history) || parsed.history.length === 0) {
-          parsed.history = createSeedState().history;
+        if (!Array.isArray(parsed.history)) {
+          parsed.history = [];
         }
         if (parsed.settings && !parsed.settings.detailMode) {
           parsed.settings.detailMode = 'simple';
@@ -68,26 +68,26 @@ function loadInitialState(): CueStoreState {
         return parsed;
       }
     }
-    const seed = createSeedState();
+    const empty = createEmptyState();
     const rawV2 = localStorage.getItem(LEGACY_V2_KEY);
     if (rawV2) {
       const v2 = JSON.parse(rawV2) as Partial<CueStoreState>;
-      if (v2.profile) seed.profile = { ...seed.profile, ...v2.profile };
+      if (v2.profile) empty.profile = { ...empty.profile, ...v2.profile };
       if (v2.settings) {
-        seed.settings = {
-          ...seed.settings,
-          watchLayout: v2.settings.watchLayout || seed.settings.watchLayout,
-          readLayout: v2.settings.readLayout || seed.settings.readLayout,
-          playLayout: v2.settings.playLayout || seed.settings.playLayout,
-          sortBy: v2.settings.sortBy || seed.settings.sortBy,
-          showPosterProgress: v2.settings.showPosterProgress ?? seed.settings.showPosterProgress,
+        empty.settings = {
+          ...empty.settings,
+          watchLayout: v2.settings.watchLayout || empty.settings.watchLayout,
+          readLayout: v2.settings.readLayout || empty.settings.readLayout,
+          playLayout: v2.settings.playLayout || empty.settings.playLayout,
+          sortBy: v2.settings.sortBy || empty.settings.sortBy,
+          showPosterProgress: v2.settings.showPosterProgress ?? empty.settings.showPosterProgress,
           tmdbApiKey: v2.settings.tmdbApiKey || '',
         };
       }
-      if (v2.showProgress) seed.showProgress = { ...seed.showProgress, ...v2.showProgress };
-      if (v2.movieProgress) seed.movieProgress = { ...seed.movieProgress, ...v2.movieProgress };
-      if (v2.gameProgress) seed.gameProgress = { ...seed.gameProgress, ...v2.gameProgress };
-      return seed;
+      if (v2.showProgress) empty.showProgress = { ...empty.showProgress, ...v2.showProgress };
+      if (v2.movieProgress) empty.movieProgress = { ...empty.movieProgress, ...v2.movieProgress };
+      if (v2.gameProgress) empty.gameProgress = { ...empty.gameProgress, ...v2.gameProgress };
+      return empty;
     }
     const rawV1 = localStorage.getItem(LEGACY_STORAGE_KEY);
     if (rawV1) {
@@ -96,16 +96,16 @@ function loadInitialState(): CueStoreState {
         settings?: { tmdbApiKey?: string };
       };
       if (v1?.profile?.name) {
-        seed.profile.name = v1.profile.name;
-        seed.profile.handle = v1.profile.handle || seed.profile.handle;
-        if (v1.profile.avatarUrl) seed.profile.avatarUrl = v1.profile.avatarUrl;
-        if (v1.profile.bannerUrl) seed.profile.bannerUrl = v1.profile.bannerUrl;
+        empty.profile.name = v1.profile.name;
+        empty.profile.handle = v1.profile.handle || empty.profile.handle;
+        if (v1.profile.avatarUrl) empty.profile.avatarUrl = v1.profile.avatarUrl;
+        if (v1.profile.bannerUrl) empty.profile.bannerUrl = v1.profile.bannerUrl;
       }
-      if (v1?.settings?.tmdbApiKey) seed.settings.tmdbApiKey = v1.settings.tmdbApiKey;
+      if (v1?.settings?.tmdbApiKey) empty.settings.tmdbApiKey = v1.settings.tmdbApiKey;
     }
-    return seed;
+    return empty;
   } catch {
-    return createSeedState();
+    return createEmptyState();
   }
 }
 
@@ -242,6 +242,7 @@ interface CueContextValue {
   exportLibraryJson: () => string;
   importLibraryJson: (rawJson: string) => { ok: boolean; summary: string };
   selectiveReset: (scope: 'watch' | 'read' | 'play' | 'all') => void;
+  clearAllData: () => void;
 
   // No-account cloud sync
   syncCode: string | null;
@@ -260,14 +261,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<CueStoreState>(loadInitialState);
   const [routeStack, setRouteStack] = useState<RouteView[]>([{ view: 'watch', calendarMode: false }]);
   const [toast, setToast] = useState<ToastItem | null>(null);
-  const [activeBanner, setActiveBanner] = useState<ReleaseBannerData | null>({
-    title: 'New episode out now',
-    body: 'My lord, a new episode of House of the Dragon is out 🏰',
-    timeLabel: 'now',
-    domain: 'watch',
-    mediaKind: 'show',
-    mediaId: 'house-of-the-dragon',
-  });
+  const [activeBanner, setActiveBanner] = useState<ReleaseBannerData | null>(null);
 
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -320,8 +314,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const hydrateFromCloud = useCallback((cloudState: CueStoreState, cloudTs: number) => {
-    if (!Array.isArray(cloudState.history) || cloudState.history.length === 0) {
-      cloudState.history = createSeedState().history;
+    if (!Array.isArray(cloudState.history)) {
+      cloudState.history = [];
     }
     suppressNextPushRef.current = true;
     localEditedAtRef.current = cloudTs;
@@ -564,13 +558,17 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const triggerSampleReleaseAlert = useCallback(() => {
+    const firstShowId = stateRef.current.showOrder[0];
+    const firstShow = firstShowId ? stateRef.current.shows[firstShowId] : undefined;
     const banner: ReleaseBannerData = {
-      title: 'New episode out now',
-      body: 'My lord, a new episode of House of the Dragon is out 🏰',
+      title: 'Release alerts active',
+      body: firstShow
+        ? `New episode alert sample for ${firstShow.title}`
+        : 'Notifications appear here when tracked releases drop.',
       timeLabel: 'now',
       domain: 'watch',
-      mediaKind: 'show',
-      mediaId: 'house-of-the-dragon',
+      mediaKind: firstShow ? 'show' : undefined,
+      mediaId: firstShow?.id,
     };
     setActiveBanner(banner);
     setState((prev) => ({
@@ -583,8 +581,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           body: banner.body,
           timeLabel: 'now',
           read: false,
-          mediaKind: 'show',
-          mediaId: 'house-of-the-dragon',
+          mediaKind: banner.mediaKind,
+          mediaId: banner.mediaId,
         },
         ...prev.notifications,
       ],
@@ -2201,57 +2199,39 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const selectiveReset = useCallback(
     (scope: 'watch' | 'read' | 'play' | 'all') => {
-      if (scope === 'all') {
-        setState(createSeedState());
-        showToast('Restored default library');
-        return;
-      }
-      if (scope === 'watch') {
-        setState((prev) => {
-          const nextShows: Record<string, ShowProgress> = {};
-          for (const id of Object.keys(prev.showProgress)) {
-            nextShows[id] = {
-              status: 'not_started',
-              episodeCounts: {},
-              bookmarked: prev.showProgress[id].bookmarked,
-              notifications: prev.showProgress[id].notifications,
-            };
-          }
-          const nextMovies = { ...prev.movieProgress };
-          for (const id of Object.keys(nextMovies)) {
-            nextMovies[id] = { status: 'watchlist', watchCount: 0 };
-          }
-          return {
-            ...prev,
-            showProgress: nextShows,
-            movieProgress: nextMovies,
-            history: (prev.history || []).filter((h) => h.domain !== 'watch'),
+      const resetWatchState = (prev: CueStoreState) => {
+        const nextShows: Record<string, ShowProgress> = {};
+        for (const id of Object.keys(prev.showProgress)) {
+          nextShows[id] = {
+            status: 'not_started',
+            episodeCounts: {},
+            bookmarked: prev.showProgress[id].bookmarked,
+            notifications: prev.showProgress[id].notifications,
           };
-        });
-        showToast('Reset Watch history');
-        return;
-      }
-      if (scope === 'read') {
-        setState((prev) => {
-          const nextRead: Record<string, ReadProgress> = {};
-          for (const id of Object.keys(prev.readProgress)) {
-            nextRead[id] = {
-              status: 'want_to_read',
-              currentUnit: 0,
-              rereadCount: 0,
-              bookmarked: prev.readProgress[id].bookmarked,
-            };
-          }
-          return {
-            ...prev,
-            readProgress: nextRead,
-            history: (prev.history || []).filter((h) => h.domain !== 'read'),
+        }
+        const nextMovies = { ...prev.movieProgress };
+        for (const id of Object.keys(nextMovies)) {
+          nextMovies[id] = { status: 'watchlist', watchCount: 0 };
+        }
+        return { nextShows, nextMovies };
+      };
+
+      const resetReadState = (prev: CueStoreState) => {
+        const nextRead: Record<string, ReadProgress> = {};
+        for (const id of Object.keys(prev.readProgress)) {
+          nextRead[id] = {
+            status: 'want_to_read',
+            currentUnit: 0,
+            maxCompletedUnit: 0,
+            rereadCount: 0,
+            bookmarked: prev.readProgress[id].bookmarked,
+            edition: prev.readProgress[id].edition,
           };
-        });
-        showToast('Reset Read progress');
-        return;
-      }
-      setState((prev) => {
+        }
+        return nextRead;
+      };
+
+      const resetPlayState = (prev: CueStoreState) => {
         const nextGames = { ...prev.gameProgress };
         for (const id of Object.keys(nextGames)) {
           nextGames[id] = {
@@ -2264,16 +2244,82 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             platinum: false,
           };
         }
-        return {
+        return nextGames;
+      };
+
+      if (scope === 'all') {
+        setState((prev) => {
+          const { nextShows, nextMovies } = resetWatchState(prev);
+          return {
+            ...prev,
+            showProgress: nextShows,
+            movieProgress: nextMovies,
+            readProgress: resetReadState(prev),
+            gameProgress: resetPlayState(prev),
+            history: [],
+          };
+        });
+        showToast('Reset all progress data');
+        return;
+      }
+      if (scope === 'watch') {
+        setState((prev) => {
+          const { nextShows, nextMovies } = resetWatchState(prev);
+          return {
+            ...prev,
+            showProgress: nextShows,
+            movieProgress: nextMovies,
+            history: (prev.history || []).filter((h) => h.domain !== 'watch'),
+          };
+        });
+        showToast('Reset Watch progress');
+        return;
+      }
+      if (scope === 'read') {
+        setState((prev) => ({
           ...prev,
-          gameProgress: nextGames,
-          history: (prev.history || []).filter((h) => h.domain !== 'play'),
-        };
-      });
+          readProgress: resetReadState(prev),
+          history: (prev.history || []).filter((h) => h.domain !== 'read'),
+        }));
+        showToast('Reset Read progress');
+        return;
+      }
+      setState((prev) => ({
+        ...prev,
+        gameProgress: resetPlayState(prev),
+        history: (prev.history || []).filter((h) => h.domain !== 'play'),
+      }));
       showToast('Reset Play progress');
     },
     [showToast]
   );
+
+  const clearAllData = useCallback(() => {
+    if (pushTimerRef.current) window.clearTimeout(pushTimerRef.current);
+    syncCodeRef.current = null;
+    lastSyncedAtRef.current = null;
+    localEditedAtRef.current = 0;
+    suppressNextPushRef.current = true;
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(LEGACY_V2_KEY);
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
+      localStorage.removeItem(SYNC_CODE_KEY);
+      localStorage.removeItem(SYNC_TS_KEY);
+      localStorage.removeItem(LOCAL_EDIT_TS_KEY);
+    } catch {
+      // ignore storage errors
+    }
+    setSyncCode(null);
+    setLastSyncedAt(null);
+    setSyncStatus('idle');
+    setSyncError(null);
+    setActiveBanner(null);
+    setState(createEmptyState());
+    setRouteStack([{ view: 'watch', calendarMode: false }]);
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+    showToast('All data removed — starting fresh');
+  }, [showToast]);
 
   return (
     <CueContext.Provider
@@ -2352,6 +2398,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         exportLibraryJson,
         importLibraryJson,
         selectiveReset,
+        clearAllData,
         syncCode,
         syncStatus,
         lastSyncedAt,

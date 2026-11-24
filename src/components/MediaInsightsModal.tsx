@@ -92,24 +92,30 @@ export function MediaInsightsModal() {
             <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-dim mb-3">
               Top Genres Across All Media
             </h4>
-            <div className="space-y-3">
-              {stats.topGenres.map((g) => (
-                <div key={g.genre}>
-                  <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="font-medium text-ink">{g.genre}</span>
-                    <span className="text-ink-dim tabular-nums">{g.count} titles</span>
+            {stats.topGenres.length === 0 ? (
+              <p className="text-xs text-ink-dim">
+                Track titles across Watch, Read, or Play to see your top genres.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {stats.topGenres.map((g) => (
+                  <div key={g.genre}>
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span className="font-medium text-ink">{g.genre}</span>
+                      <span className="text-ink-dim tabular-nums">{g.count} titles</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-white/8 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-brand transition-all duration-500"
+                        style={{
+                          width: `${Math.max(12, Math.round((g.score / maxGenreScore) * 100))}%`,
+                        }}
+                      />
+                    </div>
                   </div>
-                  <div className="h-2 rounded-full bg-white/8 overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-brand transition-all duration-500"
-                      style={{
-                        width: `${Math.max(12, Math.round((g.score / maxGenreScore) * 100))}%`,
-                      }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {stats.topRevisited.length > 0 && (

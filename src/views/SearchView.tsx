@@ -292,37 +292,41 @@ export function SearchView() {
       subtitle: string;
       poster: string;
     }> = [];
-    if (state.shows['house-of-the-dragon']) {
-      const s = state.shows['house-of-the-dragon'];
-      picks.push({ kind: 'show', id: s.id, title: s.title, subtitle: 'Show', poster: s.posterUrl });
+    for (const id of state.showOrder.slice(0, 3)) {
+      const s = state.shows[id];
+      if (s) {
+        picks.push({
+          kind: 'show',
+          id: s.id,
+          title: s.title,
+          subtitle: s.mediaType === 'anime' ? 'Anime' : 'TV',
+          poster: s.posterUrl,
+        });
+      }
     }
-    if (state.readItems['dune-book']) {
-      const r = state.readItems['dune-book'];
-      picks.push({ kind: 'read', id: r.id, title: r.title, subtitle: 'Novel', poster: r.coverUrl });
+    for (const id of state.readOrder.slice(0, 3)) {
+      const r = state.readItems[id];
+      if (r) {
+        picks.push({
+          kind: 'read',
+          id: r.id,
+          title: r.title,
+          subtitle: r.format === 'manga' ? 'Manga' : r.format === 'comic' ? 'Comic' : 'Novel',
+          poster: resolveComicEditionCover(r, state.readProgress[r.id]?.edition),
+        });
+      }
     }
-    if (state.games['elden-ring']) {
-      const g = state.games['elden-ring'];
-      picks.push({ kind: 'game', id: g.id, title: g.title, subtitle: 'Game', poster: g.coverUrl });
+    for (const id of state.gameOrder.slice(0, 3)) {
+      const g = state.games[id];
+      if (g) {
+        picks.push({ kind: 'game', id: g.id, title: g.title, subtitle: 'Game', poster: g.coverUrl });
+      }
     }
-    if (state.readItems['berserk']) {
-      const r = state.readItems['berserk'];
-      picks.push({ kind: 'read', id: r.id, title: r.title, subtitle: 'Manga', poster: r.coverUrl });
-    }
-    if (state.movies['sinners']) {
-      const m = state.movies['sinners'];
-      picks.push({ kind: 'movie', id: m.id, title: m.title, subtitle: 'Movie', poster: m.posterUrl });
-    }
-    if (state.games['hades-ii']) {
-      const g = state.games['hades-ii'];
-      picks.push({ kind: 'game', id: g.id, title: g.title, subtitle: 'Game', poster: g.coverUrl });
-    }
-    if (state.readItems['watchmen']) {
-      const r = state.readItems['watchmen'];
-      picks.push({ kind: 'read', id: r.id, title: r.title, subtitle: 'Comic', poster: r.coverUrl });
-    }
-    if (state.shows['severance']) {
-      const s = state.shows['severance'];
-      picks.push({ kind: 'show', id: s.id, title: s.title, subtitle: 'Show', poster: s.posterUrl });
+    for (const id of state.movieOrder.slice(0, 2)) {
+      const m = state.movies[id];
+      if (m) {
+        picks.push({ kind: 'movie', id: m.id, title: m.title, subtitle: 'Movie', poster: m.posterUrl });
+      }
     }
     return picks;
   }, [state]);
@@ -666,43 +670,69 @@ export function SearchView() {
               )}
             </section>
           )}
+
+          {query.trim().length < 2 && localMatches.length === 0 && (
+            <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center">
+              <Search className="w-7 h-7 text-brand mx-auto mb-2.5 opacity-85" />
+              <p className="font-display font-bold text-lg text-ink">Search to add titles</p>
+              <p className="text-xs text-ink-dim mt-1 max-w-sm mx-auto">
+                Type at least 2 characters above to search TV, movies, anime, manga, comics, novels,
+                or games.
+              </p>
+            </div>
+          )}
         </div>
       ) : (
         <div className="space-y-8 animate-fade-in">
-          {/* Featured Across Watch, Read & Play */}
-          <section>
-            <div className="flex items-center gap-2 mb-3">
-              <Flame className="w-5 h-5 text-brand" />
+          {featuredAllMedia.length === 0 && queueSuggestions.length === 0 && (
+            <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center my-2">
+              <Search className="w-8 h-8 text-brand mx-auto mb-3 opacity-85" />
               <h2 className="font-display font-bold text-[20px] text-ink">
-                Highlights across Watch, Read & Play
+                Start building your library
               </h2>
+              <p className="text-sm text-ink-dim mt-1 max-w-md mx-auto">
+                Search any TV show, movie, anime, manga, comic edition, novel, or game above using the
+                color-coded category pills.
+              </p>
             </div>
-            <div className="flex gap-3.5 overflow-x-auto no-scrollbar pb-1">
-              {featuredAllMedia.map((entry) => (
-                <button
-                  key={`${entry.kind}-${entry.id}`}
-                  type="button"
-                  onClick={() => {
-                    if (entry.kind === 'show') pushRoute({ view: 'show-detail', showId: entry.id });
-                    else if (entry.kind === 'movie') pushRoute({ view: 'movie-detail', movieId: entry.id });
-                    else if (entry.kind === 'read') pushRoute({ view: 'read-detail', readId: entry.id });
-                    else pushRoute({ view: 'game-detail', gameId: entry.id });
-                  }}
-                  className="w-[126px] sm:w-[144px] shrink-0 text-left group"
-                >
-                  <div className="aspect-[2/3] rounded-[18px] overflow-hidden bg-surface border border-white/8">
-                    <MediaImage
-                      src={entry.poster}
-                      alt={entry.title}
-                      className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                    />
-                  </div>
-                  <p className="mt-2 text-sm font-semibold text-ink truncate">{entry.title}</p>
-                  <p className="text-xs text-ink-dim">{entry.subtitle}</p>
-                </button>
-              ))}
-            </div>
-          </section>
+          )}
+
+          {/* Library Highlights Across Watch, Read & Play */}
+          {featuredAllMedia.length > 0 && (
+            <section>
+              <div className="flex items-center gap-2 mb-3">
+                <Flame className="w-5 h-5 text-brand" />
+                <h2 className="font-display font-bold text-[20px] text-ink">
+                  In your library across Watch, Read & Play
+                </h2>
+              </div>
+              <div className="flex gap-3.5 overflow-x-auto no-scrollbar pb-1">
+                {featuredAllMedia.map((entry) => (
+                  <button
+                    key={`${entry.kind}-${entry.id}`}
+                    type="button"
+                    onClick={() => {
+                      if (entry.kind === 'show') pushRoute({ view: 'show-detail', showId: entry.id });
+                      else if (entry.kind === 'movie') pushRoute({ view: 'movie-detail', movieId: entry.id });
+                      else if (entry.kind === 'read') pushRoute({ view: 'read-detail', readId: entry.id });
+                      else pushRoute({ view: 'game-detail', gameId: entry.id });
+                    }}
+                    className="w-[126px] sm:w-[144px] shrink-0 text-left group"
+                  >
+                    <div className="aspect-[2/3] rounded-[18px] overflow-hidden bg-surface border border-white/8">
+                      <MediaImage
+                        src={entry.poster}
+                        alt={entry.title}
+                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+                      />
+                    </div>
+                    <p className="mt-2 text-sm font-semibold text-ink truncate">{entry.title}</p>
+                    <p className="text-xs text-ink-dim">{entry.subtitle}</p>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* Up Next in Your Personal Queue */}
           {queueSuggestions.length > 0 && (

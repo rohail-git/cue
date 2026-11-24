@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronRight } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Search, Tv } from 'lucide-react';
 import { BingersMediaRow } from '../components/BingersMediaRow';
 import { FilterSortSheet } from '../components/FilterSortSheet';
 import { MediaImage } from '../components/MediaImage';
@@ -13,6 +13,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
   const {
     state,
     pushRoute,
+    switchTab,
     toggleCalendarMode,
     setFilterSheetOpen,
     updateSettings,
@@ -440,9 +441,44 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
                 <div className="space-y-3">{upcomingGroups.later.map(renderUpcomingCard)}</div>
               </section>
             )}
+            {upcomingGroups.today.length === 0 &&
+              upcomingGroups.thisWeek.length === 0 &&
+              upcomingGroups.later.length === 0 && (
+                <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center">
+                  <Tv className="w-7 h-7 text-watch mx-auto mb-2.5 opacity-80" />
+                  <p className="font-display font-bold text-lg text-ink">No upcoming releases yet</p>
+                  <p className="text-xs text-ink-dim mt-1">
+                    Add shows or anime in Search to see upcoming episode schedules here.
+                  </p>
+                </div>
+              )}
           </div>
         ) : (
           <div className="animate-fade-in">
+            {watchingShows.length === 0 &&
+              watchlistMovies.length === 0 &&
+              notStartedShows.length === 0 &&
+              finishedShows.length === 0 &&
+              watchedMovies.length === 0 && (
+                <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center my-4">
+                  <Tv className="w-8 h-8 text-watch mx-auto mb-3 opacity-85" />
+                  <h2 className="font-display font-bold text-[20px] text-ink">
+                    Nothing in Watch yet
+                  </h2>
+                  <p className="text-sm text-ink-dim mt-1 max-w-sm mx-auto">
+                    Search for TV shows, movies, or anime to start tracking episodes and rewatches.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => switchTab('search')}
+                    className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-brand text-brand-ink text-sm font-semibold hover:opacity-95 transition-opacity"
+                  >
+                    <Search className="w-4 h-4" />
+                    <span>Search Watch</span>
+                  </button>
+                </div>
+              )}
+
             {watchingShows.length > 0 && (
               <section className="mb-8">
                 <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">Watch next</h2>

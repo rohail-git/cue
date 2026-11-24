@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import { BookOpen, Check, ChevronDown, ChevronRight, Plus, Search } from 'lucide-react';
 import { BingersMediaRow } from '../components/BingersMediaRow';
 import { FilterSortSheet } from '../components/FilterSortSheet';
 import { MediaImage } from '../components/MediaImage';
@@ -13,6 +13,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
   const {
     state,
     pushRoute,
+    switchTab,
     toggleCalendarMode,
     setFilterSheetOpen,
     updateSettings,
@@ -271,28 +272,62 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
               Upcoming chapters & issues
             </h2>
             <div className="space-y-3">
-              {upcomingReads.map((u) => (
-                <BingersMediaRow
-                  key={u.id}
-                  title={u.title}
-                  posterUrl={u.artworkUrl}
-                  primaryLine={u.subtitle}
-                  actionDisabled
-                  actionContent={
-                    <span className="flex flex-col items-center px-1">
-                      <span className="text-[17px] font-display font-bold text-ink tabular-nums leading-none">
-                        {u.daysUntil}
+              {upcomingReads.length === 0 ? (
+                <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center">
+                  <BookOpen className="w-7 h-7 text-read mx-auto mb-2.5 opacity-80" />
+                  <p className="font-display font-bold text-lg text-ink">
+                    No upcoming chapters or issues yet
+                  </p>
+                  <p className="text-xs text-ink-dim mt-1">
+                    Track novels, manga, or comics from Search to build your reading calendar.
+                  </p>
+                </div>
+              ) : (
+                upcomingReads.map((u) => (
+                  <BingersMediaRow
+                    key={u.id}
+                    title={u.title}
+                    posterUrl={u.artworkUrl}
+                    primaryLine={u.subtitle}
+                    actionDisabled
+                    actionContent={
+                      <span className="flex flex-col items-center px-1">
+                        <span className="text-[17px] font-display font-bold text-ink tabular-nums leading-none">
+                          {u.daysUntil}
+                        </span>
+                        <span className="text-[10px] text-ink-dim mt-0.5">days</span>
                       </span>
-                      <span className="text-[10px] text-ink-dim mt-0.5">days</span>
-                    </span>
-                  }
-                  onOpen={() => pushRoute({ view: 'read-detail', readId: u.mediaId })}
-                />
-              ))}
+                    }
+                    onOpen={() => pushRoute({ view: 'read-detail', readId: u.mediaId })}
+                  />
+                ))
+              )}
             </div>
           </div>
         ) : (
           <div className="animate-fade-in">
+            {readingList.length === 0 &&
+              wantToReadList.length === 0 &&
+              finishedList.length === 0 && (
+                <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center my-4">
+                  <BookOpen className="w-8 h-8 text-read mx-auto mb-3 opacity-85" />
+                  <h2 className="font-display font-bold text-[20px] text-ink">
+                    Nothing in Read yet
+                  </h2>
+                  <p className="text-sm text-ink-dim mt-1 max-w-sm mx-auto">
+                    Search for novels, manga, or comic editions to track chapters and issues.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => switchTab('search')}
+                    className="mt-4 inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-brand text-brand-ink text-sm font-semibold hover:opacity-95 transition-opacity"
+                  >
+                    <Search className="w-4 h-4" />
+                    <span>Search Read</span>
+                  </button>
+                </div>
+              )}
+
             {readingList.length > 0 && (
               <section className="mb-8">
                 <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">

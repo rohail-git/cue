@@ -839,3 +839,45 @@ export function createSeedState(): CueStoreState {
     },
   };
 }
+
+export function createEmptyState(): CueStoreState {
+  return {
+    shows: {},
+    movies: {},
+    readItems: {},
+    games: {},
+    showOrder: [],
+    movieOrder: [],
+    readOrder: [],
+    gameOrder: [],
+    showProgress: {},
+    movieProgress: {},
+    readProgress: {},
+    gameProgress: {},
+    upcoming: [],
+    history: [],
+    journalEntries: [],
+    lists: [],
+    profile: {
+      name: 'You',
+      handle: '@you',
+      bio: 'Private logbook for shows, movies, novels, manga, comics, and games.',
+      avatarUrl: '',
+      bannerUrl: '',
+    },
+    notifications: [],
+    settings: {
+      accentColor: '#6EC5D4',
+      watchLayout: 'cards',
+      readLayout: 'cards',
+      playLayout: 'cards',
+      watchFilter: 'all',
+      readFilter: 'all',
+      playFilter: 'all',
+      sortBy: 'recent',
+      showPosterProgress: true,
+      detailMode: 'simple',
+      tmdbApiKey: '',
+    },
+  };
+}

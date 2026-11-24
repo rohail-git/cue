@@ -1,10 +1,11 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Download,
   KeyRound,
   Palette,
   RotateCcw,
   ShieldAlert,
+  Trash2,
   Upload,
   User,
   X,
@@ -22,6 +23,7 @@ export function SettingsModal() {
     exportLibraryJson,
     importLibraryJson,
     selectiveReset,
+    clearAllData,
     showToast,
   } = useCueStore();
 
@@ -30,30 +32,46 @@ export function SettingsModal() {
   const [bio, setBio] = useState(state.profile.bio);
   const [tmdbKey, setTmdbKey] = useState(state.settings.tmdbApiKey);
   const [tmdbStatus, setTmdbStatus] = useState<'idle' | 'testing' | 'ok' | 'err'>('idle');
-  const [confirmScope, setConfirmScope] = useState<'watch' | 'read' | 'play' | 'all' | null>(null);
+  const [confirmScope, setConfirmScope] = useState<'watch' | 'read' | 'play' | 'all' | 'wipe' | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!settingsOpen) {
+      setConfirmScope(null);
+      return;
+    }
+    setName(state.profile.name);
+    setHandle(state.profile.handle);
+    setBio(state.profile.bio);
+    setTmdbKey(state.settings.tmdbApiKey);
+  }, [settingsOpen, state.profile.name, state.profile.handle, state.profile.bio, state.settings.tmdbApiKey]);
 
   if (!settingsOpen) return null;
 
   const bannerOptions = [
-    { label: 'Breaking Bad', url: state.shows['breaking-bad']?.backdropUrl || '' },
-    { label: 'Elden Ring', url: state.games['elden-ring']?.backdropUrl || '' },
-    { label: 'Dragonstone', url: state.shows['house-of-the-dragon']?.backdropUrl || '' },
-    { label: 'Cyberpunk', url: state.games['cyberpunk-2077']?.backdropUrl || '' },
+    ...state.showOrder.slice(0, 2).map((id) => ({
+      label: state.shows[id]?.title || id,
+      url: state.shows[id]?.backdropUrl || state.shows[id]?.posterUrl || '',
+    })),
+    ...state.gameOrder.slice(0, 2).map((id) => ({
+      label: state.games[id]?.title || id,
+      url: state.games[id]?.backdropUrl || state.games[id]?.coverUrl || '',
+    })),
   ].filter((b) => b.url);
 
   const avatarOptions = [
-    state.shows['breaking-bad']?.cast?.[0]?.avatarUrl,
-    state.shows['house-of-the-dragon']?.cast?.[0]?.avatarUrl,
-    state.shows['friends']?.cast?.[4]?.avatarUrl,
-    state.shows['the-bear']?.cast?.[0]?.avatarUrl,
-  ].filter((u): u is string => Boolean(u));
+    ...state.showOrder
+      .flatMap((id) => state.shows[id]?.cast?.slice(0, 2).map((c) => c.avatarUrl) || []),
+    ...state.showOrder.slice(0, 2).map((id) => state.shows[id]?.posterUrl),
+  ]
+    .filter((u): u is string => Boolean(u))
+    .slice(0, 4);
 
   const handleSaveProfile = () => {
     const cleanHandle = handle.trim().startsWith('@') ? handle.trim() : `@${handle.trim()}`;
     updateProfile({
-      name: name.trim() || 'Alex',
-      handle: cleanHandle || '@alex',
+      name: name.trim() || 'You',
+      handle: cleanHandle || '@you',
       bio: bio.trim(),
     });
   };
@@ -346,11 +364,16 @@ export function SettingsModal() {
             </div>
           </section>
 
-          {/* Selective Resets */}
-          <section className="space-y-2.5 pt-2 border-t border-white/8 pb-2">
-            <div className="flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-ink-dim" />
-              <h4 className="text-sm font-semibold text-ink">Selective Library Resets</h4>
+          {/* Reset Progress Data vs Remove All Data */}
+          <section className="space-y-3 pt-2 border-t border-white/8 pb-2">
+            <div>
+              <div className="flex items-center gap-2">
+                <RotateCcw className="w-4 h-4 text-ink-dim" />
+                <h4 className="text-sm font-semibold text-ink">Reset Progress Data</h4>
+              </div>
+              <p className="text-xs text-ink-dim mt-1">
+                Keep your saved titles, but reset watched, read, and played progress and history.
+              </p>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {(['watch', 'read', 'play', 'all'] as const).map((scope) => (
@@ -381,10 +404,43 @@ export function SettingsModal() {
                           ? 'Reset Read'
                           : scope === 'play'
                             ? 'Reset Play'
-                            : 'Restore Demo'}
+                            : 'Reset All'}
                   </span>
                 </button>
               ))}
+            </div>
+
+            <div className="pt-3 border-t border-white/8">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 text-red-400" />
+                <h4 className="text-sm font-semibold text-ink">Remove All Data</h4>
+              </div>
+              <p className="text-xs text-ink-dim mt-1 mb-2.5">
+                Erase every title, progress log, diary entry, custom list, and local sync link to
+                start completely from scratch.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirmScope === 'wipe') {
+                    clearAllData();
+                    setConfirmScope(null);
+                    setSettingsOpen(false);
+                  } else {
+                    setConfirmScope('wipe');
+                  }
+                }}
+                className={`w-full py-2.5 px-3.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-colors ${
+                  confirmScope === 'wipe'
+                    ? 'bg-red-500/25 border-red-400 text-red-200'
+                    : 'bg-red-500/10 border-red-400/25 text-red-300 hover:bg-red-500/15'
+                }`}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>
+                  {confirmScope === 'wipe' ? 'Confirm remove all data?' : 'Remove all data'}
+                </span>
+              </button>
             </div>
           </section>
         </div>
