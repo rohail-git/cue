@@ -29,7 +29,7 @@ import {
   type PreparedImportEntry,
 } from '../utils/mediaImport';
 
-type PreviewTypeFilter = 'all' | 'movie' | 'show' | 'anime' | 'game';
+type PreviewTypeFilter = 'all' | 'movie' | 'show' | 'anime' | 'game' | 'comic' | 'manga' | 'novel';
 
 export function SmartImportModal() {
   const {
@@ -102,6 +102,9 @@ export function SmartImportModal() {
       if (previewFilter === 'show' && c.mediaType !== 'tv') return false;
       if (previewFilter === 'anime' && c.mediaType !== 'anime') return false;
       if (previewFilter === 'game' && c.mediaType !== 'game') return false;
+      if (previewFilter === 'comic' && c.mediaType !== 'comic') return false;
+      if (previewFilter === 'manga' && c.mediaType !== 'manga') return false;
+      if (previewFilter === 'novel' && c.mediaType !== 'novel') return false;
       if (!q) return true;
       return (
         c.title.toLowerCase().includes(q) ||
@@ -110,6 +113,60 @@ export function SmartImportModal() {
       );
     });
   }, [resolvedCandidates, previewFilter, previewQuery]);
+
+  const previewFilterOptions = useMemo(() => {
+    const counts: Record<PreviewTypeFilter, number> = {
+      all: resolvedCandidates.length,
+      movie: 0,
+      show: 0,
+      anime: 0,
+      comic: 0,
+      manga: 0,
+      novel: 0,
+      game: 0,
+    };
+    for (const c of resolvedCandidates) {
+      if (c.mediaType === 'movie') counts.movie += 1;
+      else if (c.mediaType === 'tv') counts.show += 1;
+      else if (c.mediaType === 'anime') counts.anime += 1;
+      else if (c.mediaType === 'comic') counts.comic += 1;
+      else if (c.mediaType === 'manga') counts.manga += 1;
+      else if (c.mediaType === 'novel') counts.novel += 1;
+      else if (c.mediaType === 'game') counts.game += 1;
+    }
+    const defs: Array<[PreviewTypeFilter, string]> = [
+      ['all', 'All'],
+      ['movie', 'Movies'],
+      ['show', 'Shows'],
+      ['anime', 'Anime'],
+      ['comic', 'Comics'],
+      ['manga', 'Manga'],
+      ['novel', 'Novels'],
+      ['game', 'Games'],
+    ];
+    return defs
+      .filter(([id]) => id === 'all' || counts[id] > 0)
+      .map(([id, label]) => [id, id === 'all' ? label : `${label} (${counts[id]})`] as const);
+  }, [resolvedCandidates]);
+
+  const cycleReadCandidateFormat = (tempId: string) => {
+    setParsed((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        candidates: prev.candidates.map((c) => {
+          if (c.tempId !== tempId || c.kind !== 'read') return c;
+          const nextFormat: 'comic' | 'manga' | 'novel' =
+            c.mediaType === 'comic' ? 'manga' : c.mediaType === 'manga' ? 'novel' : 'comic';
+          return {
+            ...c,
+            mediaType: nextFormat,
+            genres: [nextFormat === 'comic' ? 'Comics' : nextFormat === 'manga' ? 'Manga' : 'Fiction'],
+          };
+        }),
+      };
+    });
+  };
 
   const resolvePendingImdbIds = async (targetBatch: ParsedImportBatch, limit?: number) => {
     const pending = targetBatch.candidates.filter((c) => c.needsResolution && c.externalConst);
@@ -194,7 +251,7 @@ export function SmartImportModal() {
       }
     }
     setSelectedMap(initialSel);
-    setEnrichArt(true);
+    setEnrichArt(!(result.source === 'goodreads' && result.candidates.length > 50));
 
     if (result.needsIdResolution && result.candidates.length > 0 && result.candidates.length <= 100) {
       void resolvePendingImdbIds(result);
@@ -554,14 +611,19 @@ export function SmartImportModal() {
                     <button
                       type="button"
                       disabled={busy}
-                      onClick={() => setPolicy('merge_missing')}
+                      onClick={() => {
+                        setPolicy('merge_missing');
+                        if (selectedCandidates.length === 0 && resolvedCandidates.length > 0) {
+                          handleSelectAll();
+                        }
+                      }}
                       className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
                         policy === 'merge_missing'
                           ? 'border-watch bg-watch/15 text-watch'
                           : 'border-white/10 text-ink-dim hover:text-ink'
                       }`}
                     >
-                      Merge missing ratings
+                      Merge ratings &amp; fix types
                     </button>
                   </div>
 
@@ -575,9 +637,11 @@ export function SmartImportModal() {
                     />
                     <Sparkles className="w-3 h-3 text-watch" />
                     <span>
-                      {parsed.source === 'imdb-account-export' && selectedCandidates.length > 50 && !enrichArt
-                        ? 'Posters fetched (fast import)'
-                        : 'Fetch posters & episodes'}
+                      {parsed.source === 'goodreads' && resolvedCandidates.length > 50 && !enrichArt
+                        ? 'ISBN covers ready (fast import)'
+                        : parsed.source === 'imdb-account-export' && selectedCandidates.length > 50 && !enrichArt
+                          ? 'Posters fetched (fast import)'
+                          : 'Fetch posters & episodes'}
                     </span>
                   </label>
                 </div>
@@ -684,15 +748,7 @@ export function SmartImportModal() {
                     />
                   </div>
                   <div className="flex items-center gap-1 flex-wrap">
-                    {(
-                      [
-                        ['all', 'All'],
-                        ['movie', 'Movies'],
-                        ['show', 'Shows'],
-                        ['anime', 'Anime'],
-                        ['game', 'Games'],
-                      ] as const
-                    ).map(([id, label]) => (
+                    {previewFilterOptions.map(([id, label]) => (
                       <button
                         key={id}
                         type="button"
@@ -745,15 +801,24 @@ export function SmartImportModal() {
                 <div className="max-h-64 overflow-y-auto space-y-2 pr-0.5">
                   {visibleCandidates.map((c) => {
                     const checked = Boolean(selectedMap[c.tempId]);
+                    const toggleRow = () => {
+                      if (!importing) {
+                        setSelectedMap((prev) => ({ ...prev, [c.tempId]: !prev[c.tempId] }));
+                      }
+                    };
                     return (
-                      <button
+                      <div
                         key={c.tempId}
-                        type="button"
-                        disabled={importing}
-                        onClick={() =>
-                          setSelectedMap((prev) => ({ ...prev, [c.tempId]: !prev[c.tempId] }))
-                        }
-                        className={`w-full text-left rounded-2xl p-3 border flex items-center justify-between gap-3 transition-colors ${
+                        role="button"
+                        tabIndex={importing ? -1 : 0}
+                        onClick={toggleRow}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            toggleRow();
+                          }
+                        }}
+                        className={`w-full text-left rounded-2xl p-3 border flex items-center justify-between gap-3 cursor-pointer transition-colors ${
                           checked
                             ? 'bg-background border-white/12'
                             : 'bg-background/50 border-white/[0.04] opacity-65'
@@ -774,19 +839,45 @@ export function SmartImportModal() {
                               src={c.posterUrl}
                               alt=""
                               loading="lazy"
+                              referrerPolicy="no-referrer"
+                              onLoad={(e) => {
+                                if (e.currentTarget.naturalWidth <= 2 || e.currentTarget.naturalHeight <= 2) {
+                                  e.currentTarget.style.display = 'none';
+                                }
+                              }}
+                              onError={(e) => {
+                                e.currentTarget.style.display = 'none';
+                              }}
                               className="w-8 h-11 rounded object-cover shrink-0 bg-surface"
                             />
                           )}
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-ink truncate">{c.title}</p>
                             <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-                              <span
-                                className={`text-[9.5px] font-semibold uppercase px-1.5 py-[1px] rounded ${domainBadgeClass(
-                                  c
-                                )}`}
-                              >
-                                {typeLabel(c)}
-                              </span>
+                              {c.kind === 'read' ? (
+                                <button
+                                  type="button"
+                                  disabled={importing}
+                                  title="Click to switch between Comic, Manga, and Novel"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    cycleReadCandidateFormat(c.tempId);
+                                  }}
+                                  className={`text-[9.5px] font-semibold uppercase px-1.5 py-[1px] rounded hover:ring-1 hover:ring-read/60 ${domainBadgeClass(
+                                    c
+                                  )}`}
+                                >
+                                  {typeLabel(c)}
+                                </button>
+                              ) : (
+                                <span
+                                  className={`text-[9.5px] font-semibold uppercase px-1.5 py-[1px] rounded ${domainBadgeClass(
+                                    c
+                                  )}`}
+                                >
+                                  {typeLabel(c)}
+                                </span>
+                              )}
                               <span className="text-[11px] text-ink-dim tabular-nums">{c.year}</span>
                               <span className="text-[11px] text-ink-dim">
                                 · {c.completed ? (c.kind === 'read' ? 'Finished' : 'Watched') : 'Watchlist'}
@@ -810,7 +901,7 @@ export function SmartImportModal() {
                         >
                           {c.existingId ? 'In library' : 'New'}
                         </span>
-                      </button>
+                      </div>
                     );
                   })}
 

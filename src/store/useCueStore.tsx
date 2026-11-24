@@ -55,6 +55,7 @@ import {
 import { lookupKnownGameChapters } from '../utils/gameChapters';
 import {
   annotateImportDuplicates,
+  classifyReadFormat,
   type ImportConflictPolicy,
   type PreparedImportEntry,
 } from '../utils/mediaImport';
@@ -246,6 +247,8 @@ interface CueContextValue {
     editionVariants?: Partial<Record<GeneralizedComicEditionId, string[]>>
   ) => void;
   updateReadTotalUnits: (readId: string, totalUnits: number) => void;
+  updateReadFormat: (readId: string, format: ReadItem['format']) => void;
+  autoClassifyReadLibrary: () => { comics: number; manga: number };
   resetReadProgress: (readId: string) => void;
 
   // Play actions
@@ -2052,6 +2055,40 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const updateReadFormat = useCallback(
+    (readId: string, format: ReadItem['format']) => {
+      let movedTitle = '';
+      commitState((prev) => {
+        const item = prev.readItems[readId];
+        if (!item || item.format === format) return prev;
+        movedTitle = item.title;
+        const nextUnit = format === 'comic' ? 'issues' : 'chapters';
+        const formatGenre = format === 'comic' ? 'Comics' : format === 'manga' ? 'Manga' : 'Fiction';
+        const filteredGenres = item.genres.filter(
+          (g) => !['fiction', 'comics', 'comic', 'manga'].includes(g.toLowerCase())
+        );
+        const updatedItem: ReadItem = {
+          ...item,
+          format,
+          unit: nextUnit,
+          genres: [formatGenre, ...filteredGenres],
+        };
+        return {
+          ...prev,
+          readItems: {
+            ...prev.readItems,
+            [readId]: updatedItem,
+          },
+        };
+      });
+      if (movedTitle) {
+        const label = format === 'comic' ? 'Comics' : format === 'manga' ? 'Manga' : 'Novels';
+        showToast(`Moved "${movedTitle}" to ${label}`);
+      }
+    },
+    [showToast]
+  );
+
   const resetReadProgress = useCallback(
     (readId: string) => {
       commitState((prev) => {
@@ -2896,6 +2933,38 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           } else if (c.kind === 'read' && nextReadItems[existingId]) {
             const rp = nextReadProgress[existingId];
             const item = nextReadItems[existingId];
+            const targetFormat: ReadItem['format'] | undefined =
+              c.mediaType === 'comic'
+                ? 'comic'
+                : c.mediaType === 'manga'
+                  ? 'manga'
+                  : c.mediaType === 'novel'
+                    ? 'novel'
+                    : undefined;
+            if (targetFormat && item.format !== targetFormat && (item.format === 'novel' || policy === 'merge_missing')) {
+              const nextUnit = targetFormat === 'comic' ? 'issues' : 'chapters';
+              const formatGenre =
+                targetFormat === 'comic' ? 'Comics' : targetFormat === 'manga' ? 'Manga' : 'Fiction';
+              const filteredGenres = item.genres.filter(
+                (g) => !['fiction', 'comics', 'comic', 'manga'].includes(g.toLowerCase())
+              );
+              nextReadItems[existingId] = {
+                ...item,
+                format: targetFormat,
+                unit: nextUnit,
+                genres: [formatGenre, ...filteredGenres],
+              };
+              changed = true;
+            }
+            const nextCover = c.posterUrl || entry.read?.coverUrl || '';
+            if (!nextReadItems[existingId].coverUrl && nextCover) {
+              nextReadItems[existingId] = {
+                ...nextReadItems[existingId],
+                coverUrl: nextCover,
+                backdropUrl: nextReadItems[existingId].backdropUrl || nextCover,
+              };
+              changed = true;
+            }
             if (rp) {
               const patched = { ...rp };
               if (!patched.rating && c.userRating) {
@@ -2903,9 +2972,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 changed = true;
               }
               if (rp.status === 'want_to_read' && c.completed) {
+                const updatedItem = nextReadItems[existingId];
                 patched.status = 'finished';
-                patched.currentUnit = item.totalUnits;
-                patched.maxCompletedUnit = Math.max(item.totalUnits, rp.maxCompletedUnit || 0);
+                patched.currentUnit = updatedItem.totalUnits;
+                patched.maxCompletedUnit = Math.max(updatedItem.totalUnits, rp.maxCompletedUnit || 0);
                 patched.rereadCount = Math.max(1, rp.rereadCount || 0);
                 changed = true;
               }
@@ -3095,6 +3165,55 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     },
     [showToast, undoLastImport]
   );
+
+  const autoClassifyReadLibrary = useCallback((): { comics: number; manga: number } => {
+    const prev = stateRef.current;
+    const nextReadItems = { ...prev.readItems };
+    let comics = 0;
+    let manga = 0;
+
+    for (const id of Object.keys(nextReadItems)) {
+      const item = nextReadItems[id];
+      if (!item || item.format !== 'novel') continue;
+      const detected = classifyReadFormat({
+        title: item.title,
+        author: item.creator,
+        genres: item.genres,
+      });
+      if (detected === 'novel') continue;
+      if (detected === 'comic') comics += 1;
+      if (detected === 'manga') manga += 1;
+      const formatGenre = detected === 'comic' ? 'Comics' : 'Manga';
+      const filteredGenres = item.genres.filter(
+        (g) => !['fiction', 'comics', 'comic', 'manga'].includes(g.toLowerCase())
+      );
+      nextReadItems[id] = {
+        ...item,
+        format: detected,
+        unit: detected === 'comic' ? 'issues' : 'chapters',
+        genres: [formatGenre, ...filteredGenres],
+      };
+    }
+
+    if (comics === 0 && manga === 0) {
+      showToast('All Read items are already categorized');
+      return { comics: 0, manga: 0 };
+    }
+
+    lastPreImportStateRef.current = prev;
+    const nextState: CueStoreState = {
+      ...prev,
+      readItems: nextReadItems,
+    };
+    stateRef.current = nextState;
+    setState(nextState);
+
+    const parts: string[] = [];
+    if (comics > 0) parts.push(`${comics} ${comics === 1 ? 'comic' : 'comics'}`);
+    if (manga > 0) parts.push(`${manga} manga`);
+    showToast(`Moved ${parts.join(' & ')} out of Novels`, 'Undo', undoLastImport);
+    return { comics, manga };
+  }, [showToast, undoLastImport]);
 
   const importLibraryJson = useCallback(
     (rawJson: string): { ok: boolean; summary: string } => {
@@ -3361,6 +3480,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         updateReadIssueDetails,
         updateReadEditionCovers,
         updateReadTotalUnits,
+        updateReadFormat,
+        autoClassifyReadLibrary,
         resetReadProgress,
         logGameSession,
         advanceGameChapter,

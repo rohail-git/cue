@@ -62,6 +62,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
     updateReadEditionCovers,
     updateReadIssueDetails,
     updateReadTotalUnits,
+    updateReadFormat,
     resetReadProgress,
     toggleItemInList,
     createCustomList,
@@ -1049,6 +1050,30 @@ export function ReadDetailView({ readId }: { readId: string }) {
                   labelPrefix="Rate title"
                   allowClear
                 />
+              </div>
+
+              <div className="mt-3.5 flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-xs text-ink-dim">Format</span>
+                <div className="inline-flex items-center gap-1 bg-surface border border-white/10 rounded-full p-1">
+                  {(['novel', 'comic', 'manga'] as const).map((fmt) => {
+                    const active = item.format === fmt;
+                    const label = fmt === 'comic' ? 'Comic' : fmt === 'manga' ? 'Manga' : 'Novel';
+                    return (
+                      <button
+                        key={fmt}
+                        type="button"
+                        onClick={() => updateReadFormat(item.id, fmt)}
+                        className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${
+                          active
+                            ? 'bg-read text-[#1E1608]'
+                            : 'text-ink-dim hover:text-ink'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               {unitAvg && unitAvg.count > 0 && (

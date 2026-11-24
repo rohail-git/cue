@@ -538,6 +538,463 @@ function parseLetterboxdCsv(rows: string[][], headers: Record<string, number>, f
   };
 }
 
+const MANGA_PUBLISHERS = [
+  'viz',
+  'shueisha',
+  '集英社',
+  'kodansha',
+  '講談社',
+  'shogakukan',
+  '小学館',
+  'yen press',
+  'seven seas',
+  'square enix',
+  'tokyopop',
+  'del rey manga',
+  'dark horse manga',
+  'panini manga',
+  'sublime',
+  'denpa',
+  'udon',
+  'hakusensha',
+  '白泉社',
+  'kadokawa',
+  '角川',
+  'akita shoten',
+  '秋田書店',
+  'futabasha',
+  'one peace books',
+  'ghost ship',
+  'vertical comics',
+  'glenat',
+  'kurokawa',
+];
+
+const MANGA_SERIES_AND_CREATORS = [
+  'dragon ball',
+  'one piece',
+  'naruto',
+  'boruto',
+  'bleach',
+  'berserk',
+  'vagabond',
+  'vinland saga',
+  'chainsaw man',
+  'jujutsu kaisen',
+  'demon slayer',
+  'attack on titan',
+  'my hero academia',
+  'death note',
+  'hunter x hunter',
+  'fullmetal alchemist',
+  'tokyo ghoul',
+  '20th century boys',
+  'akira',
+  'one-punch man',
+  'one punch man',
+  'frieren',
+  'dandadan',
+  'spy x family',
+  'solo leveling',
+  'slam dunk',
+  'haikyu',
+  'blue lock',
+  'sakamoto days',
+  'kagurabachi',
+  'jojo',
+  'mob psycho',
+  'neon genesis evangelion',
+  'sailor moon',
+  'akira toriyama',
+  'eiichiro oda',
+  'kentaro miura',
+  'naoki urasawa',
+  'takehiko inoue',
+  'tatsuki fujimoto',
+  'gege akutami',
+  'hajime isayama',
+  'masashi kishimoto',
+  'tite kubo',
+  'hiromu arakawa',
+  'junji ito',
+  'katsuhiro otomo',
+  'kohei horikoshi',
+  'koyoharu gotouge',
+  'toyotaro',
+];
+
+const COMIC_PUBLISHERS = [
+  'marvel',
+  'dc comics',
+  'dc black label',
+  'vertigo',
+  'wildstorm',
+  'image comics',
+  'dark horse',
+  'idw',
+  'boom! studios',
+  'boom studios',
+  'valiant',
+  'dynamite',
+  'oni press',
+  'archie',
+  'titan comics',
+  'top cow',
+  'skybound',
+  'aftershock',
+  'fantagraphics',
+  'drawn & quarterly',
+  'first second',
+  'humanoids',
+  'zenescope',
+  'panini',
+  '2000 ad',
+  'rebellion',
+  'black mask',
+  'awa studios',
+  'dstlry',
+  'mad cave',
+  'ghost machine',
+  'icon comics',
+  'max comics',
+  'milestone',
+  'young animal',
+  'avatar press',
+  'crossgen',
+  'vault comics',
+  'scout comics',
+  'bad idea',
+  'magnetic press',
+  'abrams comicarts',
+];
+
+const COMIC_FRANCHISE_KEYWORDS = [
+  'avengers',
+  'x-men',
+  'uncanny x',
+  'astonishing x',
+  'new x-men',
+  'all-new x',
+  'house of x',
+  'powers of x',
+  'x-force',
+  'x-factor',
+  'wolverine',
+  'spider-man',
+  'spiderman',
+  'spider-gwen',
+  'spider-verse',
+  'venom',
+  'carnage',
+  'daredevil',
+  'punisher',
+  'hawkeye',
+  'hulk',
+  'she-hulk',
+  'skaar',
+  'iron man',
+  'captain america',
+  'thor:',
+  'the mighty thor',
+  'loki:',
+  'fantastic four',
+  'silver surfer',
+  'doctor strange',
+  'black panther',
+  'black widow',
+  'moon knight',
+  'deadpool',
+  'ant-man',
+  'guardians of the galaxy',
+  'ms. marvel',
+  'captain marvel',
+  'jessica jones',
+  'luke cage',
+  'iron fist',
+  'ghost rider',
+  'scarlet witch',
+  'eternals',
+  'inhumans',
+  'runaways',
+  'young avengers',
+  'thunderbolts',
+  'secret wars',
+  'civil war',
+  'infinity gauntlet',
+  'infinity war',
+  'dark reign',
+  'annihilation',
+  'house of m',
+  'planet hulk',
+  'world war hulk',
+  'old man logan',
+  'patsy walker',
+  'hellcat',
+  'gwenpool',
+  'miles morales',
+  'batman',
+  'superman',
+  'wonder woman',
+  'justice league',
+  'green lantern',
+  'the flash',
+  'flash:',
+  'aquaman',
+  'nightwing',
+  'batgirl',
+  'batwoman',
+  'supergirl',
+  'teen titans',
+  'suicide squad',
+  'harley quinn',
+  'joker',
+  'catwoman',
+  'green arrow',
+  'hellblazer',
+  'swamp thing',
+  'watchmen',
+  'injustice',
+  'kingdom come',
+  'crisis on infinite earths',
+  'final crisis',
+  'infinite crisis',
+  'dark nights',
+  'flashpoint',
+  'blackest night',
+  'all-star superman',
+  'doom patrol',
+  'transmetropolitan',
+  'preacher',
+  'fables',
+  'y: the last man',
+  'invincible',
+  'walking dead',
+  'monstress',
+  'spawn',
+  'hellboy',
+  'sin city',
+  'scott pilgrim',
+  'east of west',
+  'descender',
+  'paper girls',
+  'black science',
+  'deadly class',
+  'something is killing the children',
+  'power rangers',
+  'mighty morphin',
+  'teenage mutant ninja turtles',
+  'tmnt',
+  'grimm fairy tales',
+  'hack/slash',
+  'kick-ass',
+  'the boys',
+  'umbrella academy',
+  'locke & key',
+  'dark phoenix',
+  'days of future past',
+  'winter soldier',
+  'galactus',
+  'thanos',
+  'ultron',
+  'doctor doom',
+  'magneto',
+  'elektra',
+  'ultimates',
+  'ultimate spider',
+  'ultimate x-men',
+  'marvels',
+  'marvel 1602',
+  'marvel zombies',
+];
+
+const COMIC_CREATORS = [
+  'jonathan hickman',
+  'matt fraction',
+  'brian michael bendis',
+  'ed brubaker',
+  'chris claremont',
+  'al ewing',
+  'mark millar',
+  'jeph loeb',
+  'tom king',
+  'tom taylor',
+  'peter j. tomasi',
+  'greg pak',
+  'jeff parker',
+  'paul jenkins',
+  'jed mackay',
+  'kathryn immonen',
+  'stuart immonen',
+  'marjorie m. liu',
+  'marjorie liu',
+  'tini howard',
+  'kyle higgins',
+  'melissa flores',
+  'joe brusha',
+  'geoff johns',
+  'grant morrison',
+  'scott snyder',
+  'alan moore',
+  'frank miller',
+  'robert kirkman',
+  'brian k. vaughan',
+  'chip zdarsky',
+  'donny cates',
+  'garth ennis',
+  'warren ellis',
+  'mark waid',
+  'jason aaron',
+  'kieron gillen',
+  'kelly thompson',
+  'dan slott',
+  'stan lee',
+  'jack kirby',
+  'jim starlin',
+  'walt simonson',
+  'peter david',
+  'kurt busiek',
+  'alex ross',
+  'jim lee',
+  'todd mcfarlane',
+  'mike mignola',
+  'jeff lemire',
+  'rick remender',
+  'joshua williamson',
+  'james tynion',
+  'ram v',
+  'gail simone',
+  'kelly sue deconnick',
+  'g. willow wilson',
+  'saladin ahmed',
+  'charles soule',
+  'nick spencer',
+  'gerry duggan',
+  'benjamin percy',
+  'ryan north',
+  'daniel warren johnson',
+  'sean murphy',
+  'greg rucka',
+  'paul dini',
+  "dennis o'neil",
+  'marv wolfman',
+  'george perez',
+  'john byrne',
+  'roy thomas',
+  'roger stern',
+  'j.m. dematteis',
+  'david michelinie',
+  'fabian nicieza',
+  'joe kelly',
+  'zeb wells',
+  'christopher priest',
+  'cullen bunn',
+  'dennis hopeless',
+  'eve l. ewing',
+  'declan shalvey',
+  'si spurrier',
+  'mike carey',
+  'craig kyle',
+  'christopher yost',
+  'darwyn cooke',
+  'tim sale',
+  'david aja',
+  'steve mcniven',
+  'esad ribic',
+  'pepe larraz',
+  'ryan stegman',
+];
+
+function normalizeFoldLower(raw: string): string {
+  return raw
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractCleanIsbn(raw: string): string {
+  const cleaned = raw.replace(/[^0-9Xx]/g, '').toUpperCase();
+  if (cleaned.length === 13 || cleaned.length === 10) return cleaned;
+  return '';
+}
+
+export function classifyReadFormat(input: {
+  title: string;
+  author?: string;
+  additionalAuthors?: string;
+  publisher?: string;
+  binding?: string;
+  bookshelves?: string;
+  exclusiveShelf?: string;
+  genres?: string[];
+}): 'comic' | 'manga' | 'novel' {
+  const titleNorm = normalizeFoldLower(input.title || '');
+  const titleNoParens = titleNorm.replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+  const pubNorm = normalizeFoldLower(input.publisher || '');
+  const creatorNorm = normalizeFoldLower(
+    [input.author, input.additionalAuthors].filter(Boolean).join(' ')
+  );
+  const shelfAndBind = normalizeFoldLower(
+    [input.bookshelves, input.exclusiveShelf, input.binding, ...(input.genres || [])]
+      .filter(Boolean)
+      .join(' ')
+  );
+
+  // 1. Explicit shelf / binding / genre tags
+  if (/\b(manga|tankobon|manhwa|manhua|shonen|seinen|shojo|shoujo|webtoon)\b/.test(shelfAndBind)) {
+    return 'manga';
+  }
+  if (
+    /\b(comics?|graphic[\s-]?novels?|trade paperback|tpb|floppies|bande dessinee)\b/.test(
+      shelfAndBind
+    )
+  ) {
+    return 'comic';
+  }
+
+  // 2. Manga publishers, Japanese script titles, or known manga series/mangaka
+  const hasCjk = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/.test(
+    `${input.title || ''} ${input.publisher || ''} ${input.author || ''}`
+  );
+  if (
+    hasCjk ||
+    MANGA_PUBLISHERS.some((p) => pubNorm.includes(p)) ||
+    /\bmanga\b/.test(pubNorm) ||
+    MANGA_SERIES_AND_CREATORS.some((k) => titleNorm.includes(k) || creatorNorm.includes(k))
+  ) {
+    return 'manga';
+  }
+
+  // 3. Comic publishers
+  const isExactDcOrImagePub = pubNorm === 'dc' || pubNorm === 'image' || /\bdc\s+comics?\b/.test(pubNorm);
+  if (
+    isExactDcOrImagePub ||
+    COMIC_PUBLISHERS.some((p) => pubNorm.includes(p)) ||
+    /\bcomics?\b/.test(pubNorm)
+  ) {
+    return 'comic';
+  }
+
+  // 4. Comic single-issue numbering outside parens (e.g. "Superman: Rebirth (2016) #1")
+  if (/(?:^|\s)#\d{1,4}\b/.test(titleNoParens)) {
+    return 'comic';
+  }
+
+  // 5. Collected comic format keywords, comic franchises, or curated comic-only writers
+  if (
+    /\b(omnibus|complete collection|epic collection|masterworks|dc compact|absolute edition|trade paperback|tpb|graphic novel)\b/.test(
+      titleNorm
+    ) ||
+    COMIC_FRANCHISE_KEYWORDS.some((kw) => titleNorm.includes(kw)) ||
+    COMIC_CREATORS.some((cr) => creatorNorm.includes(cr))
+  ) {
+    return 'comic';
+  }
+
+  return 'novel';
+}
+
 function parseGoodreadsCsv(rows: string[][], headers: Record<string, number>): ParsedImportBatch {
   const candidates: ImportCandidate[] = [];
   const skipped: SkippedImportRow[] = [];
@@ -555,31 +1012,41 @@ function parseGoodreadsCsv(rows: string[][], headers: Record<string, number>): P
     }
     seen.add(key);
 
-    const author = cell(r, headers, 'Author', 'Author l-f');
-    const shelf = cell(r, headers, 'Exclusive Shelf', 'Bookshelves').toLowerCase();
-    const binding = cell(r, headers, 'Binding').toLowerCase();
+    const author = cell(r, headers, 'Author', 'Author l-f').replace(/\s+/g, ' ').trim();
+    const additionalAuthors = cell(r, headers, 'Additional Authors').replace(/\s+/g, ' ').trim();
+    const publisher = cell(r, headers, 'Publisher');
+    const exclusiveShelf = cell(r, headers, 'Exclusive Shelf').toLowerCase();
+    const bookshelves = cell(r, headers, 'Bookshelves', 'Bookshelves with positions').toLowerCase();
+    const binding = cell(r, headers, 'Binding');
+    const isbn =
+      extractCleanIsbn(cell(r, headers, 'ISBN13')) || extractCleanIsbn(cell(r, headers, 'ISBN'));
     const pages = Number(cell(r, headers, 'Number of Pages')) || 320;
     const year = parseYear(cell(r, headers, 'Original Publication Year', 'Year Published'));
     const myRating = parseStarRatingFive(cell(r, headers, 'My Rating'));
-    const readStatus: ImportCandidate['readStatus'] = shelf.includes('currently')
+
+    const shelfState = exclusiveShelf || bookshelves;
+    const readStatus: ImportCandidate['readStatus'] = shelfState.includes('currently')
       ? 'reading'
-      : shelf === 'read'
+      : shelfState === 'read' || /\bread\b/.test(exclusiveShelf)
         ? 'finished'
         : 'want_to_read';
 
-    const looksManga = shelf.includes('manga') || binding.includes('manga');
-    const looksComic =
-      shelf.includes('comic') || shelf.includes('graphic') || binding.includes('graphic novel');
-    const mediaType: ImportCandidate['mediaType'] = looksManga
-      ? 'manga'
-      : looksComic
-        ? 'comic'
-        : 'novel';
+    const mediaType = classifyReadFormat({
+      title: rawTitle,
+      author,
+      additionalAuthors,
+      publisher,
+      binding,
+      bookshelves,
+      exclusiveShelf,
+    });
 
     const totalUnits =
       mediaType === 'comic'
         ? Math.max(4, Math.min(80, Math.round(pages / 24)))
-        : Math.max(8, Math.min(120, Math.round(pages / 14)));
+        : mediaType === 'manga'
+          ? Math.max(6, Math.min(120, Math.round(pages / 18)))
+          : Math.max(8, Math.min(120, Math.round(pages / 14)));
 
     candidates.push({
       tempId: `gr-${i}-${key.slice(0, 16)}`,
@@ -588,6 +1055,8 @@ function parseGoodreadsCsv(rows: string[][], headers: Record<string, number>): P
       mediaType,
       title: cleanTitle,
       year,
+      externalConst: isbn || undefined,
+      posterUrl: isbn ? `https://covers.openlibrary.org/b/isbn/${isbn}-L.jpg?default=false` : undefined,
       genres: [mediaType === 'comic' ? 'Comics' : mediaType === 'manga' ? 'Manga' : 'Fiction'],
       creator: author || 'Author',
       userRating: myRating,
@@ -595,6 +1064,7 @@ function parseGoodreadsCsv(rows: string[][], headers: Record<string, number>): P
       readStatus,
       totalUnits,
       dateStr: cell(r, headers, 'Date Read', 'Date Added') || undefined,
+      overview: publisher ? `${cleanTitle} · Published by ${publisher}.` : undefined,
     });
   }
 

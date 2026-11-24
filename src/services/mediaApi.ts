@@ -2794,10 +2794,15 @@ export async function enrichImportCandidate(
       const hits = await searchLiveMedia(candidate.title, candidate.mediaType, tmdbApiKey);
       const best = pickBestMatch(hits, 'read');
       if (best) {
+        const read = hydrateLiveReadItem(best);
         return {
           candidate,
           selected: !candidate.existingId,
-          read: hydrateLiveReadItem(best),
+          read: {
+            ...read,
+            coverUrl: read.coverUrl || candidate.posterUrl || '',
+            backdropUrl: read.backdropUrl || candidate.posterUrl || '',
+          },
         };
       }
       return {

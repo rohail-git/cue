@@ -7,6 +7,7 @@ import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHist
 import { useCueStore } from '../store/useCueStore';
 import type { ReadFilter, ReadItem } from '../types';
 import { getComicEditionLabel, resolveComicEditionCover } from '../utils/editions';
+import { classifyReadFormat } from '../utils/mediaImport';
 import { getReadStats } from '../utils/stats';
 
 export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
@@ -19,6 +20,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     setImportModalOpen,
     updateSettings,
     advanceReadProgress,
+    autoClassifyReadLibrary,
   } = useCueStore();
 
   const [justBumped, setJustBumped] = useState<Record<string, boolean>>({});
@@ -113,6 +115,24 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     () => state.upcoming.filter((u) => u.domain === 'read'),
     [state.upcoming]
   );
+
+  const misclassifiedSummary = useMemo(() => {
+    let comics = 0;
+    let manga = 0;
+    for (const id of state.readOrder) {
+      const item = state.readItems[id];
+      const prog = state.readProgress[id];
+      if (!item || !prog?.bookmarked || item.format !== 'novel') continue;
+      const detected = classifyReadFormat({
+        title: item.title,
+        author: item.creator,
+        genres: item.genres,
+      });
+      if (detected === 'comic') comics += 1;
+      else if (detected === 'manga') manga += 1;
+    }
+    return { comics, manga, total: comics + manga };
+  }, [state.readOrder, state.readItems, state.readProgress]);
 
   const isPosterLayout = state.settings.readLayout === 'posters';
 
@@ -308,6 +328,37 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
           </div>
         ) : (
           <div className="animate-fade-in">
+            {misclassifiedSummary.total > 0 && (filter === 'all' || filter === 'novel') && (
+              <div className="mb-5 rounded-[20px] bg-surface border border-read/25 p-3.5 flex items-center justify-between gap-3 flex-wrap">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-ink">
+                    Found{' '}
+                    {[
+                      misclassifiedSummary.comics > 0
+                        ? `${misclassifiedSummary.comics} ${misclassifiedSummary.comics === 1 ? 'comic' : 'comics'}`
+                        : '',
+                      misclassifiedSummary.manga > 0
+                        ? `${misclassifiedSummary.manga} manga`
+                        : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' & ')}{' '}
+                    filed under Novels
+                  </p>
+                  <p className="text-[11px] text-ink-dim mt-0.5">
+                    Move them to their dedicated Comics &amp; Manga tabs (Undo anytime)
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => autoClassifyReadLibrary()}
+                  className="px-3.5 py-1.5 rounded-full bg-read text-[#1E1608] text-xs font-semibold hover:opacity-95 transition-opacity shrink-0"
+                >
+                  Move to Comics &amp; Manga
+                </button>
+              </div>
+            )}
+
             {readingList.length === 0 &&
               wantToReadList.length === 0 &&
               finishedList.length === 0 && (
