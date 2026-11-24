@@ -1,7 +1,8 @@
 export type MediaDomain = 'watch' | 'read' | 'play';
 export type ReadFormat = 'novel' | 'manga' | 'comic';
 export type ReadUnit = 'chapters' | 'issues';
-export type ComicEditionId = 'digital' | 'tpb' | 'compact' | 'hardcover' | 'absolute';
+export type GeneralizedComicEditionId = 'digital' | 'tpb' | 'compact' | 'hardcover';
+export type ComicEditionId = GeneralizedComicEditionId | 'absolute';
 export type GamePlatform = 'PC' | 'PS5' | 'Switch' | 'Xbox' | 'Steam Deck';
 
 export type ShowWatchStatus = 'watching' | 'not_started' | 'finished';
@@ -86,6 +87,7 @@ export interface ReadItem {
   overview: string;
   editionCovers?: Partial<Record<ComicEditionId, string>>;
   editionIssueCounts?: Partial<Record<ComicEditionId, number>>;
+  editionVariants?: Partial<Record<GeneralizedComicEditionId, string[]>>;
   baseTotalUnits?: number;
 }
 

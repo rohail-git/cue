@@ -1,13 +1,15 @@
 import type {
-  ComicEditionId,
   CueStoreState,
   CustomList,
+  GeneralizedComicEditionId,
   ReadItem,
   ReadProgress,
 } from '../types';
 import {
   getAvailableComicEditions,
   getComicEditionLabel,
+  getComicEditionSummary,
+  normalizeComicEditionId,
   resolveComicEditionTotal,
 } from './editions';
 import { getCompletedReadUnits, getReadStats, getShowStats } from './stats';
@@ -660,8 +662,9 @@ export function evaluateBookSeriesProgress(
 }
 
 export interface ComicEditionContainerProgress {
-  id: ComicEditionId;
+  id: GeneralizedComicEditionId;
   label: string;
+  summary: string;
   totalIssues: number;
   completedIssues: number;
   ratio: number;
@@ -684,7 +687,7 @@ export function evaluateComicEditionContainers(
   const uniqueUnits = [...new Set(rawUnits.filter((n) => n >= 1))];
 
   const editions = getAvailableComicEditions(item, progress?.edition);
-  const activeEdition = progress?.edition;
+  const activeEdition = normalizeComicEditionId(progress?.edition);
 
   return editions.map((ed) => {
     const totalIssues = Math.max(1, resolveComicEditionTotal(item, ed.id));
@@ -697,6 +700,7 @@ export function evaluateComicEditionContainers(
     return {
       id: ed.id,
       label: getComicEditionLabel(ed.id, item) || ed.label,
+      summary: getComicEditionSummary(item, ed.id),
       totalIssues,
       completedIssues,
       ratio,

@@ -375,7 +375,8 @@ export function SearchView() {
           readItem.id,
           readItem.editionCovers || {},
           readItem.title,
-          readItem.editionIssueCounts
+          readItem.editionIssueCounts,
+          readItem.editionVariants
         );
       }
       if (!andAdd) pushRoute({ view: 'read-detail', readId: readItem.id });

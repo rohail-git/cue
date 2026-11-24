@@ -28,11 +28,8 @@ import {
   findBookSeries,
 } from '../utils/containers';
 import {
-  getAvailableComicEditions,
   getComicEditionLabel,
-  getKnownComicEditionCounts,
   getKnownComicEditionCovers,
-  isDcComic,
   resolveComicEditionCover,
 } from '../utils/editions';
 import { formatRating, getReadUnitsAverage } from '../utils/ratings';
@@ -92,19 +89,21 @@ export function ReadDetailView({ readId }: { readId: string }) {
     if (uniqueCoverCount > 1 && !needsCounts && !needsTitleFix && !missingCuratedCover) return;
 
     let cancelled = false;
-    fetchComicEditionMetadata(item.title, item.creator).then(({ covers, issueCounts }) => {
+    fetchComicEditionMetadata(item.title, item.creator).then(({ covers, issueCounts, variants }) => {
       if (cancelled) return;
       fetchedCoversRef.current.add(item.id);
       if (
         Object.keys(covers).length > 0 ||
         Object.keys(issueCounts).length > 0 ||
+        Object.keys(variants).length > 0 ||
         needsTitleFix
       ) {
         updateReadEditionCovers(
           item.id,
           covers,
           needsTitleFix ? formattedTitle : undefined,
-          issueCounts
+          issueCounts,
+          variants
         );
       }
     });
@@ -152,9 +151,6 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const activeCover = resolveComicEditionCover(item, progress?.edition);
   const editionLabel =
     item.format === 'comic' ? getComicEditionLabel(progress?.edition, item) : '';
-  const dcTitle = isDcComic(item);
-  const availableEditions =
-    item.format === 'comic' ? getAvailableComicEditions(item, progress?.edition) : [];
 
   return (
     <div className="min-h-dvh pb-20 bg-background">
@@ -323,48 +319,6 @@ export function ReadDetailView({ readId }: { readId: string }) {
         <DetailModeToggle mode={detailMode} onChange={setDetailMode} />
 
         <div key={detailMode} data-detail-mode={detailMode} className="animate-detail-flip">
-          {/* Comic Edition Selector (only real editions for this comic) */}
-          {item.format === 'comic' && (
-            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5">
-              <div className="flex items-baseline justify-between gap-2 flex-wrap mb-2.5">
-                <span className="text-sm font-semibold text-ink">Which edition are you reading?</span>
-                <span className="text-xs text-ink-dim">
-                  {editionLabel || 'Progress stays tracked in issues'}
-                </span>
-              </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                {availableEditions.map((opt) => {
-                  const label = opt.dcLabel && dcTitle ? opt.dcLabel : opt.label;
-                  const active = progress?.edition === opt.id;
-                  const editionCount =
-                    getKnownComicEditionCounts(item.title)?.[opt.id] ??
-                    item.editionIssueCounts?.[opt.id];
-                  return (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => setReadEdition(item.id, opt.id)}
-                      title={opt.subtitle}
-                      aria-pressed={active}
-                      className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
-                        active
-                          ? 'border-brand bg-brand/15 text-ink'
-                          : 'border-white/10 bg-surface-raised/60 text-ink-dim hover:text-ink hover:border-white/20'
-                      }`}
-                    >
-                      <span>{label}</span>
-                      {typeof editionCount === 'number' && editionCount > 0 && (
-                        <span className="ml-1.5 text-[11px] text-ink-dim tabular-nums">
-                          · {editionCount}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
           {detailMode === 'simple' ? (
             <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5">
               <div className="flex items-center justify-between gap-3 mb-2.5">
@@ -509,21 +463,19 @@ export function ReadDetailView({ readId }: { readId: string }) {
             </section>
           )}
 
-          {/* Advanced Smart Containers: Overlapping Comic Editions */}
+          {/* Advanced Unified Edition Selector + Smart Containers (max 4 generalized formats) */}
           {detailMode === 'advanced' && item.format === 'comic' && overlappingContainers.length > 0 && (
             <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 space-y-3">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2">
                   <Layers className="w-4 h-4 text-read shrink-0" />
-                  <h2 className="text-sm font-semibold text-ink">
-                    Overlapping editions · Smart containers
-                  </h2>
+                  <h2 className="text-sm font-semibold text-ink">Which edition are you reading?</h2>
                 </div>
                 <span className="text-[11px] text-ink-dim tabular-nums">
-                  {completedList.length} {item.unit} logged
+                  {editionLabel || `${completedList.length} ${item.unit} logged`}
                 </span>
               </div>
-              <div className="space-y-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {overlappingContainers.map((ed) => {
                   const pct = Math.round(ed.ratio * 100);
                   return (
@@ -531,17 +483,18 @@ export function ReadDetailView({ readId }: { readId: string }) {
                       key={ed.id}
                       type="button"
                       onClick={() => setReadEdition(item.id, ed.id)}
+                      aria-pressed={ed.isActive}
                       className={`w-full rounded-2xl p-3 border text-left transition-colors ${
                         ed.isActive
-                          ? 'bg-surface-raised border-read/50'
+                          ? 'bg-surface-raised border-brand'
                           : 'bg-background/50 border-white/[0.06] hover:bg-surface-raised/60'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0">
                           <span className="text-xs font-semibold text-ink truncate">{ed.label}</span>
                           {ed.isActive && (
-                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-read/15 text-read shrink-0">
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-brand/20 text-brand shrink-0">
                               Active
                             </span>
                           )}
@@ -555,6 +508,9 @@ export function ReadDetailView({ readId }: { readId: string }) {
                           {ed.isTechnicallyComplete ? '· Complete' : `(${pct}%)`}
                         </span>
                       </div>
+                      {ed.summary && (
+                        <p className="text-[11px] text-ink-faint truncate mt-1">{ed.summary}</p>
+                      )}
                       <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden mt-2">
                         <div
                           className="h-full bg-watched transition-all duration-300"

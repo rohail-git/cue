@@ -16,6 +16,7 @@ import type {
   GameItem,
   GamePlatform,
   GameWatchStatus,
+  GeneralizedComicEditionId,
   HistoryEntry,
   JournalEntry,
   MediaDomain,
@@ -42,6 +43,7 @@ import {
 import {
   getComicEditionLabel,
   getKnownComicEditionSpec,
+  normalizeComicEditionId,
   resolveComicEditionCover,
   resolveComicEditionTotal,
 } from '../utils/editions';
@@ -222,7 +224,8 @@ interface CueContextValue {
     readId: string,
     editionCovers: Partial<Record<ComicEditionId, string>>,
     cleanTitle?: string,
-    editionIssueCounts?: Partial<Record<ComicEditionId, number>>
+    editionIssueCounts?: Partial<Record<ComicEditionId, number>>,
+    editionVariants?: Partial<Record<GeneralizedComicEditionId, string[]>>
   ) => void;
   updateReadTotalUnits: (readId: string, totalUnits: number) => void;
   resetReadProgress: (readId: string) => void;
@@ -1316,7 +1319,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     if (item.format === 'comic') {
       const before = evaluateComicEditionContainers(item, prevProg);
       const after = evaluateComicEditionContainers(item, updatedProg);
-      const activeId = updatedProg.edition || 'digital';
+      const activeId = normalizeComicEditionId(updatedProg.edition) || 'digital';
       const newlyCompletedOther = after.filter((a) => {
         if (a.id === activeId || !a.isTechnicallyComplete) return false;
         const b = before.find((x) => x.id === a.id);
@@ -1734,13 +1737,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const setReadEdition = useCallback(
     (readId: string, edition: ComicEditionId) => {
+      const normalizedEdition = normalizeComicEditionId(edition) || 'digital';
       let toastMsg = '';
       commitState((prev) => {
         const item = prev.readItems[readId];
         if (!item) return prev;
         const existing = prev.readProgress[readId];
-        const label = getComicEditionLabel(edition, item);
-        const nextTotal = resolveComicEditionTotal(item, edition);
+        const label = getComicEditionLabel(normalizedEdition, item);
+        const nextTotal = resolveComicEditionTotal(item, normalizedEdition);
         const preservedMax = Math.max(existing?.currentUnit || 0, existing?.maxCompletedUnit || 0);
         const existingUnits = existing?.completedUnits;
         let nextCompletedList: number[];
@@ -1752,10 +1756,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         }
         const activeCount = nextCompletedList.filter((u) => u <= nextTotal).length;
         const finished = activeCount >= nextTotal;
-        const nextCover = resolveComicEditionCover(item, edition);
+        const nextCover = resolveComicEditionCover(item, normalizedEdition);
         const nextCoversMap =
           nextCover && nextCover !== item.coverUrl
-            ? { ...(item.editionCovers || {}), [edition]: nextCover }
+            ? { ...(item.editionCovers || {}), [normalizedEdition]: nextCover }
             : item.editionCovers;
         const nextHistory = nextCover
           ? (prev.history || []).map((h) =>
@@ -1784,7 +1788,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               maxCompletedUnit: Math.max(preservedMax, activeCount),
               rereadCount: finished ? Math.max(1, existing?.rereadCount || 0) : existing?.rereadCount || 0,
               bookmarked: existing?.bookmarked ?? true,
-              edition,
+              edition: normalizedEdition,
             },
           },
           history: nextHistory,
@@ -1800,7 +1804,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       readId: string,
       editionCovers: Partial<Record<ComicEditionId, string>>,
       cleanTitle?: string,
-      editionIssueCounts?: Partial<Record<ComicEditionId, number>>
+      editionIssueCounts?: Partial<Record<ComicEditionId, number>>,
+      editionVariants?: Partial<Record<GeneralizedComicEditionId, string[]>>
     ) => {
       commitState((prev) => {
         const item = prev.readItems[readId];
@@ -1812,10 +1817,22 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           ...editionCovers,
           ...(spec?.covers || {}),
         };
+        if (mergedCovers.absolute && !mergedCovers.hardcover) {
+          mergedCovers.hardcover = mergedCovers.absolute;
+        }
+        delete mergedCovers.absolute;
         const mergedCounts: Partial<Record<ComicEditionId, number>> = {
           ...(item.editionIssueCounts || {}),
           ...(editionIssueCounts || {}),
           ...(spec?.counts || {}),
+        };
+        if (mergedCounts.absolute && !mergedCounts.hardcover) {
+          mergedCounts.hardcover = mergedCounts.absolute;
+        }
+        delete mergedCounts.absolute;
+        const mergedVariants: Partial<Record<GeneralizedComicEditionId, string[]>> = {
+          ...(item.editionVariants || {}),
+          ...(editionVariants || {}),
         };
         if (spec) {
           const allowed = new Set<ComicEditionId>(spec.availableEditions);
@@ -1825,18 +1842,22 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           for (const k of Object.keys(mergedCounts) as ComicEditionId[]) {
             if (!allowed.has(k)) delete mergedCounts[k];
           }
+          for (const k of Object.keys(mergedVariants) as GeneralizedComicEditionId[]) {
+            if (!allowed.has(k)) delete mergedVariants[k];
+          }
         }
         const existingProg = prev.readProgress[readId];
-        const activeEdition = existingProg?.edition;
+        const normalizedActive = normalizeComicEditionId(existingProg?.edition);
         const safeActiveEdition =
-          activeEdition && spec && !spec.availableEditions.includes(activeEdition)
+          normalizedActive && spec && !spec.availableEditions.includes(normalizedActive)
             ? spec.availableEditions[0]
-            : activeEdition;
+            : normalizedActive;
         const tempItem: ReadItem = {
           ...item,
           title: nextTitle,
           editionCovers: mergedCovers,
           editionIssueCounts: mergedCounts,
+          editionVariants: mergedVariants,
         };
         const resolvedTotal = safeActiveEdition
           ? resolveComicEditionTotal(tempItem, safeActiveEdition)

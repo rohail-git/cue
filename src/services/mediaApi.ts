@@ -1,5 +1,15 @@
-import type { CastMember, ComicEditionId, GameItem, Movie, ReadItem, Season, Show } from '../types';
+import type {
+  CastMember,
+  ComicEditionId,
+  GameItem,
+  GeneralizedComicEditionId,
+  Movie,
+  ReadItem,
+  Season,
+  Show,
+} from '../types';
 import {
+  classifyRawComicEdition,
   getKnownComicEditionSpec,
 } from '../utils/editions';
 import {
@@ -47,6 +57,7 @@ export interface LiveSearchResult {
   totalUnits?: number;
   editionCovers?: Partial<Record<ComicEditionId, string>>;
   editionIssueCounts?: Partial<Record<ComicEditionId, number>>;
+  editionVariants?: Partial<Record<GeneralizedComicEditionId, string[]>>;
   steamAppId?: number;
   popularity?: number;
   anilistEpisodes?: number;
@@ -163,25 +174,16 @@ export function canonicalReadWorkKey(title: string): string {
   return normalizeTitleKey(stripEditionAffixes(title));
 }
 
-function detectComicEdition(
-  title: string,
-  year?: number,
-  earliestYear?: number,
-  allowCompactYearFallback = false
-): ComicEditionId {
-  const lower = title.toLowerCase();
-  if (lower.includes('absolute') || lower.includes('omnibus') || lower.includes('compendium')) {
-    return 'absolute';
+function recordVariantTag(
+  target: Partial<Record<GeneralizedComicEditionId, string[]>>,
+  ed: GeneralizedComicEditionId,
+  tag?: string
+) {
+  if (!tag) return;
+  const list = target[ed] || [];
+  if (!list.includes(tag) && list.length < 3) {
+    target[ed] = [...list, tag];
   }
-  if (lower.includes('compact')) return 'compact';
-  if (lower.includes('deluxe') || lower.includes('hardcover') || /\bhc\b/.test(lower)) {
-    return 'hardcover';
-  }
-  if (/\b(vol\.?|volume|tpb|trade paperback|book)\b/.test(lower)) return 'tpb';
-  if (allowCompactYearFallback && year && earliestYear && year >= 2024 && year - earliestYear >= 10) {
-    return 'compact';
-  }
-  return 'digital';
 }
 
 const COMIC_WORK_HINTS = [
@@ -574,8 +576,12 @@ function buildComicEditionCovers(
   earliestYear: number,
   primaryCover: string,
   titleHint?: string
-): Partial<Record<ComicEditionId, string>> {
+): {
+  covers: Partial<Record<ComicEditionId, string>>;
+  variants: Partial<Record<GeneralizedComicEditionId, string[]>>;
+} {
   const editionCovers: Partial<Record<ComicEditionId, string>> = {};
+  const editionVariants: Partial<Record<GeneralizedComicEditionId, string[]>> = {};
   if (primaryCover) {
     editionCovers.digital = primaryCover;
   }
@@ -586,15 +592,17 @@ function buildComicEditionCovers(
         COMIC_WORK_HINTS.some((kw) => titleHint.toLowerCase().includes(kw)))
   );
   for (const d of docs) {
-    if (!d.cover_i) continue;
-    const ed = detectComicEdition(
+    const classified = classifyRawComicEdition(
       combinedOpenLibraryTitle(d),
+      undefined,
       d.first_publish_year,
       earliestYear,
       allowCompactFallback
     );
+    const ed = classified.edition;
     if (spec && !spec.availableEditions.includes(ed)) continue;
-    if (!editionCovers[ed]) {
+    recordVariantTag(editionVariants, ed, classified.variantTag);
+    if (d.cover_i && !editionCovers[ed]) {
       editionCovers[ed] = `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg`;
     }
   }
@@ -602,19 +610,22 @@ function buildComicEditionCovers(
     editionCovers.tpb = primaryCover;
   }
   if (spec?.covers) {
-    for (const [edKey, url] of Object.entries(spec.covers) as Array<[ComicEditionId, string]>) {
+    for (const [edKey, url] of Object.entries(spec.covers) as Array<[GeneralizedComicEditionId, string]>) {
       if (url && spec.availableEditions.includes(edKey)) {
         editionCovers[edKey] = url;
       }
     }
   }
   if (spec) {
-    const allowed = new Set<ComicEditionId>(spec.availableEditions);
-    for (const key of Object.keys(editionCovers) as ComicEditionId[]) {
+    const allowed = new Set<GeneralizedComicEditionId>(spec.availableEditions);
+    for (const key of Object.keys(editionCovers) as GeneralizedComicEditionId[]) {
       if (!allowed.has(key)) delete editionCovers[key];
     }
+    for (const key of Object.keys(editionVariants) as GeneralizedComicEditionId[]) {
+      if (!allowed.has(key)) delete editionVariants[key];
+    }
   }
-  return editionCovers;
+  return { covers: editionCovers, variants: editionVariants };
 }
 
 async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
@@ -699,9 +710,11 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
 
       const primaryCover = `https://covers.openlibrary.org/b/id/${primary.cover_i}-L.jpg`;
       const spec = isComic ? getKnownComicEditionSpec(baseTitle) : undefined;
-      const editionCovers = isComic
+      const editionData = isComic
         ? buildComicEditionCovers(docs, earliestYear, primaryCover, baseTitle)
         : undefined;
+      const editionCovers = editionData?.covers;
+      const editionVariants = editionData?.variants;
 
       const curatedCounts = spec ? { ...spec.counts } : undefined;
       const editionIssueCounts: Partial<Record<ComicEditionId, number>> | undefined = isComic
@@ -709,8 +722,9 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
         : undefined;
       if (isComic && editionIssueCounts) {
         for (const d of docs) {
-          const ed = detectComicEdition(
+          const { edition: ed } = classifyRawComicEdition(
             combinedOpenLibraryTitle(d),
+            undefined,
             d.first_publish_year,
             earliestYear,
             true
@@ -729,8 +743,8 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
         if (!editionIssueCounts.digital) editionIssueCounts.digital = fallbackBase;
         if (!editionIssueCounts.tpb) editionIssueCounts.tpb = fallbackBase;
         if (spec) {
-          const allowed = new Set<ComicEditionId>(spec.availableEditions);
-          for (const key of Object.keys(editionIssueCounts) as ComicEditionId[]) {
+          const allowed = new Set<GeneralizedComicEditionId>(spec.availableEditions);
+          for (const key of Object.keys(editionIssueCounts) as GeneralizedComicEditionId[]) {
             if (!allowed.has(key)) delete editionIssueCounts[key];
           }
         }
@@ -765,6 +779,7 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
         totalUnits: isComic ? (editionIssueCounts?.digital ?? 12) : estimatedChapters,
         editionCovers,
         editionIssueCounts,
+        editionVariants,
         popularity: Math.max(totalEditions, docs.length * 3) * 5000,
       });
     }
@@ -778,6 +793,7 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
 export interface ComicEditionMetadata {
   covers: Partial<Record<ComicEditionId, string>>;
   issueCounts: Partial<Record<ComicEditionId, number>>;
+  variants: Partial<Record<GeneralizedComicEditionId, string[]>>;
 }
 
 /** Fetches per-edition cover URLs and inferred/curated collected issue counts for a comic run. */
@@ -792,13 +808,14 @@ export async function fetchComicEditionMetadata(
   const spec = getKnownComicEditionSpec(cleanTitle);
   const issueCounts: Partial<Record<ComicEditionId, number>> = { ...(spec?.counts || {}) };
   const curatedCovers: Partial<Record<ComicEditionId, string>> = { ...(spec?.covers || {}) };
-  const allowedSet = spec ? new Set<ComicEditionId>(spec.availableEditions) : null;
+  const variants: Partial<Record<GeneralizedComicEditionId, string[]>> = {};
+  const allowedSet = spec ? new Set<GeneralizedComicEditionId>(spec.availableEditions) : null;
 
   try {
     const res = await fetch(
       `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&language=eng&limit=18&fields=key,title,subtitle,author_name,first_publish_year,cover_i,number_of_pages_median`
     );
-    if (!res.ok) return { covers: curatedCovers, issueCounts };
+    if (!res.ok) return { covers: curatedCovers, issueCounts, variants };
     const data = (await res.json()) as { docs?: OpenLibraryDoc[] };
     const allWorkMatches = (data.docs || []).filter((d) => {
       if (!d.title) return false;
@@ -806,7 +823,7 @@ export async function fetchComicEditionMetadata(
       return !hasNonLatinScript(fullTitle) && canonicalReadWorkKey(fullTitle) === targetKey;
     });
     const matching = allWorkMatches.filter((d) => Boolean(d.cover_i));
-    if (allWorkMatches.length === 0) return { covers: curatedCovers, issueCounts };
+    if (allWorkMatches.length === 0) return { covers: curatedCovers, issueCounts, variants };
 
     const years = allWorkMatches
       .map((d) => d.first_publish_year)
@@ -822,16 +839,25 @@ export async function fetchComicEditionMetadata(
     const primaryCover = primaryWithCover?.cover_i
       ? `https://covers.openlibrary.org/b/id/${primaryWithCover.cover_i}-L.jpg`
       : '';
-    const covers = buildComicEditionCovers(matching, earliestYear, primaryCover, cleanTitle);
+    const built = buildComicEditionCovers(matching, earliestYear, primaryCover, cleanTitle);
+    const covers = built.covers;
+    for (const [k, tags] of Object.entries(built.variants) as Array<
+      [GeneralizedComicEditionId, string[]]
+    >) {
+      for (const tag of tags) recordVariantTag(variants, k, tag);
+    }
 
     for (const d of allWorkMatches) {
-      const ed = detectComicEdition(
+      const classified = classifyRawComicEdition(
         combinedOpenLibraryTitle(d),
+        undefined,
         d.first_publish_year,
         earliestYear,
         true
       );
+      const ed = classified.edition;
       if (allowedSet && !allowedSet.has(ed)) continue;
+      recordVariantTag(variants, ed, classified.variantTag);
       const inferred = parseCollectedIssueCount(d.subtitle, d.number_of_pages_median);
       if (!issueCounts[ed] && inferred) {
         issueCounts[ed] = inferred;
@@ -856,18 +882,21 @@ export async function fetchComicEditionMetadata(
           for (const e of edData.entries || []) {
             const yearMatch = (e.publish_date || '').match(/\b(19\d\d|20\d\d)\b/);
             const pubYear = yearMatch ? Number(yearMatch[1]) : undefined;
-            const fmtLower = `${e.title || ''} ${e.physical_format || ''}`.toLowerCase();
-            let ed: ComicEditionId = detectComicEdition(e.title || '', pubYear, earliestYear, true);
-            if (ed === 'digital') {
-              if (fmtLower.includes('hardcover') || fmtLower.includes('capa dura')) ed = 'hardcover';
-              else if (fmtLower.includes('paperback') || fmtLower.includes('softcover')) ed = 'tpb';
-            }
+            const classified = classifyRawComicEdition(
+              `${e.title || ''} ${e.subtitle || ''}`,
+              e.physical_format,
+              pubYear,
+              earliestYear,
+              true
+            );
+            const ed = classified.edition;
             if (allowedSet && !allowedSet.has(ed)) continue;
+            recordVariantTag(variants, ed, classified.variantTag);
 
             const coverId = e.covers?.find((c) => c > 0);
             if (coverId && !curatedCovers[ed]) {
               const url = `https://covers.openlibrary.org/b/id/${coverId}-L.jpg`;
-              if (!covers[ed] || (ed === 'hardcover' && fmtLower.includes('hardcover'))) {
+              if (!covers[ed] || ed === 'hardcover') {
                 covers[ed] = covers[ed] || url;
               }
             }
@@ -890,17 +919,20 @@ export async function fetchComicEditionMetadata(
 
     const mergedCovers: Partial<Record<ComicEditionId, string>> = { ...covers, ...curatedCovers };
     if (allowedSet) {
-      for (const key of Object.keys(mergedCovers) as ComicEditionId[]) {
+      for (const key of Object.keys(mergedCovers) as GeneralizedComicEditionId[]) {
         if (!allowedSet.has(key)) delete mergedCovers[key];
       }
-      for (const key of Object.keys(issueCounts) as ComicEditionId[]) {
+      for (const key of Object.keys(issueCounts) as GeneralizedComicEditionId[]) {
         if (!allowedSet.has(key)) delete issueCounts[key];
+      }
+      for (const key of Object.keys(variants) as GeneralizedComicEditionId[]) {
+        if (!allowedSet.has(key)) delete variants[key];
       }
     }
 
-    return { covers: mergedCovers, issueCounts };
+    return { covers: mergedCovers, issueCounts, variants };
   } catch {
-    return { covers: curatedCovers, issueCounts };
+    return { covers: curatedCovers, issueCounts, variants };
   }
 }
 
@@ -1554,6 +1586,7 @@ export function hydrateLiveReadItem(item: LiveSearchResult): ReadItem {
     overview: item.overview,
     editionCovers: item.editionCovers,
     editionIssueCounts: item.editionIssueCounts,
+    editionVariants: item.editionVariants,
   };
 }
 
