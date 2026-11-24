@@ -130,6 +130,9 @@ export function SearchView() {
 
   const localMatches = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const normQ = normalizeTitleKey(query);
+    const matchesQ = (text: string) =>
+      text.toLowerCase().includes(q) || (normQ.length > 0 && normalizeTitleKey(text).includes(normQ));
     const items: Array<{
       domain: 'watch' | 'read' | 'play';
       kind: 'show' | 'movie' | 'read' | 'game';
@@ -150,7 +153,7 @@ export function SearchView() {
         if (!s) continue;
         if (filter === 'tv' && s.mediaType !== 'tv') continue;
         if (filter === 'anime' && s.mediaType !== 'anime') continue;
-        if (q && !s.title.toLowerCase().includes(q) && !s.genres.some((g) => g.toLowerCase().includes(q))) continue;
+        if (q && !matchesQ(s.title) && !s.genres.some((g) => g.toLowerCase().includes(q))) continue;
         items.push({
           domain: 'watch',
           kind: 'show',
@@ -171,7 +174,7 @@ export function SearchView() {
       for (const id of state.movieOrder) {
         const m = state.movies[id];
         if (!m) continue;
-        if (q && !m.title.toLowerCase().includes(q) && !m.genres.some((g) => g.toLowerCase().includes(q))) continue;
+        if (q && !matchesQ(m.title) && !m.genres.some((g) => g.toLowerCase().includes(q))) continue;
         items.push({
           domain: 'watch',
           kind: 'movie',
@@ -195,8 +198,8 @@ export function SearchView() {
         if (filter !== 'all' && r.format !== filter) continue;
         if (
           q &&
-          !r.title.toLowerCase().includes(q) &&
-          !r.creator.toLowerCase().includes(q) &&
+          !matchesQ(r.title) &&
+          !matchesQ(r.creator) &&
           !r.genres.some((g) => g.toLowerCase().includes(q))
         )
           continue;
@@ -222,8 +225,8 @@ export function SearchView() {
         if (!g) continue;
         if (
           q &&
-          !g.title.toLowerCase().includes(q) &&
-          !g.developer.toLowerCase().includes(q) &&
+          !matchesQ(g.title) &&
+          !matchesQ(g.developer) &&
           !g.genres.some((gen) => gen.toLowerCase().includes(q))
         )
           continue;

@@ -22,6 +22,7 @@ import type {
   Movie,
   MovieWatchStatus,
   PersonalMood,
+  RatingSource,
   ReadItem,
   ReadProgress,
   ReadWatchStatus,
@@ -30,6 +31,14 @@ import type {
   ShowProgress,
   UserProfile,
 } from '../types';
+import {
+  evaluateBookSeriesProgress,
+  evaluateComicEditionContainers,
+  evaluateCustomListProgress,
+  evaluateMovieCollectionProgress,
+  findBookSeries,
+  findMovieCollection,
+} from '../utils/containers';
 import {
   getComicEditionLabel,
   getKnownComicEditionSpec,
@@ -42,7 +51,15 @@ import {
   type ImportConflictPolicy,
   type PreparedImportEntry,
 } from '../utils/mediaImport';
-import { formatEpisodeCode, getAllEpisodes, getEpisodeKey, getShowStats } from '../utils/stats';
+import { getSeasonEpisodeAverage } from '../utils/ratings';
+import {
+  formatEpisodeCode,
+  getAllEpisodes,
+  getCompletedReadUnits,
+  getEpisodeKey,
+  getSeasonProgress,
+  getShowStats,
+} from '../utils/stats';
 
 const STORAGE_KEY = 'cue_state_v3';
 const LEGACY_V2_KEY = 'cue_state_v2';
@@ -66,6 +83,9 @@ function loadInitialState(): CueStoreState {
       if (parsed && parsed.shows && parsed.movies && parsed.readItems && parsed.games) {
         if (!Array.isArray(parsed.history)) {
           parsed.history = [];
+        }
+        if (!parsed.collectionRatings) {
+          parsed.collectionRatings = {};
         }
         if (parsed.settings && !parsed.settings.detailMode) {
           parsed.settings.detailMode = 'simple';
@@ -134,7 +154,10 @@ interface CueContextValue {
   state: CueStoreState;
   route: RouteView;
   canGoBack: boolean;
-  switchTab: (tab: 'watch' | 'read' | 'play' | 'journal' | 'search', calendarMode?: boolean) => void;
+  switchTab: (
+    tab: 'queue' | 'watch' | 'read' | 'play' | 'journal' | 'search',
+    calendarMode?: boolean
+  ) => void;
   pushRoute: (next: RouteView) => void;
   goBack: () => void;
   toggleCalendarMode: () => void;
@@ -168,22 +191,31 @@ interface CueContextValue {
   markShowAllWatched: (showId: string) => void;
   startShowRewatch: (showId: string) => void;
   resetShowProgress: (showId: string) => void;
-  rateShow: (showId: string, rating: number) => void;
+  rateEpisode: (showId: string, season: number, number: number, rating: number | undefined) => void;
+  rateSeason: (
+    showId: string,
+    seasonNumber: number,
+    rating: number | undefined,
+    source?: RatingSource
+  ) => void;
+  rateShow: (showId: string, rating: number | undefined, source?: RatingSource) => void;
   setShowMood: (showId: string, mood: PersonalMood | undefined) => void;
 
   toggleMovieWatched: (movieId: string) => void;
   incrementMovieRewatch: (movieId: string, delta: number) => void;
   toggleMovieWatchlist: (movieId: string) => void;
-  rateMovie: (movieId: string, rating: number) => void;
+  rateMovie: (movieId: string, rating: number | undefined) => void;
   setMovieMood: (movieId: string, mood: PersonalMood | undefined) => void;
 
   // Read actions
   advanceReadProgress: (readId: string, delta?: number) => void;
   setReadProgress: (readId: string, currentUnit: number) => void;
+  toggleReadUnit: (readId: string, unitNumber: number) => void;
   markReadFinished: (readId: string) => void;
   incrementReread: (readId: string, delta: number) => void;
   toggleReadBookmark: (readId: string) => void;
-  rateReadItem: (readId: string, rating: number) => void;
+  rateReadUnit: (readId: string, unitNumber: number, rating: number | undefined) => void;
+  rateReadItem: (readId: string, rating: number | undefined, source?: RatingSource) => void;
   setReadMood: (readId: string, mood: PersonalMood | undefined) => void;
   setReadEdition: (readId: string, edition: ComicEditionId) => void;
   updateReadEditionCovers: (
@@ -219,9 +251,18 @@ interface CueContextValue {
   toggleGamePlatinum: (gameId: string) => void;
   incrementGamePlaythrough: (gameId: string, delta: number) => void;
   toggleGameBookmark: (gameId: string) => void;
-  rateGame: (gameId: string, rating: number) => void;
+  rateGame: (gameId: string, rating: number | undefined) => void;
   setGameMood: (gameId: string, mood: PersonalMood | undefined) => void;
   resetGameProgress: (gameId: string) => void;
+
+  // Collection & List actions
+  rateCollection: (
+    collectionKey: string,
+    rating: number | undefined,
+    source?: RatingSource
+  ) => void;
+  toggleListPinnedToQueue: (listId: string) => void;
+  deleteCustomList: (listId: string) => void;
 
   // Live catalog additions
   addLiveShowToStore: (show: Show, andBookmark?: boolean) => void;
@@ -272,7 +313,7 @@ const CueContext = createContext<CueContextValue | null>(null);
 
 export function CueProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<CueStoreState>(loadInitialState);
-  const [routeStack, setRouteStack] = useState<RouteView[]>([{ view: 'watch', calendarMode: false }]);
+  const [routeStack, setRouteStack] = useState<RouteView[]>([{ view: 'queue' }]);
   const [toast, setToast] = useState<ToastItem | null>(null);
   const [activeBanner, setActiveBanner] = useState<ReleaseBannerData | null>(null);
 
@@ -328,6 +369,18 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     setToast({ id: String(Date.now()), message, actionLabel, onAction });
   }, []);
 
+  const commitState = useCallback(
+    (updater: (prev: CueStoreState) => CueStoreState): CueStoreState => {
+      const next = updater(stateRef.current);
+      if (next !== stateRef.current) {
+        stateRef.current = next;
+        setState(next);
+      }
+      return next;
+    },
+    []
+  );
+
   const hydrateFromCloud = useCallback((cloudState: CueStoreState, cloudTs: number) => {
     if (!Array.isArray(cloudState.history)) {
       cloudState.history = [];
@@ -340,6 +393,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore storage quota
     }
+    stateRef.current = cloudState;
     setState(cloudState);
     setLastSyncedAt(cloudTs);
     setSyncStatus('synced');
@@ -541,7 +595,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const dismissBanner = useCallback(() => setActiveBanner(null), []);
 
   const switchTab = useCallback(
-    (tab: 'watch' | 'read' | 'play' | 'journal' | 'search', calendarMode = false) => {
+    (
+      tab: 'queue' | 'watch' | 'read' | 'play' | 'journal' | 'search',
+      calendarMode = false
+    ) => {
       if (tab === 'watch' || tab === 'read' || tab === 'play') {
         setRouteStack([{ view: tab, calendarMode }]);
         return;
@@ -586,7 +643,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       mediaId: firstShow?.id,
     };
     setActiveBanner(banner);
-    setState((prev) => ({
+    commitState((prev) => ({
       ...prev,
       notifications: [
         {
@@ -623,35 +680,73 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           ? 'watching'
           : 'not_started';
     return {
+      ...(prev || {}),
       status,
       episodeCounts: nextCounts,
       bookmarked: prev?.bookmarked ?? true,
       notifications: prev?.notifications ?? true,
       lastWatchedAt: new Date().toISOString(),
-      rating: prev?.rating,
-      mood: prev?.mood,
     };
+  };
+
+  const buildShowSeasonToast = (
+    show: Show,
+    seasonNumber: number,
+    prevProg?: ShowProgress,
+    nextProg?: ShowProgress
+  ): { msg: string; actionLabel?: string } | null => {
+    const beforeSp = getSeasonProgress(show, seasonNumber, prevProg);
+    const afterSp = getSeasonProgress(show, seasonNumber, nextProg);
+    if (beforeSp.watched < beforeSp.total && afterSp.watched >= afterSp.total && afterSp.total > 0) {
+      const epAvg = getSeasonEpisodeAverage(show, seasonNumber, nextProg);
+      if (epAvg && epAvg.count > 0) {
+        return {
+          msg: `Season ${seasonNumber} of ${show.title} finished · Episode avg: ${epAvg.avg.toFixed(2)} ★`,
+          actionLabel: 'Rate season',
+        };
+      }
+      const overallStats = getShowStats(show, nextProg);
+      if (overallStats.isFinished) {
+        return {
+          msg: `Finished ${show.title}!`,
+          actionLabel: 'Rate show',
+        };
+      }
+      return {
+        msg: `Finished Season ${seasonNumber} of ${show.title}!`,
+        actionLabel: 'Rate season',
+      };
+    }
+    return null;
   };
 
   const watchNextEpisode = useCallback(
     (showId: string) => {
-      let watchedLabel = '';
-      let showTitle = '';
-      setState((prev) => {
+      let toastMsg = '';
+      let toastAction: string | undefined = 'Log note';
+      commitState((prev) => {
         const show = prev.shows[showId];
         if (!show) return prev;
-        showTitle = show.title;
         const prog = prev.showProgress[showId];
         const stats = getShowStats(show, prog);
         const targetEp = stats.nextEpisode;
         if (!targetEp) return prev;
 
         const epKey = getEpisodeKey(targetEp.season, targetEp.number);
-        watchedLabel = formatEpisodeCode(targetEp.season, targetEp.number);
+        const watchedLabel = formatEpisodeCode(targetEp.season, targetEp.number);
         const nextCounts = {
           ...(prog?.episodeCounts || {}),
           [epKey]: Math.max(1, (prog?.episodeCounts?.[epKey] || 0) + 1),
         };
+        const updatedProg = recomputeShowStatus(show, nextCounts, prog);
+        const seasonNudge = buildShowSeasonToast(show, targetEp.season, prog, updatedProg);
+        if (seasonNudge) {
+          toastMsg = seasonNudge.msg;
+          toastAction = seasonNudge.actionLabel || 'Log note';
+        } else {
+          toastMsg = `Watched ${show.title} · ${watchedLabel}`;
+          toastAction = 'Log note';
+        }
         const historyEntry: HistoryEntry = {
           id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           domain: 'watch',
@@ -667,7 +762,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           ...prev,
           showProgress: {
             ...prev.showProgress,
-            [showId]: recomputeShowStatus(show, nextCounts, prog),
+            [showId]: updatedProg,
           },
           upcoming: prev.upcoming.filter(
             (u) => !(u.kind === 'episode' && u.mediaId === showId && u.daysUntil === 0)
@@ -676,39 +771,49 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         };
       });
 
-      if (watchedLabel) {
-        showToast(`Watched ${showTitle} · ${watchedLabel}`, 'Log note', () => {
-          pushRoute({ view: 'show-detail', showId });
-        });
+      if (toastMsg) {
+        showToast(toastMsg, toastAction, () => pushRoute({ view: 'show-detail', showId }));
       }
     },
     [pushRoute, showToast]
   );
 
-  const toggleEpisodeWatched = useCallback((showId: string, season: number, number: number) => {
-    setState((prev) => {
-      const show = prev.shows[showId];
-      if (!show) return prev;
-      const prog = prev.showProgress[showId];
-      const epKey = getEpisodeKey(season, number);
-      const current = prog?.episodeCounts?.[epKey] || 0;
-      const nextCounts = {
-        ...(prog?.episodeCounts || {}),
-        [epKey]: current > 0 ? 0 : 1,
-      };
-      return {
-        ...prev,
-        showProgress: {
-          ...prev.showProgress,
-          [showId]: recomputeShowStatus(show, nextCounts, prog),
-        },
-      };
-    });
-  }, []);
+  const toggleEpisodeWatched = useCallback(
+    (showId: string, season: number, number: number) => {
+      let seasonToast: { msg: string; actionLabel?: string } | null = null;
+      commitState((prev) => {
+        const show = prev.shows[showId];
+        if (!show) return prev;
+        const prog = prev.showProgress[showId];
+        const epKey = getEpisodeKey(season, number);
+        const current = prog?.episodeCounts?.[epKey] || 0;
+        const nextCounts = {
+          ...(prog?.episodeCounts || {}),
+          [epKey]: current > 0 ? 0 : 1,
+        };
+        const updatedProg = recomputeShowStatus(show, nextCounts, prog);
+        if (current === 0) {
+          seasonToast = buildShowSeasonToast(show, season, prog, updatedProg);
+        }
+        return {
+          ...prev,
+          showProgress: {
+            ...prev.showProgress,
+            [showId]: updatedProg,
+          },
+        };
+      });
+      if (seasonToast) {
+        const { msg, actionLabel } = seasonToast;
+        showToast(msg, actionLabel);
+      }
+    },
+    [showToast]
+  );
 
   const incrementEpisodeRewatch = useCallback(
     (showId: string, season: number, number: number, delta: number) => {
-      setState((prev) => {
+      commitState((prev) => {
         const show = prev.shows[showId];
         if (!show) return prev;
         const prog = prev.showProgress[showId];
@@ -733,7 +838,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const toggleShowBookmark = useCallback(
     (showId: string) => {
       let nextBookmarked = true;
-      setState((prev) => {
+      commitState((prev) => {
         const existing = prev.showProgress[showId];
         nextBookmarked = !(existing?.bookmarked ?? false);
         return {
@@ -741,13 +846,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           showProgress: {
             ...prev.showProgress,
             [showId]: {
+              ...(existing || {}),
               status: existing?.status || 'not_started',
               episodeCounts: existing?.episodeCounts || {},
               bookmarked: nextBookmarked,
               notifications: existing?.notifications ?? true,
-              lastWatchedAt: existing?.lastWatchedAt,
-              rating: existing?.rating,
-              mood: existing?.mood,
             },
           },
         };
@@ -760,7 +863,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const toggleShowNotifications = useCallback(
     (showId: string) => {
       let nextVal = true;
-      setState((prev) => {
+      commitState((prev) => {
         const existing = prev.showProgress[showId];
         nextVal = !(existing?.notifications ?? true);
         return {
@@ -768,13 +871,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           showProgress: {
             ...prev.showProgress,
             [showId]: {
+              ...(existing || {}),
               status: existing?.status || 'not_started',
               episodeCounts: existing?.episodeCounts || {},
               bookmarked: existing?.bookmarked ?? true,
               notifications: nextVal,
-              lastWatchedAt: existing?.lastWatchedAt,
-              rating: existing?.rating,
-              mood: existing?.mood,
             },
           },
         };
@@ -786,7 +887,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const markSeasonWatched = useCallback(
     (showId: string, seasonNumber: number, rewatchIfDone = false) => {
-      setState((prev) => {
+      let toastMsg = `Updated Season ${seasonNumber}`;
+      commitState((prev) => {
         const show = prev.shows[showId];
         if (!show) return prev;
         const season = show.seasons.find((s) => s.number === seasonNumber);
@@ -802,22 +904,41 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           else if (allWatched) nextCounts[k] = 0;
           else nextCounts[k] = Math.max(1, nextCounts[k] || 0);
         }
+        const updatedProg = recomputeShowStatus(show, nextCounts, prog);
+        const seasonToast = buildShowSeasonToast(show, seasonNumber, prog, updatedProg);
+        if (seasonToast) {
+          toastMsg = seasonToast.msg;
+        }
+        const nextHistory = !allWatched
+          ? appendHistory(prev.history || [], {
+              id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              domain: 'watch',
+              mediaKind: 'show',
+              mediaId: showId,
+              title: show.title,
+              posterUrl: show.posterUrl,
+              codeLabel: `Season ${seasonNumber} Complete`,
+              subtitle: `${season.episodes.length} episodes`,
+              loggedAt: new Date().toISOString(),
+            })
+          : prev.history;
         return {
           ...prev,
           showProgress: {
             ...prev.showProgress,
-            [showId]: recomputeShowStatus(show, nextCounts, prog),
+            [showId]: updatedProg,
           },
+          history: nextHistory,
         };
       });
-      showToast(`Updated Season ${seasonNumber}`);
+      showToast(toastMsg);
     },
     [showToast]
   );
 
   const markShowAllWatched = useCallback(
     (showId: string) => {
-      setState((prev) => {
+      commitState((prev) => {
         const show = prev.shows[showId];
         if (!show) return prev;
         const prog = prev.showProgress[showId];
@@ -841,7 +962,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const startShowRewatch = useCallback(
     (showId: string) => {
-      setState((prev) => {
+      commitState((prev) => {
         const show = prev.shows[showId];
         if (!show) return prev;
         const prog = prev.showProgress[showId];
@@ -865,7 +986,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const resetShowProgress = useCallback(
     (showId: string) => {
-      setState((prev) => {
+      commitState((prev) => {
         const show = prev.shows[showId];
         if (!show) return prev;
         const prog = prev.showProgress[showId];
@@ -882,41 +1003,111 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     [showToast]
   );
 
-  const rateShow = useCallback((showId: string, rating: number) => {
-    setState((prev) => {
-      const existing = prev.showProgress[showId];
-      return {
-        ...prev,
-        showProgress: {
-          ...prev.showProgress,
-          [showId]: {
-            status: existing?.status || 'watching',
-            episodeCounts: existing?.episodeCounts || {},
-            bookmarked: existing?.bookmarked ?? true,
-            notifications: existing?.notifications ?? true,
-            lastWatchedAt: existing?.lastWatchedAt,
-            rating,
-            mood: existing?.mood,
+  const rateEpisode = useCallback(
+    (showId: string, season: number, number: number, rating: number | undefined) => {
+      const epKey = getEpisodeKey(season, number);
+      commitState((prev) => {
+        const existing = prev.showProgress[showId];
+        const nextEpRatings = { ...(existing?.episodeRatings || {}) };
+        if (typeof rating === 'number' && rating > 0) {
+          nextEpRatings[epKey] = rating;
+        } else {
+          delete nextEpRatings[epKey];
+        }
+        return {
+          ...prev,
+          showProgress: {
+            ...prev.showProgress,
+            [showId]: {
+              ...(existing || {}),
+              status: existing?.status || 'watching',
+              episodeCounts: existing?.episodeCounts || {},
+              bookmarked: existing?.bookmarked ?? true,
+              notifications: existing?.notifications ?? true,
+              episodeRatings: nextEpRatings,
+            },
           },
-        },
-      };
-    });
-  }, []);
+        };
+      });
+    },
+    []
+  );
+
+  const rateSeason = useCallback(
+    (
+      showId: string,
+      seasonNumber: number,
+      rating: number | undefined,
+      source: RatingSource = 'manual'
+    ) => {
+      commitState((prev) => {
+        const existing = prev.showProgress[showId];
+        const nextSeasonRatings = { ...(existing?.seasonRatings || {}) };
+        const nextSeasonSources = { ...(existing?.seasonRatingSource || {}) };
+        if (typeof rating === 'number' && rating > 0) {
+          nextSeasonRatings[seasonNumber] = rating;
+          nextSeasonSources[seasonNumber] = source;
+        } else {
+          delete nextSeasonRatings[seasonNumber];
+          delete nextSeasonSources[seasonNumber];
+        }
+        return {
+          ...prev,
+          showProgress: {
+            ...prev.showProgress,
+            [showId]: {
+              ...(existing || {}),
+              status: existing?.status || 'watching',
+              episodeCounts: existing?.episodeCounts || {},
+              bookmarked: existing?.bookmarked ?? true,
+              notifications: existing?.notifications ?? true,
+              seasonRatings: nextSeasonRatings,
+              seasonRatingSource: nextSeasonSources,
+            },
+          },
+        };
+      });
+    },
+    []
+  );
+
+  const rateShow = useCallback(
+    (showId: string, rating: number | undefined, source: RatingSource = 'manual') => {
+      commitState((prev) => {
+        const existing = prev.showProgress[showId];
+        return {
+          ...prev,
+          showProgress: {
+            ...prev.showProgress,
+            [showId]: {
+              ...(existing || {}),
+              status: existing?.status || 'watching',
+              episodeCounts: existing?.episodeCounts || {},
+              bookmarked: existing?.bookmarked ?? true,
+              notifications: existing?.notifications ?? true,
+              rating,
+              ratingSource: rating ? source : undefined,
+            },
+          },
+        };
+      });
+    },
+    []
+  );
 
   const setShowMood = useCallback((showId: string, mood: PersonalMood | undefined) => {
-    setState((prev) => {
+    commitState((prev) => {
       const existing = prev.showProgress[showId];
       return {
         ...prev,
         showProgress: {
           ...prev.showProgress,
           [showId]: {
+            ...(existing || {}),
             status: existing?.status || 'watching',
             episodeCounts: existing?.episodeCounts || {},
             bookmarked: existing?.bookmarked ?? true,
             notifications: existing?.notifications ?? true,
-            lastWatchedAt: existing?.lastWatchedAt,
-            rating: existing?.rating,
             mood,
           },
         },
@@ -926,15 +1117,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const toggleMovieWatched = useCallback(
     (movieId: string) => {
-      let nowWatched = true;
-      let title = '';
-      setState((prev) => {
+      let msg = '';
+      let actionLabel: string | undefined;
+      commitState((prev) => {
         const movie = prev.movies[movieId];
         if (!movie) return prev;
-        title = movie.title;
         const existing = prev.movieProgress[movieId];
         const isWatched = (existing?.watchCount || 0) > 0;
-        nowWatched = !isWatched;
+        const nowWatched = !isWatched;
         const nextHistory = nowWatched
           ? appendHistory(prev.history || [], {
               id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -948,27 +1138,48 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               loggedAt: new Date().toISOString(),
             })
           : prev.history;
-        return {
-          ...prev,
-          movieProgress: {
-            ...prev.movieProgress,
-            [movieId]: {
-              status: isWatched ? 'watchlist' : 'watched',
-              watchCount: isWatched ? 0 : 1,
-              watchedAt: isWatched ? undefined : new Date().toISOString(),
-              rating: existing?.rating,
-              mood: existing?.mood,
-            },
+        const nextMovieProgress = {
+          ...prev.movieProgress,
+          [movieId]: {
+            ...(existing || {}),
+            status: (isWatched ? 'watchlist' : 'watched') as MovieWatchStatus,
+            watchCount: isWatched ? 0 : 1,
+            watchedAt: isWatched ? undefined : new Date().toISOString(),
           },
+        };
+        const nextState: CueStoreState = {
+          ...prev,
+          movieProgress: nextMovieProgress,
           history: nextHistory,
         };
+
+        if (nowWatched) {
+          const col = findMovieCollection(movie.title, movie.year);
+          if (col) {
+            const ev = evaluateMovieCollectionProgress(col, nextState);
+            if (ev.isComplete) {
+              msg = `Nice — ${movie.title} completes ${col.name} (${ev.watchedCount}/${ev.totalCount})!`;
+              actionLabel = 'View trilogy';
+            } else if (ev.remainingCount === 1) {
+              msg = `Watched ${movie.title} · 1 more film to finish ${col.name} (${ev.watchedCount}/${ev.totalCount})`;
+              actionLabel = 'Journal';
+            } else {
+              msg = `Watched ${movie.title} · ${col.name} (${ev.watchedCount}/${ev.totalCount})`;
+              actionLabel = 'Journal';
+            }
+          } else {
+            msg = `Watched ${movie.title}`;
+            actionLabel = 'Journal';
+          }
+        } else {
+          msg = `Moved ${movie.title} back to Watchlist`;
+          actionLabel = undefined;
+        }
+
+        return nextState;
       });
-      if (title) {
-        showToast(
-          nowWatched ? `Watched ${title}` : `Moved ${title} back to Watchlist`,
-          nowWatched ? 'Journal' : undefined,
-          () => pushRoute({ view: 'movie-detail', movieId })
-        );
+      if (msg) {
+        showToast(msg, actionLabel, () => pushRoute({ view: 'movie-detail', movieId }));
       }
     },
     [pushRoute, showToast]
@@ -976,7 +1187,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const incrementMovieRewatch = useCallback(
     (movieId: string, delta: number) => {
-      setState((prev) => {
+      commitState((prev) => {
         const existing = prev.movieProgress[movieId];
         const nextCount = Math.max(0, (existing?.watchCount || 0) + delta);
         return {
@@ -984,11 +1195,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           movieProgress: {
             ...prev.movieProgress,
             [movieId]: {
+              ...(existing || {}),
               status: nextCount > 0 ? 'watched' : 'watchlist',
               watchCount: nextCount,
               watchedAt: nextCount > 0 ? new Date().toISOString() : undefined,
-              rating: existing?.rating,
-              mood: existing?.mood,
             },
           },
         };
@@ -1001,7 +1211,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const toggleMovieWatchlist = useCallback(
     (movieId: string) => {
       let inList = true;
-      setState((prev) => {
+      commitState((prev) => {
         const existing = prev.movieProgress[movieId];
         if (existing) {
           inList = false;
@@ -1023,19 +1233,19 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     [showToast]
   );
 
-  const rateMovie = useCallback((movieId: string, rating: number) => {
-    setState((prev) => {
+  const rateMovie = useCallback((movieId: string, rating: number | undefined) => {
+    commitState((prev) => {
       const existing = prev.movieProgress[movieId];
       return {
         ...prev,
         movieProgress: {
           ...prev.movieProgress,
           [movieId]: {
+            ...(existing || {}),
             status: existing?.status || 'watched',
             watchCount: Math.max(1, existing?.watchCount || 0),
             watchedAt: existing?.watchedAt || new Date().toISOString(),
             rating,
-            mood: existing?.mood,
           },
         },
       };
@@ -1043,17 +1253,16 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setMovieMood = useCallback((movieId: string, mood: PersonalMood | undefined) => {
-    setState((prev) => {
+    commitState((prev) => {
       const existing = prev.movieProgress[movieId];
       return {
         ...prev,
         movieProgress: {
           ...prev.movieProgress,
           [movieId]: {
+            ...(existing || {}),
             status: existing?.status || 'watchlist',
             watchCount: existing?.watchCount || 0,
-            watchedAt: existing?.watchedAt,
-            rating: existing?.rating,
             mood,
           },
         },
@@ -1065,40 +1274,156 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const normalizeReadProgress = (
     item: ReadItem,
     nextUnit: number,
-    prev?: ReadProgress
+    prev?: ReadProgress,
+    completedUnitsOverride?: number[]
   ): ReadProgress => {
-    const clamped = Math.min(item.totalUnits, Math.max(0, nextUnit));
-    const finished = clamped >= item.totalUnits;
+    const total = Math.max(1, item.totalUnits);
+    let completed: number[];
+    if (completedUnitsOverride) {
+      completed = [...new Set(completedUnitsOverride.filter((n) => Number.isFinite(n) && n >= 1))].sort(
+        (a, b) => a - b
+      );
+    } else {
+      const existingHigh = (prev?.completedUnits || []).filter((n) => n > total);
+      const clampedCount = Math.min(total, Math.max(0, Math.round(nextUnit)));
+      const base: number[] = [];
+      for (let i = 1; i <= clampedCount; i += 1) base.push(i);
+      completed = [...new Set([...base, ...existingHigh])].sort((a, b) => a - b);
+    }
+    const activeCount = completed.filter((n) => n <= total).length;
+    const finished = activeCount >= total;
     const prevMax = prev?.maxCompletedUnit ?? prev?.currentUnit ?? 0;
     return {
-      status: finished ? 'finished' : clamped > 0 ? 'reading' : 'want_to_read',
-      currentUnit: clamped,
-      maxCompletedUnit: Math.max(clamped, prevMax),
+      ...(prev || {}),
+      status: finished ? 'finished' : activeCount > 0 ? 'reading' : 'want_to_read',
+      currentUnit: activeCount,
+      completedUnits: completed,
+      maxCompletedUnit: Math.max(activeCount, prevMax),
       rereadCount: finished ? Math.max(1, prev?.rereadCount || 0) : prev?.rereadCount || 0,
       bookmarked: prev?.bookmarked ?? true,
       edition: prev?.edition,
-      lastReadAt: clamped > 0 ? new Date().toISOString() : prev?.lastReadAt,
-      rating: prev?.rating,
-      mood: prev?.mood,
+      lastReadAt: activeCount > 0 ? new Date().toISOString() : prev?.lastReadAt,
     };
+  };
+
+  const computeReadSmartNudge = (
+    item: ReadItem,
+    prevProg: ReadProgress | undefined,
+    updatedProg: ReadProgress,
+    unitLabel: string,
+    nextState: CueStoreState
+  ): { msg: string; actionLabel?: string } => {
+    if (item.format === 'comic') {
+      const before = evaluateComicEditionContainers(item, prevProg);
+      const after = evaluateComicEditionContainers(item, updatedProg);
+      const activeId = updatedProg.edition || 'digital';
+      const newlyCompletedOther = after.filter((a) => {
+        if (a.id === activeId || !a.isTechnicallyComplete) return false;
+        const b = before.find((x) => x.id === a.id);
+        return Boolean(b && !b.isTechnicallyComplete);
+      });
+
+      if (newlyCompletedOther.length > 0) {
+        const labels = newlyCompletedOther.map((e) => e.label);
+        const names =
+          labels.length > 1
+            ? `${labels.slice(0, -1).join(', ')} & ${labels[labels.length - 1]}`
+            : labels[0];
+        const sample = newlyCompletedOther[0];
+        const prefix = updatedProg.status === 'finished' ? `Finished ${item.title}` : unitLabel;
+        return {
+          msg: `${prefix} · Technically completes ${names} (${sample.completedIssues}/${sample.totalIssues})!`,
+          actionLabel: 'Inspect',
+        };
+      }
+
+      const oneAwayOther = after.find((a) => {
+        if (a.id === activeId || a.remainingIssues !== 1) return false;
+        const b = before.find((x) => x.id === a.id);
+        return Boolean(b && b.completedIssues < a.completedIssues);
+      });
+      if (oneAwayOther && updatedProg.status !== 'finished') {
+        return {
+          msg: `${item.title} · ${unitLabel} (1 more issue until ${oneAwayOther.label})`,
+          actionLabel: 'Log note',
+        };
+      }
+    }
+
+    if (item.format === 'novel' && updatedProg.status === 'finished') {
+      const series = findBookSeries(item.title);
+      if (series) {
+        const ev = evaluateBookSeriesProgress(series, nextState);
+        if (ev.isComplete) {
+          return {
+            msg: `Finished ${item.title} · Completes ${series.name} (${ev.finishedCount}/${ev.totalCount})!`,
+            actionLabel: 'Rate series',
+          };
+        }
+        if (ev.remainingCount === 1) {
+          return {
+            msg: `Finished ${item.title} · 1 book left in ${series.name} (${ev.finishedCount}/${ev.totalCount})`,
+            actionLabel: 'View series',
+          };
+        }
+        return {
+          msg: `Finished ${item.title} · ${series.name} (${ev.finishedCount}/${ev.totalCount})`,
+          actionLabel: 'View series',
+        };
+      }
+    }
+
+    if (updatedProg.status === 'finished') {
+      return { msg: `Finished ${item.title}`, actionLabel: 'Log note' };
+    }
+    return { msg: `${item.title} · ${unitLabel}`, actionLabel: 'Log note' };
   };
 
   const advanceReadProgress = useCallback(
     (readId: string, delta?: number) => {
       let msg = '';
-      setState((prev) => {
+      let actionLabel: string | undefined = 'Log note';
+      commitState((prev) => {
         const item = prev.readItems[readId];
         if (!item) return prev;
         const prog = prev.readProgress[readId];
         const step = delta ?? 1;
-        const nextVal = Math.min(item.totalUnits, (prog?.currentUnit || 0) + step);
-        const updated = normalizeReadProgress(item, nextVal, prog);
+        const prevUnits = getCompletedReadUnits(item, prog);
+        const existingHigh = (prog?.completedUnits || []).filter((n) => n > item.totalUnits);
+        let nextActive = [...prevUnits];
+        let touchedUnit = prog?.currentUnit || 0;
+
+        if (step > 0) {
+          for (let s = 0; s < step; s += 1) {
+            const set = new Set(nextActive);
+            let nextMissing: number | null = null;
+            for (let u = 1; u <= item.totalUnits; u += 1) {
+              if (!set.has(u)) {
+                nextMissing = u;
+                break;
+              }
+            }
+            if (nextMissing === null) break;
+            nextActive.push(nextMissing);
+            touchedUnit = nextMissing;
+          }
+        } else if (step < 0) {
+          for (let s = 0; s < Math.abs(step); s += 1) {
+            if (nextActive.length === 0) break;
+            nextActive.pop();
+          }
+          touchedUnit = nextActive[nextActive.length - 1] || 0;
+        }
+
+        const combined = [...new Set([...nextActive, ...existingHigh])].sort((a, b) => a - b);
+        const updated = normalizeReadProgress(item, nextActive.length, prog, combined);
         const unitLabel =
-          item.unit === 'issues' ? `Issue #${updated.currentUnit}` : `Ch. ${updated.currentUnit}`;
-        msg = updated.status === 'finished' ? `Finished ${item.title}` : `${item.title} · ${unitLabel}`;
+          item.unit === 'issues'
+            ? `Issue #${step > 0 ? touchedUnit : updated.currentUnit}`
+            : `Ch. ${step > 0 ? touchedUnit : updated.currentUnit}`;
         const activeCover = resolveComicEditionCover(item, updated.edition);
         const nextHistory =
-          step > 0
+          step > 0 && touchedUnit > 0
             ? appendHistory(prev.history || [], {
                 id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
                 domain: 'read',
@@ -1111,21 +1436,25 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 loggedAt: new Date().toISOString(),
               })
             : prev.history;
-        return {
+        const nextState: CueStoreState = {
           ...prev,
           readProgress: { ...prev.readProgress, [readId]: updated },
           history: nextHistory,
         };
+        const nudge = computeReadSmartNudge(item, prog, updated, unitLabel, nextState);
+        msg = nudge.msg;
+        actionLabel = nudge.actionLabel;
+        return nextState;
       });
       if (msg) {
-        showToast(msg, 'Log note', () => pushRoute({ view: 'read-detail', readId }));
+        showToast(msg, actionLabel, () => pushRoute({ view: 'read-detail', readId }));
       }
     },
     [pushRoute, showToast]
   );
 
   const setReadProgress = useCallback((readId: string, currentUnit: number) => {
-    setState((prev) => {
+    commitState((prev) => {
       const item = prev.readItems[readId];
       if (!item) return prev;
       const prog = prev.readProgress[readId];
@@ -1139,9 +1468,57 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const toggleReadUnit = useCallback(
+    (readId: string, unitNumber: number) => {
+      let msg = '';
+      let actionLabel: string | undefined;
+      commitState((prev) => {
+        const item = prev.readItems[readId];
+        if (!item || unitNumber < 1 || unitNumber > item.totalUnits) return prev;
+        const prog = prev.readProgress[readId];
+        const prevUnits = getCompletedReadUnits(item, prog);
+        const existingHigh = (prog?.completedUnits || []).filter((n) => n > item.totalUnits);
+        const hadUnit = prevUnits.includes(unitNumber);
+        const nextActive = hadUnit
+          ? prevUnits.filter((u) => u !== unitNumber)
+          : [...prevUnits, unitNumber].sort((a, b) => a - b);
+        const combined = [...new Set([...nextActive, ...existingHigh])].sort((a, b) => a - b);
+        const updated = normalizeReadProgress(item, nextActive.length, prog, combined);
+        const unitLabel = item.unit === 'issues' ? `Issue #${unitNumber}` : `Ch. ${unitNumber}`;
+        const activeCover = resolveComicEditionCover(item, updated.edition);
+        const nextHistory = !hadUnit
+          ? appendHistory(prev.history || [], {
+              id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              domain: 'read',
+              mediaKind: 'read',
+              mediaId: readId,
+              title: item.title,
+              posterUrl: activeCover,
+              codeLabel: unitLabel,
+              subtitle: item.creator,
+              loggedAt: new Date().toISOString(),
+            })
+          : prev.history;
+        const nextState: CueStoreState = {
+          ...prev,
+          readProgress: { ...prev.readProgress, [readId]: updated },
+          history: nextHistory,
+        };
+        if (!hadUnit) {
+          const nudge = computeReadSmartNudge(item, prog, updated, unitLabel, nextState);
+          msg = nudge.msg;
+          actionLabel = nudge.actionLabel;
+        }
+        return nextState;
+      });
+      if (msg) showToast(msg, actionLabel, () => pushRoute({ view: 'read-detail', readId }));
+    },
+    [pushRoute, showToast]
+  );
+
   const updateReadTotalUnits = useCallback((readId: string, totalUnits: number) => {
     const safeTotal = Math.max(1, Math.round(totalUnits));
-    setState((prev) => {
+    commitState((prev) => {
       const item = prev.readItems[readId];
       if (!item) return prev;
       const prog = prev.readProgress[readId];
@@ -1158,7 +1535,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         ...prev,
         readItems: { ...prev.readItems, [readId]: updatedItem },
         readProgress: prog
-          ? { ...prev.readProgress, [readId]: normalizeReadProgress(updatedItem, prog.currentUnit, prog) }
+          ? {
+              ...prev.readProgress,
+              [readId]: normalizeReadProgress(updatedItem, prog.currentUnit, prog, prog.completedUnits),
+            }
           : prev.readProgress,
       };
     });
@@ -1166,39 +1546,65 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const markReadFinished = useCallback(
     (readId: string) => {
-      let title = '';
-      setState((prev) => {
+      let msg = '';
+      let actionLabel: string | undefined;
+      commitState((prev) => {
         const item = prev.readItems[readId];
         if (!item) return prev;
-        title = item.title;
         const prog = prev.readProgress[readId];
         const isDone = prog?.status === 'finished';
-        return {
-          ...prev,
-          readProgress: {
-            ...prev.readProgress,
-            [readId]: {
-              status: isDone ? 'finished' : 'finished',
-              currentUnit: item.totalUnits,
-              maxCompletedUnit: Math.max(item.totalUnits, prog?.maxCompletedUnit || 0),
-              rereadCount: isDone ? (prog?.rereadCount || 1) + 1 : Math.max(1, prog?.rereadCount || 0),
-              bookmarked: prog?.bookmarked ?? true,
-              edition: prog?.edition,
-              lastReadAt: new Date().toISOString(),
-              rating: prog?.rating,
-              mood: prog?.mood,
-            },
-          },
+        const existingHigh = (prog?.completedUnits || []).filter((n) => n > item.totalUnits);
+        const allUnits: number[] = [];
+        for (let i = 1; i <= item.totalUnits; i += 1) allUnits.push(i);
+        const combined = [...new Set([...allUnits, ...existingHigh])].sort((a, b) => a - b);
+        const updated: ReadProgress = {
+          ...(prog || {}),
+          status: 'finished',
+          currentUnit: item.totalUnits,
+          completedUnits: combined,
+          maxCompletedUnit: Math.max(item.totalUnits, prog?.maxCompletedUnit || 0),
+          rereadCount: isDone ? (prog?.rereadCount || 1) + 1 : Math.max(1, prog?.rereadCount || 0),
+          bookmarked: prog?.bookmarked ?? true,
+          edition: prog?.edition,
+          lastReadAt: new Date().toISOString(),
         };
+        const activeCover = resolveComicEditionCover(item, updated.edition);
+        const editionLabel =
+          item.format === 'comic' && updated.edition
+            ? getComicEditionLabel(updated.edition, item)
+            : '';
+        const nextHistory = !isDone
+          ? appendHistory(prev.history || [], {
+              id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              domain: 'read',
+              mediaKind: 'read',
+              mediaId: readId,
+              title: item.title,
+              posterUrl: activeCover,
+              codeLabel: editionLabel ? `${editionLabel} · Complete` : `Finished · ${item.totalUnits} ${item.unit}`,
+              subtitle: item.creator,
+              loggedAt: new Date().toISOString(),
+            })
+          : prev.history;
+        const nextState: CueStoreState = {
+          ...prev,
+          readProgress: { ...prev.readProgress, [readId]: updated },
+          history: nextHistory,
+        };
+        const unitLabel = item.unit === 'issues' ? `Issues #1–${item.totalUnits}` : `Ch. 1–${item.totalUnits}`;
+        const nudge = computeReadSmartNudge(item, prog, updated, unitLabel, nextState);
+        msg = nudge.msg;
+        actionLabel = nudge.actionLabel;
+        return nextState;
       });
-      if (title) showToast(`Logged ${title}`);
+      if (msg) showToast(msg, actionLabel, () => pushRoute({ view: 'read-detail', readId }));
     },
-    [showToast]
+    [pushRoute, showToast]
   );
 
   const incrementReread = useCallback(
     (readId: string, delta: number) => {
-      setState((prev) => {
+      commitState((prev) => {
         const item = prev.readItems[readId];
         if (!item) return prev;
         const prog = prev.readProgress[readId];
@@ -1208,15 +1614,17 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           readProgress: {
             ...prev.readProgress,
             [readId]: {
+              ...(prog || {}),
               status: nextReread > 0 ? 'finished' : 'reading',
               currentUnit: nextReread > 0 ? item.totalUnits : prog?.currentUnit || 0,
-              maxCompletedUnit: nextReread > 0 ? Math.max(item.totalUnits, prog?.maxCompletedUnit || 0) : prog?.maxCompletedUnit,
+              maxCompletedUnit:
+                nextReread > 0
+                  ? Math.max(item.totalUnits, prog?.maxCompletedUnit || 0)
+                  : prog?.maxCompletedUnit,
               rereadCount: nextReread,
               bookmarked: prog?.bookmarked ?? true,
               edition: prog?.edition,
               lastReadAt: new Date().toISOString(),
-              rating: prog?.rating,
-              mood: prog?.mood,
             },
           },
         };
@@ -1229,7 +1637,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const toggleReadBookmark = useCallback(
     (readId: string) => {
       let added = true;
-      setState((prev) => {
+      commitState((prev) => {
         const existing = prev.readProgress[readId];
         added = !(existing?.bookmarked ?? false);
         return {
@@ -1237,15 +1645,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           readProgress: {
             ...prev.readProgress,
             [readId]: {
+              ...(existing || {}),
               status: existing?.status || 'want_to_read',
               currentUnit: existing?.currentUnit || 0,
-              maxCompletedUnit: existing?.maxCompletedUnit,
               rereadCount: existing?.rereadCount || 0,
               bookmarked: added,
-              edition: existing?.edition,
-              lastReadAt: existing?.lastReadAt,
-              rating: existing?.rating,
-              mood: existing?.mood,
             },
           },
         };
@@ -1255,45 +1659,72 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     [showToast]
   );
 
-  const rateReadItem = useCallback((readId: string, rating: number) => {
-    setState((prev) => {
-      const existing = prev.readProgress[readId];
-      return {
-        ...prev,
-        readProgress: {
-          ...prev.readProgress,
-          [readId]: {
-            status: existing?.status || 'reading',
-            currentUnit: existing?.currentUnit || 0,
-            maxCompletedUnit: existing?.maxCompletedUnit,
-            rereadCount: existing?.rereadCount || 0,
-            bookmarked: existing?.bookmarked ?? true,
-            edition: existing?.edition,
-            lastReadAt: existing?.lastReadAt,
-            rating,
-            mood: existing?.mood,
+  const rateReadUnit = useCallback(
+    (readId: string, unitNumber: number, rating: number | undefined) => {
+      commitState((prev) => {
+        const existing = prev.readProgress[readId];
+        const nextUnitRatings = { ...(existing?.unitRatings || {}) };
+        if (typeof rating === 'number' && rating > 0) {
+          nextUnitRatings[unitNumber] = rating;
+        } else {
+          delete nextUnitRatings[unitNumber];
+        }
+        return {
+          ...prev,
+          readProgress: {
+            ...prev.readProgress,
+            [readId]: {
+              ...(existing || {}),
+              status: existing?.status || 'reading',
+              currentUnit: existing?.currentUnit || 0,
+              rereadCount: existing?.rereadCount || 0,
+              bookmarked: existing?.bookmarked ?? true,
+              unitRatings: nextUnitRatings,
+            },
           },
-        },
-      };
-    });
-  }, []);
+        };
+      });
+    },
+    []
+  );
+
+  const rateReadItem = useCallback(
+    (readId: string, rating: number | undefined, source: RatingSource = 'manual') => {
+      commitState((prev) => {
+        const existing = prev.readProgress[readId];
+        return {
+          ...prev,
+          readProgress: {
+            ...prev.readProgress,
+            [readId]: {
+              ...(existing || {}),
+              status: existing?.status || 'reading',
+              currentUnit: existing?.currentUnit || 0,
+              rereadCount: existing?.rereadCount || 0,
+              bookmarked: existing?.bookmarked ?? true,
+              rating,
+              ratingSource: rating ? source : undefined,
+            },
+          },
+        };
+      });
+    },
+    []
+  );
 
   const setReadMood = useCallback((readId: string, mood: PersonalMood | undefined) => {
-    setState((prev) => {
+    commitState((prev) => {
       const existing = prev.readProgress[readId];
       return {
         ...prev,
         readProgress: {
           ...prev.readProgress,
           [readId]: {
+            ...(existing || {}),
             status: existing?.status || 'reading',
             currentUnit: existing?.currentUnit || 0,
-            maxCompletedUnit: existing?.maxCompletedUnit,
             rereadCount: existing?.rereadCount || 0,
             bookmarked: existing?.bookmarked ?? true,
-            edition: existing?.edition,
-            lastReadAt: existing?.lastReadAt,
-            rating: existing?.rating,
             mood,
           },
         },
@@ -1304,15 +1735,23 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const setReadEdition = useCallback(
     (readId: string, edition: ComicEditionId) => {
       let toastMsg = '';
-      setState((prev) => {
+      commitState((prev) => {
         const item = prev.readItems[readId];
         if (!item) return prev;
         const existing = prev.readProgress[readId];
         const label = getComicEditionLabel(edition, item);
         const nextTotal = resolveComicEditionTotal(item, edition);
         const preservedMax = Math.max(existing?.currentUnit || 0, existing?.maxCompletedUnit || 0);
-        const nextCurrent = Math.min(nextTotal, preservedMax);
-        const finished = nextCurrent >= nextTotal;
+        const existingUnits = existing?.completedUnits;
+        let nextCompletedList: number[];
+        if (Array.isArray(existingUnits) && existingUnits.length > 0) {
+          nextCompletedList = [...existingUnits];
+        } else {
+          nextCompletedList = [];
+          for (let i = 1; i <= preservedMax; i += 1) nextCompletedList.push(i);
+        }
+        const activeCount = nextCompletedList.filter((u) => u <= nextTotal).length;
+        const finished = activeCount >= nextTotal;
         const nextCover = resolveComicEditionCover(item, edition);
         const nextCoversMap =
           nextCover && nextCover !== item.coverUrl
@@ -1338,15 +1777,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           readProgress: {
             ...prev.readProgress,
             [readId]: {
-              status: finished ? 'finished' : nextCurrent > 0 ? 'reading' : 'want_to_read',
-              currentUnit: nextCurrent,
-              maxCompletedUnit: preservedMax,
+              ...(existing || {}),
+              status: finished ? 'finished' : activeCount > 0 ? 'reading' : 'want_to_read',
+              currentUnit: activeCount,
+              completedUnits: nextCompletedList,
+              maxCompletedUnit: Math.max(preservedMax, activeCount),
               rereadCount: finished ? Math.max(1, existing?.rereadCount || 0) : existing?.rereadCount || 0,
               bookmarked: existing?.bookmarked ?? true,
               edition,
-              lastReadAt: existing?.lastReadAt,
-              rating: existing?.rating,
-              mood: existing?.mood,
             },
           },
           history: nextHistory,
@@ -1364,7 +1802,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       cleanTitle?: string,
       editionIssueCounts?: Partial<Record<ComicEditionId, number>>
     ) => {
-      setState((prev) => {
+      commitState((prev) => {
         const item = prev.readItems[readId];
         if (!item) return prev;
         const nextTitle = cleanTitle || item.title;
@@ -1425,10 +1863,15 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           readProgress: existingProg
             ? {
                 ...prev.readProgress,
-                [readId]: normalizeReadProgress(updatedItem, existingProg.currentUnit, {
-                  ...existingProg,
-                  edition: safeActiveEdition,
-                }),
+                [readId]: normalizeReadProgress(
+                  updatedItem,
+                  existingProg.currentUnit,
+                  {
+                    ...existingProg,
+                    edition: safeActiveEdition,
+                  },
+                  existingProg.completedUnits
+                ),
               }
             : prev.readProgress,
           history: nextHistory,
@@ -1440,15 +1883,17 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const resetReadProgress = useCallback(
     (readId: string) => {
-      setState((prev) => {
+      commitState((prev) => {
         const existing = prev.readProgress[readId];
         return {
           ...prev,
           readProgress: {
             ...prev.readProgress,
             [readId]: {
+              ...(existing || {}),
               status: 'want_to_read',
               currentUnit: 0,
+              completedUnits: [],
               maxCompletedUnit: 0,
               rereadCount: 0,
               bookmarked: existing?.bookmarked ?? true,
@@ -1466,6 +1911,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const formatGameChapterCode = (chapter: number, unit: GameChapterUnit = 'chapters'): string => {
     if (unit === 'acts') return `Act ${chapter}`;
     if (unit === 'missions') return `Mission ${chapter}`;
+    if (unit === 'milestones') return `Milestone ${chapter}`;
     return `Ch. ${chapter}`;
   };
 
@@ -1488,6 +1934,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         ? 'playing'
         : 'backlog';
     return {
+      ...(existing || {}),
       status: nextStatus,
       hoursPlayed: existing?.hoursPlayed || 0,
       completionPct: nextPct,
@@ -1499,15 +1946,13 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       platform: existing?.platform || game.platforms[0] || 'PC',
       bookmarked: existing?.bookmarked ?? true,
       lastPlayedAt: new Date().toISOString(),
-      rating: existing?.rating,
-      mood: existing?.mood,
     };
   };
 
   const advanceGameChapter = useCallback(
     (gameId: string, delta = 1) => {
       let toastMsg = '';
-      setState((prev) => {
+      commitState((prev) => {
         const game = prev.games[gameId];
         if (!game) return prev;
         const prog = prev.gameProgress[gameId];
@@ -1515,10 +1960,6 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const updated = applyGameChapter(game, prog, nextVal);
         const unit = game.chapterUnit || 'chapters';
         const codeLabel = formatGameChapterCode(updated.currentChapter || 0, unit);
-        toastMsg =
-          updated.status === 'completed'
-            ? `Completed ${game.title}`
-            : `${game.title} · ${codeLabel}`;
         const activePlatform = updated.platform;
         const nextHistory =
           delta > 0 && (updated.currentChapter || 0) > 0
@@ -1534,7 +1975,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 loggedAt: new Date().toISOString(),
               })
             : prev.history;
-        return {
+        const nextState: CueStoreState = {
           ...prev,
           gameProgress: {
             ...prev.gameProgress,
@@ -1542,6 +1983,25 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           },
           history: nextHistory,
         };
+        if (updated.status === 'completed' && prog?.status !== 'completed') {
+          const matchingLists = prev.lists.filter((l) =>
+            l.items.some((it) => it.kind === 'game' && it.id === gameId)
+          );
+          const completedList = matchingLists.find((l) => {
+            const wasDone = evaluateCustomListProgress(l, prev).isComplete;
+            const nowDone = evaluateCustomListProgress(l, nextState).isComplete;
+            return !wasDone && nowDone;
+          });
+          toastMsg = completedList
+            ? `Completed ${game.title} · Finishes "${completedList.name}"!`
+            : `Completed ${game.title}`;
+        } else {
+          toastMsg =
+            updated.status === 'completed'
+              ? `Completed ${game.title}`
+              : `${game.title} · ${codeLabel}`;
+        }
+        return nextState;
       });
       if (toastMsg) showToast(toastMsg, 'Log note', () => pushRoute({ view: 'game-detail', gameId }));
     },
@@ -1549,7 +2009,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   );
 
   const setGameChapter = useCallback((gameId: string, chapter: number) => {
-    setState((prev) => {
+    commitState((prev) => {
       const game = prev.games[gameId];
       if (!game) return prev;
       const prog = prev.gameProgress[gameId];
@@ -1572,7 +2032,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       note?: string
     ) => {
       const safeTotal = Math.max(1, Math.min(200, Math.round(totalChapters)));
-      setState((prev) => {
+      commitState((prev) => {
         const game = prev.games[gameId];
         if (!game) return prev;
         if (source !== 'manual' && game.chapterSource === 'manual') {
@@ -1605,7 +2065,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const logGameSession = useCallback(
     (gameId: string, hoursDelta: number) => {
       let label = '';
-      setState((prev) => {
+      commitState((prev) => {
         const game = prev.games[gameId];
         if (!game) return prev;
         const prog = prev.gameProgress[gameId];
@@ -1635,17 +2095,15 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           gameProgress: {
             ...prev.gameProgress,
             [gameId]: {
+              ...(prog || {}),
               status: prog?.status === 'completed' ? 'completed' : nextHours > 0 ? 'playing' : 'backlog',
               hoursPlayed: nextHours,
               completionPct: nextPct,
-              currentChapter: prog?.currentChapter,
               playthroughCount: prog?.playthroughCount || 0,
               platinum: prog?.platinum ?? false,
               platform: activePlatform,
               bookmarked: prog?.bookmarked ?? true,
               lastPlayedAt: new Date().toISOString(),
-              rating: prog?.rating,
-              mood: prog?.mood,
             },
           },
           history: nextHistory,
@@ -1666,7 +2124,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         platform: GamePlatform;
       }>
     ) => {
-      setState((prev) => {
+      commitState((prev) => {
         const game = prev.games[gameId];
         if (!game) return prev;
         const existing = prev.gameProgress[gameId];
@@ -1681,17 +2139,15 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           gameProgress: {
             ...prev.gameProgress,
             [gameId]: {
+              ...(existing || {}),
               status: nextStatus,
               hoursPlayed: patch.hoursPlayed ?? existing?.hoursPlayed ?? 0,
               completionPct: nextPct,
-              currentChapter: existing?.currentChapter,
               playthroughCount: nextPlaythroughs,
               platinum: existing?.platinum ?? false,
               platform: patch.platform ?? existing?.platform ?? game.platforms[0] ?? 'PC',
               bookmarked: existing?.bookmarked ?? true,
               lastPlayedAt: new Date().toISOString(),
-              rating: existing?.rating,
-              mood: existing?.mood,
             },
           },
         };
@@ -1703,7 +2159,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const toggleGameCompleted = useCallback(
     (gameId: string) => {
       let msg = '';
-      setState((prev) => {
+      commitState((prev) => {
         const game = prev.games[gameId];
         if (!game) return prev;
         const existing = prev.gameProgress[gameId];
@@ -1715,6 +2171,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           gameProgress: {
             ...prev.gameProgress,
             [gameId]: {
+              ...(existing || {}),
               status: nextDone ? 'completed' : 'playing',
               hoursPlayed: existing?.hoursPlayed || 0,
               completionPct: nextDone ? Math.max(100, existing?.completionPct || 100) : existing?.completionPct || 50,
@@ -1724,8 +2181,6 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               platform: existing?.platform || game.platforms[0] || 'PC',
               bookmarked: existing?.bookmarked ?? true,
               lastPlayedAt: new Date().toISOString(),
-              rating: existing?.rating,
-              mood: existing?.mood,
             },
           },
         };
@@ -1736,7 +2191,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   );
 
   const toggleGamePlatinum = useCallback((gameId: string) => {
-    setState((prev) => {
+    commitState((prev) => {
       const game = prev.games[gameId];
       if (!game) return prev;
       const existing = prev.gameProgress[gameId];
@@ -1746,6 +2201,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         gameProgress: {
           ...prev.gameProgress,
           [gameId]: {
+            ...(existing || {}),
             status: nextPlat ? 'completed' : existing?.status || 'playing',
             hoursPlayed: existing?.hoursPlayed || 0,
             completionPct: nextPlat ? 100 : existing?.completionPct || 0,
@@ -1755,8 +2211,6 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             platform: existing?.platform || game.platforms[0] || 'PC',
             bookmarked: existing?.bookmarked ?? true,
             lastPlayedAt: new Date().toISOString(),
-            rating: existing?.rating,
-            mood: existing?.mood,
           },
         },
       };
@@ -1765,7 +2219,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const incrementGamePlaythrough = useCallback(
     (gameId: string, delta: number) => {
-      setState((prev) => {
+      commitState((prev) => {
         const game = prev.games[gameId];
         if (!game) return prev;
         const existing = prev.gameProgress[gameId];
@@ -1775,17 +2229,15 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           gameProgress: {
             ...prev.gameProgress,
             [gameId]: {
+              ...(existing || {}),
               status: nextCount > 0 ? 'completed' : 'playing',
               hoursPlayed: existing?.hoursPlayed || 0,
               completionPct: existing?.completionPct || 100,
-              currentChapter: existing?.currentChapter,
               playthroughCount: nextCount,
               platinum: existing?.platinum ?? false,
               platform: existing?.platform || game.platforms[0] || 'PC',
               bookmarked: existing?.bookmarked ?? true,
               lastPlayedAt: new Date().toISOString(),
-              rating: existing?.rating,
-              mood: existing?.mood,
             },
           },
         };
@@ -1798,7 +2250,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const toggleGameBookmark = useCallback(
     (gameId: string) => {
       let added = true;
-      setState((prev) => {
+      commitState((prev) => {
         const game = prev.games[gameId];
         if (!game) return prev;
         const existing = prev.gameProgress[gameId];
@@ -1808,17 +2260,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           gameProgress: {
             ...prev.gameProgress,
             [gameId]: {
+              ...(existing || {}),
               status: existing?.status || 'backlog',
               hoursPlayed: existing?.hoursPlayed || 0,
               completionPct: existing?.completionPct || 0,
-              currentChapter: existing?.currentChapter,
               playthroughCount: existing?.playthroughCount || 0,
               platinum: existing?.platinum ?? false,
               platform: existing?.platform || game.platforms[0] || 'PC',
               bookmarked: added,
-              lastPlayedAt: existing?.lastPlayedAt,
-              rating: existing?.rating,
-              mood: existing?.mood,
             },
           },
         };
@@ -1828,8 +2277,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     [showToast]
   );
 
-  const rateGame = useCallback((gameId: string, rating: number) => {
-    setState((prev) => {
+  const rateGame = useCallback((gameId: string, rating: number | undefined) => {
+    commitState((prev) => {
       const game = prev.games[gameId];
       if (!game) return prev;
       const existing = prev.gameProgress[gameId];
@@ -1838,17 +2287,15 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         gameProgress: {
           ...prev.gameProgress,
           [gameId]: {
+            ...(existing || {}),
             status: existing?.status || 'playing',
             hoursPlayed: existing?.hoursPlayed || 0,
             completionPct: existing?.completionPct || 0,
-            currentChapter: existing?.currentChapter,
             playthroughCount: existing?.playthroughCount || 0,
             platinum: existing?.platinum ?? false,
             platform: existing?.platform || game.platforms[0] || 'PC',
             bookmarked: existing?.bookmarked ?? true,
-            lastPlayedAt: existing?.lastPlayedAt,
             rating,
-            mood: existing?.mood,
           },
         },
       };
@@ -1856,7 +2303,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setGameMood = useCallback((gameId: string, mood: PersonalMood | undefined) => {
-    setState((prev) => {
+    commitState((prev) => {
       const game = prev.games[gameId];
       if (!game) return prev;
       const existing = prev.gameProgress[gameId];
@@ -1865,16 +2312,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         gameProgress: {
           ...prev.gameProgress,
           [gameId]: {
+            ...(existing || {}),
             status: existing?.status || 'playing',
             hoursPlayed: existing?.hoursPlayed || 0,
             completionPct: existing?.completionPct || 0,
-            currentChapter: existing?.currentChapter,
             playthroughCount: existing?.playthroughCount || 0,
             platinum: existing?.platinum ?? false,
             platform: existing?.platform || game.platforms[0] || 'PC',
             bookmarked: existing?.bookmarked ?? true,
-            lastPlayedAt: existing?.lastPlayedAt,
-            rating: existing?.rating,
             mood,
           },
         },
@@ -1884,7 +2329,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const resetGameProgress = useCallback(
     (gameId: string) => {
-      setState((prev) => {
+      commitState((prev) => {
         const game = prev.games[gameId];
         if (!game) return prev;
         const existing = prev.gameProgress[gameId];
@@ -1893,6 +2338,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           gameProgress: {
             ...prev.gameProgress,
             [gameId]: {
+              ...(existing || {}),
               status: 'backlog',
               hoursPlayed: 0,
               completionPct: 0,
@@ -1910,10 +2356,56 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     [showToast]
   );
 
+  // Collections & Cross-Media Lists
+  const rateCollection = useCallback(
+    (collectionKey: string, rating: number | undefined, source: RatingSource = 'manual') => {
+      commitState((prev) => {
+        const nextMap = { ...(prev.collectionRatings || {}) };
+        if (typeof rating === 'number' && rating > 0) {
+          nextMap[collectionKey] = { rating, source };
+        } else {
+          delete nextMap[collectionKey];
+        }
+        return {
+          ...prev,
+          collectionRatings: nextMap,
+        };
+      });
+    },
+    []
+  );
+
+  const toggleListPinnedToQueue = useCallback(
+    (listId: string) => {
+      let pinned = false;
+      commitState((prev) => ({
+        ...prev,
+        lists: prev.lists.map((l) => {
+          if (l.id !== listId) return l;
+          pinned = !l.pinnedToQueue;
+          return { ...l, pinnedToQueue: pinned };
+        }),
+      }));
+      showToast(pinned ? 'Pinned run to Queue' : 'Unpinned from Queue');
+    },
+    [showToast]
+  );
+
+  const deleteCustomList = useCallback(
+    (listId: string) => {
+      commitState((prev) => ({
+        ...prev,
+        lists: prev.lists.filter((l) => l.id !== listId),
+      }));
+      showToast('Deleted custom list');
+    },
+    [showToast]
+  );
+
   // Live additions
   const addLiveShowToStore = useCallback(
     (show: Show, andBookmark = true) => {
-      setState((prev) => {
+      commitState((prev) => {
         const exists = Boolean(prev.shows[show.id]);
         return {
           ...prev,
@@ -1939,7 +2431,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const addLiveMovieToStore = useCallback(
     (movie: Movie, status: MovieWatchStatus = 'watchlist') => {
-      setState((prev) => {
+      commitState((prev) => {
         const exists = Boolean(prev.movies[movie.id]);
         return {
           ...prev,
@@ -1962,7 +2454,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const addLiveReadToStore = useCallback(
     (item: ReadItem, status: ReadWatchStatus = 'want_to_read') => {
-      setState((prev) => {
+      commitState((prev) => {
         const exists = Boolean(prev.readItems[item.id]);
         return {
           ...prev,
@@ -1996,7 +2488,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             chapterNote: known.note,
           }
         : game;
-      setState((prev) => {
+      commitState((prev) => {
         const exists = Boolean(prev.games[enrichedGame.id]);
         return {
           ...prev,
@@ -2025,7 +2517,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   // Private Journal & Lists
   const addJournalEntry = useCallback(
     (input: Omit<JournalEntry, 'id' | 'createdAt'>) => {
-      setState((prev) => ({
+      commitState((prev) => ({
         ...prev,
         journalEntries: [
           {
@@ -2043,7 +2535,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const deleteJournalEntry = useCallback(
     (entryId: string) => {
-      setState((prev) => ({
+      commitState((prev) => ({
         ...prev,
         journalEntries: prev.journalEntries.filter((j) => j.id !== entryId),
       }));
@@ -2053,7 +2545,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   );
 
   const markAllNotificationsRead = useCallback(() => {
-    setState((prev) => ({
+    commitState((prev) => ({
       ...prev,
       notifications: prev.notifications.map((n) => ({ ...n, read: true })),
     }));
@@ -2065,7 +2557,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       description: string,
       initialItem?: { kind: 'show' | 'movie' | 'read' | 'game'; id: string }
     ) => {
-      setState((prev) => ({
+      commitState((prev) => ({
         ...prev,
         lists: [
           {
@@ -2086,7 +2578,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const toggleItemInList = useCallback(
     (listId: string, kind: 'show' | 'movie' | 'read' | 'game', id: string) => {
       let added = false;
-      setState((prev) => ({
+      commitState((prev) => ({
         ...prev,
         lists: prev.lists.map((l) => {
           if (l.id !== listId) return l;
@@ -2107,7 +2599,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const updateProfile = useCallback(
     (patch: Partial<UserProfile>) => {
-      setState((prev) => ({
+      commitState((prev) => ({
         ...prev,
         profile: { ...prev.profile, ...patch },
       }));
@@ -2117,7 +2609,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   );
 
   const updateSettings = useCallback((patch: Partial<AppSettings>) => {
-    setState((prev) => ({
+    commitState((prev) => ({
       ...prev,
       settings: { ...prev.settings, ...patch },
     }));
@@ -2140,6 +2632,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     const snapshot = lastPreImportStateRef.current;
     if (!snapshot) return;
     lastPreImportStateRef.current = null;
+    stateRef.current = snapshot;
     setState(snapshot);
     showToast('Import undone');
   }, [showToast]);
@@ -2147,6 +2640,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const restoreCueBackup = useCallback(
     (backupState: CueStoreState) => {
       lastPreImportStateRef.current = stateRef.current;
+      stateRef.current = backupState;
       setState(backupState);
       showToast('Restored cue library backup', 'Undo', undoLastImport);
     },
@@ -2401,7 +2895,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           ? cappedHistory.slice(cappedHistory.length - MAX_HISTORY_ENTRIES)
           : cappedHistory;
 
-      setState({
+      const nextBatchState: CueStoreState = {
         ...prev,
         shows: nextShows,
         movies: nextMovies,
@@ -2416,7 +2910,9 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         readProgress: nextReadProgress,
         gameProgress: nextGameProgress,
         history: trimmedHistory,
-      });
+      };
+      stateRef.current = nextBatchState;
+      setState(nextBatchState);
 
       const summaryParts: string[] = [];
       if (added > 0) summaryParts.push(`Added ${added}`);
@@ -2434,7 +2930,9 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       try {
         const parsed = JSON.parse(rawJson);
         if (parsed?.app === 'cue' && parsed?.state?.shows && parsed?.state?.readItems) {
-          setState(parsed.state as CueStoreState);
+          const restored = parsed.state as CueStoreState;
+          stateRef.current = restored;
+          setState(restored);
           showToast('Restored cue library backup');
           return { ok: true, summary: 'Full cue backup restored.' };
         }
@@ -2461,7 +2959,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         };
         scan(parsed);
 
-        setState((prev) => {
+        commitState((prev) => {
           const nextShowProg = { ...prev.showProgress };
           const nextMovieProg = { ...prev.movieProgress };
           for (const id of prev.showOrder) {
@@ -2530,6 +3028,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           nextRead[id] = {
             status: 'want_to_read',
             currentUnit: 0,
+            completedUnits: [],
             maxCompletedUnit: 0,
             rereadCount: 0,
             bookmarked: prev.readProgress[id].bookmarked,
@@ -2556,7 +3055,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       };
 
       if (scope === 'all') {
-        setState((prev) => {
+        commitState((prev) => {
           const { nextShows, nextMovies } = resetWatchState(prev);
           return {
             ...prev,
@@ -2571,7 +3070,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       if (scope === 'watch') {
-        setState((prev) => {
+        commitState((prev) => {
           const { nextShows, nextMovies } = resetWatchState(prev);
           return {
             ...prev,
@@ -2584,7 +3083,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       if (scope === 'read') {
-        setState((prev) => ({
+        commitState((prev) => ({
           ...prev,
           readProgress: resetReadState(prev),
           history: (prev.history || []).filter((h) => h.domain !== 'read'),
@@ -2592,7 +3091,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         showToast('Reset Read progress');
         return;
       }
-      setState((prev) => ({
+      commitState((prev) => ({
         ...prev,
         gameProgress: resetPlayState(prev),
         history: (prev.history || []).filter((h) => h.domain !== 'play'),
@@ -2623,8 +3122,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     setSyncStatus('idle');
     setSyncError(null);
     setActiveBanner(null);
-    setState(createEmptyState());
-    setRouteStack([{ view: 'watch', calendarMode: false }]);
+    const empty = createEmptyState();
+    stateRef.current = empty;
+    setState(empty);
+    setRouteStack([{ view: 'queue' }]);
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
     showToast('All data removed — starting fresh');
   }, [showToast]);
@@ -2664,6 +3165,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         markShowAllWatched,
         startShowRewatch,
         resetShowProgress,
+        rateEpisode,
+        rateSeason,
         rateShow,
         setShowMood,
         toggleMovieWatched,
@@ -2673,9 +3176,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         setMovieMood,
         advanceReadProgress,
         setReadProgress,
+        toggleReadUnit,
         markReadFinished,
         incrementReread,
         toggleReadBookmark,
+        rateReadUnit,
         rateReadItem,
         setReadMood,
         setReadEdition,
@@ -2694,6 +3199,9 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         rateGame,
         setGameMood,
         resetGameProgress,
+        rateCollection,
+        toggleListPinnedToQueue,
+        deleteCustomList,
         addLiveShowToStore,
         addLiveMovieToStore,
         addLiveReadToStore,

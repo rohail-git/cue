@@ -8,22 +8,24 @@ import { CueWordmark } from './CueLogo';
 interface MobileDomainBarProps {
   title: string;
   domainLabel: string;
-  calendarMode: boolean;
-  onOpenFilter: () => void;
-  onToggleCalendar: () => void;
-  filterAriaLabel: string;
-  calendarAriaLabel: string;
+  calendarMode?: boolean;
+  onOpenFilter?: () => void;
+  onToggleCalendar?: () => void;
+  filterAriaLabel?: string;
+  calendarAriaLabel?: string;
+  rightSlot?: React.ReactNode;
 }
 
 /** Minimal mobile-only sticky utility bar matching desktop branding without clutter. */
 export function MobileDomainBar({
   title,
   domainLabel,
-  calendarMode,
+  calendarMode = false,
   onOpenFilter,
   onToggleCalendar,
   filterAriaLabel,
   calendarAriaLabel,
+  rightSlot,
 }: MobileDomainBarProps) {
   return (
     <div className="md:hidden sticky top-0 z-30 h-[52px] px-4 flex items-center justify-between bg-background/95 backdrop-blur-md">
@@ -37,26 +39,31 @@ export function MobileDomainBar({
         </span>
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
-        <button
-          type="button"
-          onClick={onOpenFilter}
-          aria-label={filterAriaLabel}
-          className="h-9 w-9 rounded-full flex items-center justify-center text-ink-dim hover:text-ink hover:bg-surface transition-colors"
-        >
-          <ListFilter className="w-[18px] h-[18px]" />
-        </button>
-        <button
-          type="button"
-          onClick={onToggleCalendar}
-          aria-label={calendarAriaLabel}
-          className={`h-9 w-9 rounded-full flex items-center justify-center transition-colors ${
-            calendarMode
-              ? 'bg-brand/15 text-brand'
-              : 'text-ink-dim hover:text-ink hover:bg-surface'
-          }`}
-        >
-          <Calendar className="w-[18px] h-[18px]" />
-        </button>
+        {rightSlot}
+        {onOpenFilter && (
+          <button
+            type="button"
+            onClick={onOpenFilter}
+            aria-label={filterAriaLabel || 'Filter'}
+            className="h-9 w-9 rounded-full flex items-center justify-center text-ink-dim hover:text-ink hover:bg-surface transition-colors"
+          >
+            <ListFilter className="w-[18px] h-[18px]" />
+          </button>
+        )}
+        {onToggleCalendar && (
+          <button
+            type="button"
+            onClick={onToggleCalendar}
+            aria-label={calendarAriaLabel || 'Calendar'}
+            className={`h-9 w-9 rounded-full flex items-center justify-center transition-colors ${
+              calendarMode
+                ? 'bg-brand/15 text-brand'
+                : 'text-ink-dim hover:text-ink hover:bg-surface'
+            }`}
+          >
+            <Calendar className="w-[18px] h-[18px]" />
+          </button>
+        )}
       </div>
     </div>
   );

@@ -19,8 +19,14 @@ import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
+import { RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode, Episode, Season } from '../types';
+import {
+  formatRating,
+  getSeasonEpisodeAverage,
+  getShowCalculatedAverage,
+} from '../utils/ratings';
 import {
   formatAirDate,
   formatEpisodeCode,
@@ -43,6 +49,8 @@ export function ShowDetailView({ showId }: { showId: string }) {
     markShowAllWatched,
     startShowRewatch,
     resetShowProgress,
+    rateEpisode,
+    rateSeason,
     rateShow,
     setShowMood,
     addJournalEntry,
@@ -93,9 +101,17 @@ export function ShowDetailView({ showId }: { showId: string }) {
 
   const activeSeasonObj = show.seasons.find((s) => s.number === selectedSeason) || show.seasons[0];
   const desktopSeasons: Season[] = show.seasons.slice(seasonPairStart, seasonPairStart + 2);
+  const showCalcAvg = getShowCalculatedAverage(show, progress);
 
   const renderSeasonColumn = (season: Season, showDropdownOnMobile = false) => {
     const sp = getSeasonProgress(show, season.number, progress);
+    const epAvg = getSeasonEpisodeAverage(show, season.number, progress);
+    const seasonRating = progress?.seasonRatings?.[season.number];
+    const seasonSource = progress?.seasonRatingSource?.[season.number];
+    const showSeasonSuggestion =
+      (epAvg && sp.watched === sp.total && !seasonRating) ||
+      (detailMode === 'advanced' && (Boolean(epAvg) || Boolean(seasonRating) || sp.watched > 0));
+
     return (
       <div key={season.number}>
         <div className="flex items-center justify-between mb-2.5">
@@ -144,10 +160,40 @@ export function ShowDetailView({ showId }: { showId: string }) {
           />
         </div>
 
+        {showSeasonSuggestion && (
+          <div className="mb-3">
+            {epAvg ? (
+              <SuggestedRatingBanner
+                compact
+                label={`Season ${season.number}`}
+                calculatedAvg={epAvg.avg}
+                ratedCount={epAvg.count}
+                unitWord="episodes"
+                currentRating={seasonRating}
+                ratingSource={seasonSource}
+                onAcceptAvg={(avg) => rateSeason(show.id, season.number, avg, 'auto')}
+                onManualRate={(r) => rateSeason(show.id, season.number, r, 'manual')}
+              />
+            ) : (
+              <div className="rounded-2xl bg-surface border border-white/[0.06] px-3 py-2 flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-ink-dim">Rate Season {season.number}</span>
+                <RatingControl
+                  size="sm"
+                  value={seasonRating}
+                  onChange={(r) => rateSeason(show.id, season.number, r, 'manual')}
+                  labelPrefix={`Rate Season ${season.number}`}
+                  allowClear
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="divide-y divide-white/[0.06]">
           {season.episodes.map((ep) => {
             const epKey = getEpisodeKey(ep.season, ep.number);
             const count = progress?.episodeCounts?.[epKey] || 0;
+            const epRating = progress?.episodeRatings?.[epKey];
             const isStepperOpen = rewatchStepperEp === epKey;
 
             return (
@@ -173,8 +219,16 @@ export function ShowDetailView({ showId }: { showId: string }) {
                   <p className="text-[14.5px] font-medium text-ink truncate leading-snug">
                     {ep.title}
                   </p>
-                  <p className="text-[12.5px] text-ink-dim tabular-nums mt-0.5">
-                    E{pad2(ep.number)} · {formatAirDate(ep.airdate)}
+                  <p className="text-[12.5px] text-ink-dim tabular-nums mt-0.5 flex items-center gap-1.5">
+                    <span>
+                      E{pad2(ep.number)} · {formatAirDate(ep.airdate)}
+                    </span>
+                    {typeof epRating === 'number' && epRating > 0 && (
+                      <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-brand">
+                        · <Star className="w-3 h-3 fill-brand" />
+                        {formatRating(epRating)}
+                      </span>
+                    )}
                   </p>
                 </div>
 
@@ -479,23 +533,31 @@ export function ShowDetailView({ showId }: { showId: string }) {
                 </p>
               </div>
 
-              <div className="flex items-center gap-1">
-                {[1, 2, 3, 4, 5].map((star) => {
-                  const active = (progress?.rating || 0) >= star;
-                  return (
-                    <button
-                      key={star}
-                      type="button"
-                      onClick={() => rateShow(show.id, star)}
-                      aria-label={`Rate ${star} stars`}
-                      className="p-0.5 hover:scale-110 transition-transform"
-                    >
-                      <Star className={`w-4 h-4 ${active ? 'text-brand fill-brand' : 'text-ink-faint'}`} />
-                    </button>
-                  );
-                })}
-              </div>
+              <RatingControl
+                value={progress?.rating}
+                onChange={(r) => rateShow(show.id, r, 'manual')}
+                labelPrefix="Rate show"
+                allowClear
+              />
             </div>
+
+            {showCalcAvg &&
+              showCalcAvg.count > 0 &&
+              (detailMode === 'advanced' || (stats.isFinished && !progress?.rating)) && (
+                <div className="mt-3">
+                  <SuggestedRatingBanner
+                    compact
+                    label={show.title}
+                    calculatedAvg={showCalcAvg.avg}
+                    ratedCount={showCalcAvg.count}
+                    unitWord={showCalcAvg.basis}
+                    currentRating={progress?.rating}
+                    ratingSource={progress?.ratingSource}
+                    onAcceptAvg={(avg) => rateShow(show.id, avg, 'auto')}
+                    onManualRate={(r) => rateShow(show.id, r, 'manual')}
+                  />
+                </div>
+              )}
 
             {show.overview && (
               <div className="mt-2.5">
@@ -685,10 +747,30 @@ export function ShowDetailView({ showId }: { showId: string }) {
               </div>
             </div>
 
+            <div className="flex items-center justify-between p-3 rounded-2xl bg-surface border border-white/8">
+              <span className="text-sm font-medium text-ink">Episode rating</span>
+              <RatingControl
+                value={
+                  progress?.episodeRatings?.[
+                    getEpisodeKey(activeEpisodeDrawer.season, activeEpisodeDrawer.number)
+                  ]
+                }
+                onChange={(r) =>
+                  rateEpisode(show.id, activeEpisodeDrawer.season, activeEpisodeDrawer.number, r)
+                }
+                labelPrefix="Rate episode"
+                allowClear
+              />
+            </div>
+
             <form
               onSubmit={(e) => {
                 e.preventDefault();
                 if (!epNoteText.trim()) return;
+                const epRate =
+                  progress?.episodeRatings?.[
+                    getEpisodeKey(activeEpisodeDrawer.season, activeEpisodeDrawer.number)
+                  ];
                 addJournalEntry({
                   domain: 'watch',
                   mediaKind: 'show',
@@ -700,7 +782,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
                     activeEpisodeDrawer.number
                   ),
                   text: epNoteText.trim(),
-                  rating: progress?.rating,
+                  rating: epRate ?? progress?.rating,
                   mood: progress?.mood,
                 });
                 setEpNoteText('');

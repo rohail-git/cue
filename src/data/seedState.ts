@@ -816,6 +816,7 @@ export function createSeedState(): CueStoreState {
     history,
     journalEntries,
     lists,
+    collectionRatings: {},
     profile: {
       name: 'Alex',
       handle: '@alex',
@@ -858,6 +859,7 @@ export function createEmptyState(): CueStoreState {
     history: [],
     journalEntries: [],
     lists: [],
+    collectionRatings: {},
     profile: {
       name: 'You',
       handle: '@you',

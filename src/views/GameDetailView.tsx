@@ -12,25 +12,34 @@ import {
   Plus,
   RotateCcw,
   Sparkles,
-  Star,
   Trophy,
 } from 'lucide-react';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
+import { RatingControl } from '../components/RatingControl';
 import { fetchGameChapterInfo } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode, GameChapterUnit, GamePlatform } from '../types';
 import { lookupKnownGameChapters } from '../utils/gameChapters';
 
 const PLATFORMS: GamePlatform[] = ['PC', 'PS5', 'Switch', 'Xbox', 'Steam Deck'];
-const CHAPTER_UNITS: GameChapterUnit[] = ['chapters', 'acts', 'missions'];
+const CHAPTER_UNITS: GameChapterUnit[] = ['chapters', 'acts', 'missions', 'milestones'];
 
 function unitSingular(unit: GameChapterUnit): string {
   if (unit === 'acts') return 'act';
   if (unit === 'missions') return 'mission';
+  if (unit === 'milestones') return 'milestone';
   return 'chapter';
+}
+
+function sourceChipLabel(source?: string): string | null {
+  if (source === 'catalog') return 'Catalog';
+  if (source === 'wikipedia') return 'Wikipedia';
+  if (source === 'web') return 'Web';
+  if (source === 'manual') return 'Custom';
+  return null;
 }
 
 export function GameDetailView({ gameId }: { gameId: string }) {
@@ -349,8 +358,13 @@ export function GameDetailView({ gameId }: { gameId: string }) {
           {/* Story Chapter Tracker (Simple + Advanced) */}
           <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5">
             <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-sm font-semibold text-ink">Story chapter progress</span>
+                {sourceChipLabel(game.chapterSource) && (
+                  <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-play/15 text-play">
+                    {sourceChipLabel(game.chapterSource)}
+                  </span>
+                )}
                 {checkingChapters && (
                   <span className="inline-flex items-center gap-1 text-[11px] text-brand">
                     <Loader2 className="w-3 h-3 animate-spin" />
@@ -379,53 +393,95 @@ export function GameDetailView({ gameId }: { gameId: string }) {
             </div>
 
             {editingChapters && (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const val = Number(chapterDraft);
-                  if (val > 0) {
-                    updateGameChaptersMeta(game.id, val, unitDraft, 'manual', 'Custom chapter count');
-                  }
-                  setEditingChapters(false);
-                }}
-                className="flex items-center gap-2 flex-wrap mb-3 pt-1"
-              >
-                <input
-                  type="number"
-                  min={1}
-                  max={200}
-                  placeholder="e.g. 23"
-                  value={chapterDraft}
-                  onChange={(e) => setChapterDraft(e.target.value)}
-                  className="w-24 rounded-xl bg-background border border-white/12 px-3 py-1.5 text-xs text-ink outline-none focus:border-brand"
-                />
-                <select
-                  value={unitDraft}
-                  onChange={(e) => setUnitDraft(e.target.value as GameChapterUnit)}
-                  aria-label="Chapter unit type"
-                  className="rounded-xl bg-background border border-white/12 px-2.5 py-1.5 text-xs text-ink outline-none focus:border-brand"
+              <div className="space-y-2.5 mb-3 pt-1">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const val = Number(chapterDraft);
+                    if (val > 0) {
+                      updateGameChaptersMeta(game.id, val, unitDraft, 'manual', 'Custom chapter count');
+                    }
+                    setEditingChapters(false);
+                  }}
+                  className="flex items-center gap-2 flex-wrap"
                 >
-                  {CHAPTER_UNITS.map((u) => (
-                    <option key={u} value={u}>
-                      {u}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="submit"
-                  className="px-3 py-1.5 rounded-xl bg-brand text-brand-ink text-xs font-semibold"
-                >
-                  Save
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRedetectChapters}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white/8 text-xs text-ink-dim hover:text-ink"
-                >
-                  <Sparkles className="w-3 h-3 text-brand" />
-                  <span>Auto-detect</span>
-                </button>
-              </form>
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    placeholder="e.g. 23"
+                    value={chapterDraft}
+                    onChange={(e) => setChapterDraft(e.target.value)}
+                    className="w-24 rounded-xl bg-background border border-white/12 px-3 py-1.5 text-xs text-ink outline-none focus:border-brand"
+                  />
+                  <select
+                    value={unitDraft}
+                    onChange={(e) => setUnitDraft(e.target.value as GameChapterUnit)}
+                    aria-label="Chapter unit type"
+                    className="rounded-xl bg-background border border-white/12 px-2.5 py-1.5 text-xs text-ink outline-none focus:border-brand"
+                  >
+                    {CHAPTER_UNITS.map((u) => (
+                      <option key={u} value={u}>
+                        {u}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="submit"
+                    className="px-3 py-1.5 rounded-xl bg-brand text-brand-ink text-xs font-semibold"
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRedetectChapters}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white/8 text-xs text-ink-dim hover:text-ink"
+                  >
+                    <Sparkles className="w-3 h-3 text-brand" />
+                    <span>Auto-detect</span>
+                  </button>
+                </form>
+
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] text-ink-faint">Presets:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateGameChaptersMeta(
+                        game.id,
+                        4,
+                        'milestones',
+                        'manual',
+                        '4 milestones (25% steps)'
+                      );
+                      setEditingChapters(false);
+                    }}
+                    className="px-2.5 py-1 rounded-full bg-white/8 hover:bg-white/12 text-[11px] text-ink-dim hover:text-ink"
+                  >
+                    4 Milestones (25%)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateGameChaptersMeta(game.id, 3, 'acts', 'manual', 'Three-act structure');
+                      setEditingChapters(false);
+                    }}
+                    className="px-2.5 py-1 rounded-full bg-white/8 hover:bg-white/12 text-[11px] text-ink-dim hover:text-ink"
+                  >
+                    3 Acts
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateGameChaptersMeta(game.id, 10, 'chapters', 'manual', '10 story chunks');
+                      setEditingChapters(false);
+                    }}
+                    className="px-2.5 py-1 rounded-full bg-white/8 hover:bg-white/12 text-[11px] text-ink-dim hover:text-ink"
+                  >
+                    10 Chunks
+                  </button>
+                </div>
+              </div>
             )}
 
             {totalChapters > 0 ? (
@@ -475,17 +531,45 @@ export function GameDetailView({ gameId }: { gameId: string }) {
             ) : (
               !checkingChapters &&
               !editingChapters && (
-                <div className="flex items-center justify-between gap-3 pt-1">
-                  <p className="text-xs text-ink-dim">
-                    Track chapters, acts, or missions alongside your hours.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleOpenChapterEditor}
-                    className="px-3 py-1.5 rounded-full bg-white/8 hover:bg-white/12 text-xs font-semibold text-ink shrink-0"
-                  >
-                    Set chapters
-                  </button>
+                <div className="space-y-2.5 pt-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs text-ink-dim">
+                      Track chapters, acts, missions, or open-world milestones.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleOpenChapterEditor}
+                      className="px-3 py-1.5 rounded-full bg-white/8 hover:bg-white/12 text-xs font-semibold text-ink shrink-0"
+                    >
+                      Custom
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updateGameChaptersMeta(
+                          game.id,
+                          4,
+                          'milestones',
+                          'manual',
+                          '4 milestones (25% steps)'
+                        )
+                      }
+                      className="px-2.5 py-1 rounded-full bg-play/15 text-play text-[11px] font-semibold hover:bg-play/25"
+                    >
+                      + 4 Milestones (25%)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updateGameChaptersMeta(game.id, 3, 'acts', 'manual', 'Three-act structure')
+                      }
+                      className="px-2.5 py-1 rounded-full bg-white/8 text-ink-dim hover:text-ink text-[11px] font-semibold"
+                    >
+                      + 3 Acts
+                    </button>
+                  </div>
                 </div>
               )
             )}
@@ -617,22 +701,12 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                 <h2 className="font-semibold text-[16px] text-ink">Game info</h2>
                 <p className="text-[13.5px] text-ink-dim mt-0.5">{game.genres.join(' · ')}</p>
               </div>
-              <div className="flex items-center gap-1">
-                {[1, 2, 3, 4, 5].map((star) => {
-                  const active = (progress?.rating || 0) >= star;
-                  return (
-                    <button
-                      key={star}
-                      type="button"
-                      onClick={() => rateGame(game.id, star)}
-                      aria-label={`Rate ${star} stars`}
-                      className="p-0.5 hover:scale-110 transition-transform"
-                    >
-                      <Star className={`w-4 h-4 ${active ? 'text-brand fill-brand' : 'text-ink-faint'}`} />
-                    </button>
-                  );
-                })}
-              </div>
+              <RatingControl
+                value={progress?.rating}
+                onChange={(r) => rateGame(game.id, r)}
+                labelPrefix="Rate game"
+                allowClear
+              />
             </div>
 
             <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>

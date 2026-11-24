@@ -5,7 +5,15 @@ import { FilterSortSheet } from '../components/FilterSortSheet';
 import { MediaImage } from '../components/MediaImage';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
 import { useCueStore } from '../store/useCueStore';
-import type { GameItem, PlayFilter } from '../types';
+import type { GameChapterUnit, GameItem, PlayFilter } from '../types';
+import { pad2 } from '../utils/stats';
+
+function formatGameUnitShort(chapter: number, unit: GameChapterUnit = 'chapters'): string {
+  if (unit === 'acts') return `Act ${chapter}`;
+  if (unit === 'missions') return `Mission ${chapter}`;
+  if (unit === 'milestones') return `Milestone ${chapter}`;
+  return `Ch. ${pad2(chapter)}`;
+}
 
 export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
   const {
@@ -16,6 +24,7 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
     setFilterSheetOpen,
     setImportModalOpen,
     updateSettings,
+    advanceGameChapter,
     logGameSession,
   } = useCueStore();
 
@@ -31,17 +40,19 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
 
   const filter = state.settings.playFilter;
 
-  const handleQuickHour = (e: React.MouseEvent, gameId: string) => {
+  const handleQuickAdvance = (e: React.MouseEvent, game: GameItem) => {
     e.stopPropagation();
-    if (justLogged[gameId]) return;
-    setJustLogged((p) => ({ ...p, [gameId]: true }));
+    if (justLogged[game.id]) return;
+    setJustLogged((p) => ({ ...p, [game.id]: true }));
+    const hasChapters = Boolean(game.totalChapters && game.totalChapters > 0);
     const tCommit = window.setTimeout(() => {
-      logGameSession(gameId, 1);
+      if (hasChapters) advanceGameChapter(game.id, 1);
+      else logGameSession(game.id, 1);
     }, 250);
     const tClear = window.setTimeout(() => {
       setJustLogged((p) => {
         const copy = { ...p };
-        delete copy[gameId];
+        delete copy[game.id];
         return copy;
       });
     }, 640);
@@ -101,6 +112,12 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
     const prog = state.gameProgress[game.id];
     const isCompleted = prog?.status === 'completed';
     const flash = Boolean(justLogged[game.id]);
+    const totalChapters = game.totalChapters || 0;
+    const hasChapters = totalChapters > 0;
+    const unit = game.chapterUnit || 'chapters';
+    const currentChap = prog?.currentChapter || 0;
+    const nextChap = hasChapters ? Math.min(totalChapters, currentChap + 1) : 1;
+    const unitCode = formatGameUnitShort(nextChap, unit);
 
     if (isPosterLayout) {
       return (
@@ -123,15 +140,17 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
             {!isCompleted && (
               <button
                 type="button"
-                onClick={(e) => handleQuickHour(e, game.id)}
-                aria-label={`Log 1h on ${game.title}`}
+                onClick={(e) => handleQuickAdvance(e, game)}
+                aria-label={
+                  hasChapters ? `Advance ${game.title} to ${unitCode}` : `Log 1h on ${game.title}`
+                }
                 className={`absolute top-2 right-2 h-8 px-2.5 rounded-full backdrop-blur-md flex items-center justify-center border text-xs font-bold transition-all ${
                   flash
                     ? 'bg-watched/25 border-watched text-watched animate-check-pop'
                     : 'bg-black/65 border-white/20 text-white hover:border-watched hover:text-watched'
                 }`}
               >
-                +1h
+                {hasChapters ? '+1' : '+1h'}
               </button>
             )}
             {state.settings.showPosterProgress && (prog?.completionPct || 0) > 0 && (
@@ -145,16 +164,13 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
           </div>
           <p className="mt-2 text-sm font-semibold text-ink truncate">{game.title}</p>
           <p className="text-xs text-ink-dim tabular-nums">
-            {prog?.hoursPlayed || 0}h · {prog?.platform || game.platforms[0]}
+            {hasChapters
+              ? `${unitCode} · ${currentChap}/${totalChapters} ${unit}`
+              : `${prog?.hoursPlayed || 0}h · ${prog?.platform || game.platforms[0]}`}
           </p>
         </div>
       );
     }
-
-    const chapterSummary =
-      game.totalChapters && game.totalChapters > 0
-        ? `Ch. ${prog?.currentChapter || 0}/${game.totalChapters} · `
-        : '';
 
     return (
       <BingersMediaRow
@@ -163,12 +179,27 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
         badgeLabel={prog?.platinum ? 'Platinum' : undefined}
         badgeClassName="bg-play/15 text-play"
         posterUrl={game.coverUrl}
-        primaryLine={`${chapterSummary}${prog?.hoursPlayed || 0}h played · ${prog?.completionPct || 0}%`}
-        secondaryLine={`${prog?.platform || game.platforms[0]} · ${game.developer}`}
-        progressRatio={(prog?.completionPct || 0) / 100}
-        showProgress={state.settings.showPosterProgress && (prog?.completionPct || 0) > 0}
+        primaryLine={
+          hasChapters
+            ? isCompleted
+              ? `${totalChapters}/${totalChapters} ${unit} · ${prog?.hoursPlayed || 0}h`
+              : `${unitCode} · ${currentChap}/${totalChapters} ${unit}`
+            : `${prog?.hoursPlayed || 0}h played · ${prog?.completionPct || 0}%`
+        }
+        secondaryLine={
+          hasChapters
+            ? `${prog?.platform || game.platforms[0]} · ${prog?.hoursPlayed || 0}h · ${game.developer}`
+            : `${prog?.platform || game.platforms[0]} · ${game.developer}`
+        }
+        progressRatio={
+          hasChapters ? Math.min(1, currentChap / totalChapters) : (prog?.completionPct || 0) / 100
+        }
+        showProgress={
+          state.settings.showPosterProgress &&
+          (hasChapters ? currentChap > 0 : (prog?.completionPct || 0) > 0)
+        }
         isFlashing={flash}
-        flashLabel="Logged +1h"
+        flashLabel={hasChapters ? unitCode : 'Logged +1h'}
         actionContent={
           isCompleted ? (
             (prog?.playthroughCount || 1) > 1 ? (
@@ -179,16 +210,22 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
                 <Check className="w-[17px] h-[17px]" strokeWidth={2.4} />
               </span>
             )
+          ) : hasChapters ? (
+            <span className="inline-flex items-center text-xs font-bold tabular-nums px-0.5">
+              <Plus className="w-3 h-3 mr-0.5" />1
+            </span>
           ) : (
             <span className="inline-flex items-center text-xs font-bold tabular-nums px-0.5">
               <Plus className="w-3 h-3 mr-0.5" />1h
             </span>
           )
         }
-        actionAriaLabel={`Log +1 hour on ${game.title}`}
+        actionAriaLabel={
+          hasChapters ? `Advance ${game.title} to ${unitCode}` : `Log +1 hour on ${game.title}`
+        }
         actionDisabled={isCompleted}
         actionActive={isCompleted}
-        onAction={!isCompleted ? (e) => handleQuickHour(e, game.id) : undefined}
+        onAction={!isCompleted ? (e) => handleQuickAdvance(e, game) : undefined}
         onOpen={() => pushRoute({ view: 'game-detail', gameId: game.id })}
       />
     );

@@ -188,7 +188,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
         primaryLine={
           stats.isFinished
             ? `${stats.total}/${stats.total} ${stats.unitLabel}`
-            : `${stats.unitShort} · ${stats.current}/${stats.total} ${stats.unitLabel}`
+            : `${stats.nextUnitShort} · ${stats.current}/${stats.total} ${stats.unitLabel}`
         }
         secondaryLine={editionLabel ? `${item.creator} · ${editionLabel}` : item.creator}
         progressRatio={stats.ratio}

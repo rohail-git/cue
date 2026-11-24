@@ -4,6 +4,7 @@ import {
   Check,
   ChevronLeft,
   Clock,
+  Film,
   ListPlus,
   Maximize2,
   Minus,
@@ -14,17 +15,21 @@ import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
+import { RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode } from '../types';
+import { evaluateMovieCollectionProgress, findMovieCollection } from '../utils/containers';
 
 export function MovieDetailView({ movieId }: { movieId: string }) {
   const {
     state,
     goBack,
+    pushRoute,
     toggleMovieWatched,
     incrementMovieRewatch,
     toggleMovieWatchlist,
     rateMovie,
+    rateCollection,
     setMovieMood,
     toggleItemInList,
     createCustomList,
@@ -58,6 +63,10 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
 
   const isWatched = (progress?.watchCount || 0) > 0;
   const inLibrary = Boolean(progress);
+  const movieCol = findMovieCollection(movie.title, movie.year);
+  const evalCol = movieCol ? evaluateMovieCollectionProgress(movieCol, state) : null;
+  const colKey = movieCol ? `movie-col:${movieCol.id}` : '';
+  const storedColRating = colKey ? state.collectionRatings?.[colKey] : undefined;
 
   return (
     <div className="min-h-dvh pb-20 bg-background">
@@ -170,7 +179,117 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
 
         <DetailModeToggle mode={detailMode} onChange={setDetailMode} />
 
+        {detailMode === 'simple' && evalCol && (
+          <button
+            type="button"
+            onClick={() => setDetailMode('advanced')}
+            className="w-full rounded-2xl bg-surface hover:bg-surface-raised border border-white/[0.06] px-3.5 py-2 mb-4 flex items-center justify-between gap-2 text-left transition-colors"
+          >
+            <span className="text-xs text-ink-dim truncate flex items-center gap-1.5">
+              <Film className="w-3.5 h-3.5 text-watch shrink-0" />
+              <span>
+                Part of <strong className="text-ink font-semibold">{evalCol.collection.name}</strong>
+              </span>
+            </span>
+            <span className="text-xs font-semibold text-watch tabular-nums shrink-0">
+              {evalCol.watchedCount}/{evalCol.totalCount} watched →
+            </span>
+          </button>
+        )}
+
         <div key={detailMode} data-detail-mode={detailMode} className="animate-detail-flip">
+          {detailMode === 'advanced' && evalCol && (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 space-y-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-watch">
+                    Smart container · Trilogy / Saga
+                  </p>
+                  <h2 className="font-display font-bold text-base text-ink mt-0.5">
+                    {evalCol.collection.name}
+                  </h2>
+                </div>
+                <span className="text-xs font-bold text-watched tabular-nums px-2.5 py-1 rounded-full bg-watched/15">
+                  {evalCol.watchedCount} / {evalCol.totalCount} watched
+                </span>
+              </div>
+
+              <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
+                <div
+                  className="h-full bg-watched transition-all duration-300"
+                  style={{ width: `${Math.round(evalCol.ratio * 100)}%` }}
+                />
+              </div>
+
+              <div className="divide-y divide-white/[0.06]">
+                {evalCol.entries.map((entry) => (
+                  <div
+                    key={entry.title}
+                    role={entry.movieId ? 'button' : undefined}
+                    tabIndex={entry.movieId ? 0 : undefined}
+                    onClick={() => {
+                      if (entry.movieId && entry.movieId !== movie.id) {
+                        pushRoute({ view: 'movie-detail', movieId: entry.movieId });
+                      }
+                    }}
+                    className={`py-2 flex items-center justify-between gap-3 ${
+                      entry.movieId && entry.movieId !== movie.id
+                        ? 'cursor-pointer hover:bg-white/[0.02] -mx-2 px-2 rounded-xl'
+                        : ''
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className={`h-5 w-5 rounded-full flex items-center justify-center border shrink-0 ${
+                          entry.watched
+                            ? 'bg-watched/20 border-watched text-watched'
+                            : 'border-white/15 text-ink-faint'
+                        }`}
+                      >
+                        {entry.watched && <Check className="w-3 h-3" strokeWidth={2.5} />}
+                      </span>
+                      <span className="text-sm text-ink truncate">
+                        {entry.title}
+                        {entry.movieId === movie.id ? ' (this film)' : ''}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 text-xs text-ink-dim tabular-nums">
+                      {typeof entry.userRating === 'number' && entry.userRating > 0 && (
+                        <span className="text-brand font-semibold">★ {entry.userRating}</span>
+                      )}
+                      <span>{entry.year}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {evalCol.calculatedAvg !== null && evalCol.ratedCount > 0 ? (
+                <SuggestedRatingBanner
+                  compact
+                  label={evalCol.collection.name}
+                  calculatedAvg={evalCol.calculatedAvg}
+                  ratedCount={evalCol.ratedCount}
+                  unitWord="films"
+                  currentRating={storedColRating?.rating}
+                  ratingSource={storedColRating?.source}
+                  onAcceptAvg={(avg) => rateCollection(colKey, avg, 'auto')}
+                  onManualRate={(r) => rateCollection(colKey, r, 'manual')}
+                />
+              ) : (
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/[0.06]">
+                  <span className="text-xs text-ink-dim">Rate {evalCol.collection.name}</span>
+                  <RatingControl
+                    size="sm"
+                    value={storedColRating?.rating}
+                    onChange={(r) => rateCollection(colKey, r, 'manual')}
+                    labelPrefix={`Rate ${evalCol.collection.name}`}
+                    allowClear
+                  />
+                </div>
+              )}
+            </section>
+          )}
+
           {detailMode === 'advanced' && (
             <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 flex items-center justify-between gap-4 flex-wrap">
               <div>
@@ -212,22 +331,12 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                 <h2 className="font-semibold text-[16px] text-ink">Movie info</h2>
                 <p className="text-[13.5px] text-ink-dim mt-0.5">{movie.genres.join(' · ')}</p>
               </div>
-              <div className="flex items-center gap-1">
-                {[1, 2, 3, 4, 5].map((star) => {
-                  const active = (progress?.rating || 0) >= star;
-                  return (
-                    <button
-                      key={star}
-                      type="button"
-                      onClick={() => rateMovie(movie.id, star)}
-                      aria-label={`Rate ${star} stars`}
-                      className="p-0.5 hover:scale-110 transition-transform"
-                    >
-                      <Star className={`w-4 h-4 ${active ? 'text-brand fill-brand' : 'text-ink-faint'}`} />
-                    </button>
-                  );
-                })}
-              </div>
+              <RatingControl
+                value={progress?.rating}
+                onChange={(r) => rateMovie(movie.id, r)}
+                labelPrefix="Rate movie"
+                allowClear
+              />
             </div>
 
             <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>

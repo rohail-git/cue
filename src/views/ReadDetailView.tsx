@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Bookmark,
+  BookOpen,
   Check,
   ChevronLeft,
+  ChevronRight,
+  Layers,
   ListPlus,
   Maximize2,
   Minus,
@@ -10,15 +13,20 @@ import {
   Pencil,
   Plus,
   RotateCcw,
-  Star,
 } from 'lucide-react';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
+import { RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import { fetchComicEditionMetadata, formatDisplayTitle } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode } from '../types';
+import {
+  evaluateBookSeriesProgress,
+  evaluateComicEditionContainers,
+  findBookSeries,
+} from '../utils/containers';
 import {
   getAvailableComicEditions,
   getComicEditionLabel,
@@ -27,18 +35,23 @@ import {
   isDcComic,
   resolveComicEditionCover,
 } from '../utils/editions';
-import { getReadStats } from '../utils/stats';
+import { formatRating, getReadUnitsAverage } from '../utils/ratings';
+import { getCompletedReadUnits, getReadStats } from '../utils/stats';
 
 export function ReadDetailView({ readId }: { readId: string }) {
   const {
     state,
     goBack,
+    pushRoute,
     advanceReadProgress,
     setReadProgress,
+    toggleReadUnit,
     markReadFinished,
     incrementReread,
     toggleReadBookmark,
+    rateReadUnit,
     rateReadItem,
+    rateCollection,
     setReadMood,
     setReadEdition,
     updateReadEditionCovers,
@@ -55,6 +68,8 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const [editingTotal, setEditingTotal] = useState(false);
   const [totalDraft, setTotalDraft] = useState('');
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [selectedUnit, setSelectedUnit] = useState<number>(1);
+  const [unitPageStart, setUnitPageStart] = useState<number>(1);
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
     () => state.settings.detailMode || 'simple'
   );
@@ -114,6 +129,24 @@ export function ReadDetailView({ readId }: { readId: string }) {
   }
 
   const stats = getReadStats(item, progress);
+  const unitAvg = getReadUnitsAverage(progress);
+  const completedList = getCompletedReadUnits(item, progress);
+  const completedSet = new Set(completedList);
+  const overlappingContainers =
+    item.format === 'comic' ? evaluateComicEditionContainers(item, progress) : [];
+  const bookSeries = item.format === 'novel' ? findBookSeries(item.title) : null;
+  const evalBookSeries = bookSeries ? evaluateBookSeriesProgress(bookSeries, state) : null;
+  const seriesRatingKey = bookSeries ? `book-series:${bookSeries.id}` : '';
+  const storedSeriesRating = seriesRatingKey ? state.collectionRatings?.[seriesRatingKey] : undefined;
+
+  const safeSelectedUnit = Math.min(stats.total, Math.max(1, selectedUnit));
+  const UNIT_PAGE_SIZE = 48;
+  const maxPageStart = Math.max(1, stats.total - UNIT_PAGE_SIZE + 1);
+  const pageStart = stats.total > UNIT_PAGE_SIZE ? Math.min(unitPageStart, maxPageStart) : 1;
+  const pageEnd = Math.min(stats.total, pageStart + UNIT_PAGE_SIZE - 1);
+  const visibleUnitNumbers: number[] = [];
+  for (let n = pageStart; n <= pageEnd; n += 1) visibleUnitNumbers.push(n);
+
   const formatLabel =
     item.format === 'manga' ? 'Manga' : item.format === 'comic' ? 'Comic' : 'Novel';
   const activeCover = resolveComicEditionCover(item, progress?.edition);
@@ -476,6 +509,258 @@ export function ReadDetailView({ readId }: { readId: string }) {
             </section>
           )}
 
+          {/* Advanced Smart Containers: Overlapping Comic Editions */}
+          {detailMode === 'advanced' && item.format === 'comic' && overlappingContainers.length > 0 && (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-read shrink-0" />
+                  <h2 className="text-sm font-semibold text-ink">
+                    Overlapping editions · Smart containers
+                  </h2>
+                </div>
+                <span className="text-[11px] text-ink-dim tabular-nums">
+                  {completedList.length} {item.unit} logged
+                </span>
+              </div>
+              <div className="space-y-2.5">
+                {overlappingContainers.map((ed) => {
+                  const pct = Math.round(ed.ratio * 100);
+                  return (
+                    <button
+                      key={ed.id}
+                      type="button"
+                      onClick={() => setReadEdition(item.id, ed.id)}
+                      className={`w-full rounded-2xl p-3 border text-left transition-colors ${
+                        ed.isActive
+                          ? 'bg-surface-raised border-read/50'
+                          : 'bg-background/50 border-white/[0.06] hover:bg-surface-raised/60'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs font-semibold text-ink truncate">{ed.label}</span>
+                          {ed.isActive && (
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-read/15 text-read shrink-0">
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        <span
+                          className={`text-xs font-bold tabular-nums shrink-0 ${
+                            ed.isTechnicallyComplete ? 'text-watched' : 'text-ink-dim'
+                          }`}
+                        >
+                          {ed.completedIssues}/{ed.totalIssues}{' '}
+                          {ed.isTechnicallyComplete ? '· Complete' : `(${pct}%)`}
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden mt-2">
+                        <div
+                          className="h-full bg-watched transition-all duration-300"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          {/* Advanced Smart Container: Book Series */}
+          {detailMode === 'advanced' && evalBookSeries && (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-read flex items-center gap-1.5">
+                    <BookOpen className="w-3.5 h-3.5" />
+                    <span>Book Series Container</span>
+                  </p>
+                  <h2 className="font-display font-bold text-base text-ink mt-0.5">
+                    {evalBookSeries.series.name}
+                  </h2>
+                </div>
+                <span className="text-xs font-bold text-watched tabular-nums px-2.5 py-1 rounded-full bg-watched/15">
+                  {evalBookSeries.finishedCount}/{evalBookSeries.totalCount} books
+                </span>
+              </div>
+
+              <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
+                <div
+                  className="h-full bg-watched transition-all duration-300"
+                  style={{ width: `${Math.round(evalBookSeries.ratio * 100)}%` }}
+                />
+              </div>
+
+              <div className="divide-y divide-white/[0.06]">
+                {evalBookSeries.entries.map((entry) => (
+                  <div
+                    key={entry.title}
+                    role={entry.readId ? 'button' : undefined}
+                    tabIndex={entry.readId ? 0 : undefined}
+                    onClick={() => {
+                      if (entry.readId && entry.readId !== item.id) {
+                        pushRoute({ view: 'read-detail', readId: entry.readId });
+                      }
+                    }}
+                    className={`py-2 flex items-center justify-between gap-3 ${
+                      entry.readId && entry.readId !== item.id
+                        ? 'cursor-pointer hover:bg-white/[0.02] -mx-2 px-2 rounded-xl'
+                        : ''
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className={`h-5 w-5 rounded-full flex items-center justify-center border shrink-0 ${
+                          entry.finished
+                            ? 'bg-watched/20 border-watched text-watched'
+                            : 'border-white/15 text-ink-faint'
+                        }`}
+                      >
+                        {entry.finished && <Check className="w-3 h-3" strokeWidth={2.5} />}
+                      </span>
+                      <span className="text-sm text-ink truncate">
+                        {entry.title}
+                        {entry.readId === item.id ? ' (this book)' : ''}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0 text-xs text-ink-dim tabular-nums">
+                      {typeof entry.userRating === 'number' && entry.userRating > 0 && (
+                        <span className="text-brand font-semibold">★ {entry.userRating}</span>
+                      )}
+                      {entry.total > 0 && (
+                        <span>
+                          {entry.current}/{entry.total} ch
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {evalBookSeries.calculatedAvg !== null && evalBookSeries.ratedCount > 0 ? (
+                <SuggestedRatingBanner
+                  compact
+                  label={evalBookSeries.series.name}
+                  calculatedAvg={evalBookSeries.calculatedAvg}
+                  ratedCount={evalBookSeries.ratedCount}
+                  unitWord="books"
+                  currentRating={storedSeriesRating?.rating}
+                  ratingSource={storedSeriesRating?.source}
+                  onAcceptAvg={(avg) => rateCollection(seriesRatingKey, avg, 'auto')}
+                  onManualRate={(r) => rateCollection(seriesRatingKey, r, 'manual')}
+                />
+              ) : (
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/[0.06]">
+                  <span className="text-xs text-ink-dim">Rate {evalBookSeries.series.name}</span>
+                  <RatingControl
+                    size="sm"
+                    value={storedSeriesRating?.rating}
+                    onChange={(r) => rateCollection(seriesRatingKey, r, 'manual')}
+                    labelPrefix={`Rate ${evalBookSeries.series.name}`}
+                    allowClear
+                  />
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Advanced Issue / Chapter Checklist & Unit Ratings */}
+          {detailMode === 'advanced' && (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <h2 className="text-sm font-semibold text-ink">
+                  {item.unit === 'issues' ? 'Issue checklist & ratings' : 'Chapter checklist & ratings'}
+                </h2>
+                {stats.total > UNIT_PAGE_SIZE && (
+                  <div className="flex items-center gap-1.5 text-xs text-ink-dim tabular-nums">
+                    <button
+                      type="button"
+                      onClick={() => setUnitPageStart(Math.max(1, pageStart - UNIT_PAGE_SIZE))}
+                      disabled={pageStart <= 1}
+                      aria-label="Previous unit page"
+                      className="h-6 w-6 rounded-full bg-white/8 flex items-center justify-center disabled:opacity-35"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <span>
+                      {pageStart}–{pageEnd} / {stats.total}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setUnitPageStart(Math.min(maxPageStart, pageStart + UNIT_PAGE_SIZE))
+                      }
+                      disabled={pageEnd >= stats.total}
+                      aria-label="Next unit page"
+                      className="h-6 w-6 rounded-full bg-white/8 flex items-center justify-center disabled:opacity-35"
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-6 sm:grid-cols-8 md:grid-cols-10 gap-1.5">
+                {visibleUnitNumbers.map((u) => {
+                  const done = completedSet.has(u);
+                  const uRating = progress?.unitRatings?.[u];
+                  const selected = safeSelectedUnit === u;
+                  return (
+                    <button
+                      key={u}
+                      type="button"
+                      onClick={() => setSelectedUnit(u)}
+                      className={`h-9 rounded-xl border text-xs font-semibold tabular-nums flex flex-col items-center justify-center leading-none transition-colors ${
+                        selected
+                          ? 'border-white/55 ring-1 ring-white/30 ' +
+                            (done ? 'bg-watched/25 text-watched' : 'bg-surface-raised text-ink')
+                          : done
+                            ? 'border-watched/45 bg-watched/15 text-watched'
+                            : 'border-white/8 bg-background/60 text-ink-dim hover:text-ink'
+                      }`}
+                    >
+                      <span>{item.unit === 'issues' ? `#${u}` : u}</span>
+                      {typeof uRating === 'number' && uRating > 0 && (
+                        <span className="text-[9px] text-brand mt-0.5 leading-none">
+                          ★{formatRating(uRating)}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="rounded-2xl bg-background/70 border border-white/[0.06] px-3 py-2.5 flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-xs font-semibold text-ink tabular-nums">
+                    {item.unit === 'issues' ? `Issue #${safeSelectedUnit}` : `Chapter ${safeSelectedUnit}`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => toggleReadUnit(item.id, safeSelectedUnit)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
+                      completedSet.has(safeSelectedUnit)
+                        ? 'border-watched/60 bg-watched/15 text-watched'
+                        : 'border-white/15 bg-surface text-ink-dim hover:text-ink'
+                    }`}
+                  >
+                    {completedSet.has(safeSelectedUnit) ? '✓ Read' : 'Mark read'}
+                  </button>
+                </div>
+
+                <RatingControl
+                  size="sm"
+                  value={progress?.unitRatings?.[safeSelectedUnit]}
+                  onChange={(r) => rateReadUnit(item.id, safeSelectedUnit, r)}
+                  labelPrefix={`Rate ${item.unit === 'issues' ? `Issue #${safeSelectedUnit}` : `Chapter ${safeSelectedUnit}`}`}
+                  allowClear
+                />
+              </div>
+            </section>
+          )}
+
           {/* Info & Star Rating */}
           <section className="pb-5">
             <div className="flex items-center justify-between gap-4">
@@ -485,34 +770,53 @@ export function ReadDetailView({ readId }: { readId: string }) {
                   {item.genres.join(' · ')} · {item.totalUnits} {stats.unitLabel}
                 </p>
               </div>
-              <div className="flex items-center gap-1">
-                {[1, 2, 3, 4, 5].map((star) => {
-                  const active = (progress?.rating || 0) >= star;
-                  return (
-                    <button
-                      key={star}
-                      type="button"
-                      onClick={() => rateReadItem(item.id, star)}
-                      aria-label={`Rate ${star} stars`}
-                      className="p-0.5 hover:scale-110 transition-transform"
-                    >
-                      <Star className={`w-4 h-4 ${active ? 'text-brand fill-brand' : 'text-ink-faint'}`} />
-                    </button>
-                  );
-                })}
-              </div>
+              <RatingControl
+                value={progress?.rating}
+                onChange={(r) => rateReadItem(item.id, r, 'manual')}
+                labelPrefix="Rate title"
+                allowClear
+              />
             </div>
+
+            {unitAvg &&
+              unitAvg.count > 0 &&
+              (detailMode === 'advanced' || (stats.isFinished && !progress?.rating)) && (
+                <div className="mt-3">
+                  <SuggestedRatingBanner
+                    compact
+                    label={item.title}
+                    calculatedAvg={unitAvg.avg}
+                    ratedCount={unitAvg.count}
+                    unitWord={stats.unitLabel}
+                    currentRating={progress?.rating}
+                    ratingSource={progress?.ratingSource}
+                    onAcceptAvg={(avg) => rateReadItem(item.id, avg, 'auto')}
+                    onManualRate={(r) => rateReadItem(item.id, r, 'manual')}
+                  />
+                </div>
+              )}
 
             <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>
               {item.overview}
             </p>
-            <button
-              type="button"
-              onClick={() => setExpanded((v) => !v)}
-              className="text-xs font-medium text-brand mt-1"
-            >
-              {expanded ? 'Show less' : 'More'}
-            </button>
+            <div className="flex items-center justify-between gap-2 mt-1">
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="text-xs font-medium text-brand"
+              >
+                {expanded ? 'Show less' : 'More'}
+              </button>
+              {detailMode === 'simple' && (
+                <button
+                  type="button"
+                  onClick={() => setDetailMode('advanced')}
+                  className="text-xs font-medium text-ink-dim hover:text-brand transition-colors"
+                >
+                  Editions, checklist, ratings & notes →
+                </button>
+              )}
+            </div>
           </section>
 
           {detailMode === 'advanced' && (

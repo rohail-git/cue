@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
-import { Bell, ChevronRight, Lock, Plus, QrCode, Settings, Trash2, X } from 'lucide-react';
+import { Bell, ChevronRight, Lock, Pin, Plus, QrCode, Settings, Trash2, X } from 'lucide-react';
 import { DeviceSyncModal } from '../components/DeviceSyncModal';
 import { MediaImage } from '../components/MediaImage';
 import { MOOD_OPTIONS } from '../components/PersonalNotesSection';
 import { useCueStore } from '../store/useCueStore';
 import type { GameItem, MediaDomain, Movie, PersonalMood, ReadItem, Show } from '../types';
+import { evaluateCustomListProgress } from '../utils/containers';
 import { resolveComicEditionCover } from '../utils/editions';
 import { computeAllMediaStats, formatRelativeTime, getReadStats, getShowStats } from '../utils/stats';
 
@@ -592,25 +593,47 @@ export function JournalView() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {state.lists.map((list) => (
-                <button
-                  key={list.id}
-                  type="button"
-                  onClick={() => pushRoute({ view: 'list-detail', listId: list.id })}
-                  className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors flex items-center justify-between gap-3"
-                >
-                  <div className="min-w-0">
-                    <p className="font-semibold text-[15px] text-ink truncate">{list.name}</p>
-                    <p className="text-xs text-ink-dim truncate mt-0.5">
-                      {list.description || `${list.items.length} titles`}
-                    </p>
-                    <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">
-                      {list.items.length} items
-                    </p>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-ink-dim shrink-0" />
-                </button>
-              ))}
+              {state.lists.map((list) => {
+                const ev = evaluateCustomListProgress(list, state);
+                const pct = Math.round(ev.averageRatio * 100);
+                return (
+                  <button
+                    key={list.id}
+                    type="button"
+                    onClick={() => pushRoute({ view: 'list-detail', listId: list.id })}
+                    className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors flex flex-col gap-2"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          {list.pinnedToQueue && <Pin className="w-3.5 h-3.5 text-brand shrink-0" />}
+                          <p className="font-semibold text-[15px] text-ink truncate">{list.name}</p>
+                        </div>
+                        <p className="text-xs text-ink-dim truncate mt-0.5">
+                          {list.description || `${list.items.length} titles`}
+                        </p>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-ink-dim shrink-0" />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] text-ink-faint tabular-nums">
+                        <span>
+                          {ev.completedItems}/{ev.totalItems} complete ({pct}%)
+                        </span>
+                        <span>{list.items.length} items</span>
+                      </div>
+                      {ev.totalItems > 0 && (
+                        <div className="h-1 w-full rounded-full bg-white/10 overflow-hidden">
+                          <div
+                            className="h-full bg-brand transition-all duration-300"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           )}
         </section>

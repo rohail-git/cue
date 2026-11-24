@@ -116,24 +116,59 @@ export function getSeasonProgress(
   };
 }
 
+export function getCompletedReadUnits(item: ReadItem, progress?: ReadProgress): number[] {
+  const total = Math.max(1, item.totalUnits);
+  if (Array.isArray(progress?.completedUnits)) {
+    const unique = new Set<number>();
+    for (const u of progress.completedUnits) {
+      const n = Math.round(u);
+      if (Number.isFinite(n) && n >= 1 && n <= total) unique.add(n);
+    }
+    return [...unique].sort((a, b) => a - b);
+  }
+  const current = Math.min(total, Math.max(0, progress?.currentUnit || 0));
+  const out: number[] = [];
+  for (let i = 1; i <= current; i += 1) out.push(i);
+  return out;
+}
+
 export function getReadStats(item: ReadItem, progress?: ReadProgress) {
   const total = Math.max(1, item.totalUnits);
-  const current = Math.min(total, Math.max(0, progress?.currentUnit || 0));
+  const completedList = getCompletedReadUnits(item, progress);
+  const current = Math.min(total, completedList.length);
   const isFinished = progress?.status === 'finished' || current >= total;
   const ratio = Math.min(1, current / total);
   const stepAmount = 1;
   const unitLabel = item.unit === 'issues' ? 'issues' : 'chapters';
   const unitSingular = item.unit === 'issues' ? 'issue' : 'chapter';
+  const doneSet = new Set(completedList);
+  let nextUnit = total;
+  if (!isFinished) {
+    for (let u = 1; u <= total; u += 1) {
+      if (!doneSet.has(u)) {
+        nextUnit = u;
+        break;
+      }
+    }
+  }
   const unitShort = item.unit === 'issues' ? `Issue #${current}` : `Ch. ${current}`;
+  const nextUnitShort = isFinished
+    ? unitShort
+    : item.unit === 'issues'
+      ? `Issue #${nextUnit}`
+      : `Ch. ${nextUnit}`;
   return {
     current,
     total,
+    nextUnit,
+    completedUnits: completedList,
     ratio,
     isFinished,
     stepAmount,
     unitLabel,
     unitSingular,
     unitShort,
+    nextUnitShort,
     rereadCount: progress?.rereadCount || (isFinished ? 1 : 0),
   };
 }

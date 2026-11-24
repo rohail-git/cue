@@ -89,8 +89,15 @@ export interface ReadItem {
   baseTotalUnits?: number;
 }
 
-export type GameChapterUnit = 'chapters' | 'acts' | 'missions';
+export type GameChapterUnit = 'chapters' | 'acts' | 'missions' | 'milestones';
 export type GameChapterSource = 'catalog' | 'wikipedia' | 'web' | 'manual';
+
+export type RatingSource = 'auto' | 'manual';
+
+export interface CollectionRating {
+  rating: number;
+  source: RatingSource;
+}
 
 export interface GameItem {
   id: string;
@@ -118,6 +125,10 @@ export interface ShowProgress {
   notifications: boolean;
   lastWatchedAt?: string;
   rating?: number;
+  ratingSource?: RatingSource;
+  episodeRatings?: Record<string, number>;
+  seasonRatings?: Record<number, number>;
+  seasonRatingSource?: Record<number, RatingSource>;
   mood?: PersonalMood;
 }
 
@@ -132,12 +143,15 @@ export interface MovieProgress {
 export interface ReadProgress {
   status: ReadWatchStatus;
   currentUnit: number;
+  completedUnits?: number[];
   maxCompletedUnit?: number;
   rereadCount: number;
   bookmarked: boolean;
   edition?: ComicEditionId;
   lastReadAt?: string;
   rating?: number;
+  ratingSource?: RatingSource;
+  unitRatings?: Record<number, number>;
   mood?: PersonalMood;
 }
 
@@ -199,6 +213,7 @@ export interface CustomList {
   name: string;
   description: string;
   items: { kind: 'show' | 'movie' | 'read' | 'game'; id: string }[];
+  pinnedToQueue?: boolean;
   createdAt: string;
 }
 
@@ -244,6 +259,7 @@ export interface AppSettings {
 }
 
 export type RouteView =
+  | { view: 'queue' }
   | { view: 'watch'; calendarMode?: boolean }
   | { view: 'read'; calendarMode?: boolean }
   | { view: 'play'; calendarMode?: boolean }
@@ -275,6 +291,7 @@ export interface CueStoreState {
   history: HistoryEntry[];
   journalEntries: JournalEntry[];
   lists: CustomList[];
+  collectionRatings?: Record<string, CollectionRating>;
   profile: UserProfile;
   notifications: AppNotification[];
   settings: AppSettings;

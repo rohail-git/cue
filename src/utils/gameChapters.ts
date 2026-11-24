@@ -1,4 +1,4 @@
-export type ChapterUnit = 'chapters' | 'acts' | 'missions';
+export type ChapterUnit = 'chapters' | 'acts' | 'missions' | 'milestones';
 export type ChapterSource = 'catalog' | 'wikipedia' | 'web' | 'manual';
 
 export interface GameChapterLookupResult {

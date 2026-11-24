@@ -10,6 +10,7 @@ import { JournalView } from './views/JournalView';
 import { LibraryGridView } from './views/LibraryGridView';
 import { MovieDetailView } from './views/MovieDetailView';
 import { PlayView } from './views/PlayView';
+import { QueueView } from './views/QueueView';
 import { ReadDetailView } from './views/ReadDetailView';
 import { ReadView } from './views/ReadView';
 import { SearchView } from './views/SearchView';
@@ -33,6 +34,8 @@ function CueShell() {
 
   const renderView = () => {
     switch (route.view) {
+      case 'queue':
+        return <QueueView />;
       case 'watch':
         return <WatchView calendarMode={route.calendarMode} />;
       case 'read':
@@ -69,8 +72,10 @@ function CueShell() {
 
       {toast && (
         <div className="fixed bottom-24 md:bottom-7 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-md animate-sheet-up">
-          <div className="glass-banner rounded-full px-4 py-2.5 flex items-center justify-between gap-3">
-            <span className="text-[13px] font-medium text-ink truncate">{toast.message}</span>
+          <div className="glass-banner rounded-2xl px-4 py-2.5 flex items-center justify-between gap-3">
+            <span className="text-[13px] font-medium text-ink leading-snug line-clamp-2">
+              {toast.message}
+            </span>
             <div className="flex items-center gap-2 shrink-0">
               {toast.actionLabel && toast.onAction && (
                 <button

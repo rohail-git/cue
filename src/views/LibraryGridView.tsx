@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { ChevronLeft, Trash2 } from 'lucide-react';
+import { ChevronLeft, Pin, Trash2 } from 'lucide-react';
 import { MediaImage } from '../components/MediaImage';
+import { RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import { useCueStore } from '../store/useCueStore';
 import type { GameItem, Movie, ReadItem, Show } from '../types';
+import { evaluateCustomListProgress } from '../utils/containers';
 import { resolveComicEditionCover } from '../utils/editions';
 import { getReadStats, getShowStats } from '../utils/stats';
 
@@ -13,7 +15,15 @@ export function LibraryGridView({
   mode: 'watch' | 'read' | 'play' | 'list';
   listId?: string;
 }) {
-  const { state, goBack, pushRoute, toggleItemInList } = useCueStore();
+  const {
+    state,
+    goBack,
+    pushRoute,
+    toggleItemInList,
+    toggleListPinnedToQueue,
+    deleteCustomList,
+    rateCollection,
+  } = useCueStore();
   const [filter, setFilter] = useState<'all' | 'active' | 'queued' | 'done'>('all');
 
   if (mode === 'list' && listId) {
@@ -29,22 +39,98 @@ export function LibraryGridView({
       );
     }
 
+    const evalList = evaluateCustomListProgress(list, state);
+    const listPct = Math.round(evalList.averageRatio * 100);
+    const colKey = `list:${list.id}`;
+    const storedColRating = state.collectionRatings?.[colKey];
+
     return (
       <div className="min-h-dvh pb-20 pt-4 md:pt-24 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto">
-        <div className="flex items-center gap-3 mb-5">
-          <button
-            type="button"
-            onClick={goBack}
-            aria-label="Back"
-            className="md:hidden glass-btn h-10 w-10 rounded-full flex items-center justify-center text-ink"
-          >
-            <ChevronLeft className="w-5 h-5" />
-          </button>
-          <div>
-            <h1 className="font-display font-bold text-2xl text-ink">{list.name}</h1>
-            {list.description && <p className="text-sm text-ink-dim mt-0.5">{list.description}</p>}
+        <div className="flex items-start justify-between gap-3 mb-5 flex-wrap">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={goBack}
+              aria-label="Back"
+              className="md:hidden glass-btn h-10 w-10 rounded-full flex items-center justify-center text-ink shrink-0"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <div className="min-w-0">
+              <h1 className="font-display font-bold text-2xl text-ink">{list.name}</h1>
+              {list.description && <p className="text-sm text-ink-dim mt-0.5">{list.description}</p>}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => toggleListPinnedToQueue(list.id)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
+                list.pinnedToQueue
+                  ? 'border-brand bg-brand/15 text-brand'
+                  : 'border-white/10 bg-surface text-ink-dim hover:text-ink'
+              }`}
+            >
+              <Pin className="w-3.5 h-3.5" />
+              <span>{list.pinnedToQueue ? 'Pinned to Queue' : 'Pin to Queue'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                deleteCustomList(list.id);
+                goBack();
+              }}
+              aria-label="Delete list"
+              className="h-8 w-8 rounded-full bg-surface border border-white/10 flex items-center justify-center text-ink-dim hover:text-red-400"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
+
+        {/* Cross-Media Run Progress & Rating */}
+        <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-6 space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <p className="text-sm font-semibold text-ink">
+                Cross-Media Progress · {evalList.completedItems}/{evalList.totalItems} complete ({listPct}%)
+              </p>
+              {evalList.nextItem && (
+                <p className="text-xs text-ink-dim mt-0.5">
+                  Up next: {evalList.nextItem.title} ({evalList.nextItem.unitHint})
+                </p>
+              )}
+            </div>
+            <RatingControl
+              value={storedColRating?.rating}
+              onChange={(r) => rateCollection(colKey, r, 'manual')}
+              labelPrefix={`Rate ${list.name}`}
+              allowClear
+            />
+          </div>
+
+          <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+            <div
+              className="h-full bg-brand transition-all duration-300"
+              style={{ width: `${listPct}%` }}
+            />
+          </div>
+
+          {evalList.calculatedAvg !== null && evalList.ratedCount > 0 && (
+            <SuggestedRatingBanner
+              compact
+              label={list.name}
+              calculatedAvg={evalList.calculatedAvg}
+              ratedCount={evalList.ratedCount}
+              unitWord="titles"
+              currentRating={storedColRating?.rating}
+              ratingSource={storedColRating?.source}
+              onAcceptAvg={(avg) => rateCollection(colKey, avg, 'auto')}
+              onManualRate={(r) => rateCollection(colKey, r, 'manual')}
+            />
+          )}
+        </section>
 
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
           {list.items.map((ref) => {
@@ -342,7 +428,7 @@ export function LibraryGridView({
             onClick={() => setFilter(f.id as typeof filter)}
             className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
               filter === f.id
-                ? 'bg-brand border-brand text-white'
+                ? 'bg-brand border-brand text-brand-ink'
                 : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
             }`}
           >
