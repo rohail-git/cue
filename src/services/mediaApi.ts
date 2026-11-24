@@ -1,5 +1,23 @@
 import type { CastMember, ComicEditionId, GameItem, Movie, ReadItem, Season, Show } from '../types';
-import { getKnownComicEditionCounts } from '../utils/editions';
+import {
+  getKnownComicEditionSpec,
+} from '../utils/editions';
+import {
+  type ChapterSource,
+  type ChapterUnit,
+  lookupKnownGameChapters,
+  parseChapterCountFromText,
+} from '../utils/gameChapters';
+
+export type SearchMediaFilter =
+  | 'all'
+  | 'tv'
+  | 'movie'
+  | 'anime'
+  | 'manga'
+  | 'comic'
+  | 'novel'
+  | 'game';
 
 export interface LiveSearchResult {
   domain: 'watch' | 'read' | 'play';
@@ -36,7 +54,7 @@ function hasNonLatinScript(text: string): boolean {
   return NON_LATIN_REGEX.test(text);
 }
 
-function normalizeTitleKey(title: string): string {
+export function normalizeTitleKey(title: string): string {
   return title
     .toLowerCase()
     .replace(/[:\-–—_.,!?'"]/g, ' ')
@@ -133,11 +151,16 @@ function stripEditionAffixes(title: string): string {
   return cleaned || title;
 }
 
-function canonicalReadWorkKey(title: string): string {
+export function canonicalReadWorkKey(title: string): string {
   return normalizeTitleKey(stripEditionAffixes(title));
 }
 
-function detectComicEdition(title: string, year?: number, earliestYear?: number): ComicEditionId {
+function detectComicEdition(
+  title: string,
+  year?: number,
+  earliestYear?: number,
+  allowCompactYearFallback = false
+): ComicEditionId {
   const lower = title.toLowerCase();
   if (lower.includes('absolute') || lower.includes('omnibus') || lower.includes('compendium')) {
     return 'absolute';
@@ -147,7 +170,9 @@ function detectComicEdition(title: string, year?: number, earliestYear?: number)
     return 'hardcover';
   }
   if (/\b(vol\.?|volume|tpb|trade paperback|book)\b/.test(lower)) return 'tpb';
-  if (year && earliestYear && year >= 2024 && year - earliestYear >= 10) return 'compact';
+  if (allowCompactYearFallback && year && earliestYear && year >= 2024 && year - earliestYear >= 10) {
+    return 'compact';
+  }
   return 'digital';
 }
 
@@ -202,7 +227,14 @@ function scoreResult(item: LiveSearchResult, query: string): number {
 
   if (item.posterUrl) score += 12;
   if (item.popularity && item.popularity > 20000) score += 18;
-  if (item.source === 'anilist' || item.source === 'tvmaze' || item.source === 'tmdb') score += 8;
+  if (
+    item.source === 'anilist' ||
+    item.source === 'tvmaze' ||
+    item.source === 'tmdb' ||
+    item.source === 'wikipedia'
+  ) {
+    score += 8;
+  }
 
   return score;
 }
@@ -237,7 +269,9 @@ function rankAndDedupeLiveResults(results: LiveSearchResult[], query: string): L
     const workKey =
       item.domain === 'read'
         ? `read:${canonicalReadWorkKey(item.title)}`
-        : `${item.domain}:${item.mediaType}:${normalizeTitleKey(item.title)}`;
+        : item.kind === 'show'
+          ? `watch:show:${normalizeTitleKey(item.title)}`
+          : `${item.domain}:${item.kind}:${normalizeTitleKey(item.title)}`;
     if (seen.has(workKey)) continue;
     seen.add(workKey);
     out.push(item);
@@ -245,44 +279,69 @@ function rankAndDedupeLiveResults(results: LiveSearchResult[], query: string): L
   return out;
 }
 
+function matchesMediaFilter(item: LiveSearchResult, mediaFilter: SearchMediaFilter): boolean {
+  if (mediaFilter === 'all') return true;
+  return item.mediaType === mediaFilter;
+}
+
 export async function searchLiveMedia(
   query: string,
-  domainFilter: 'all' | 'watch' | 'read' | 'play',
+  mediaFilter: SearchMediaFilter = 'all',
   tmdbApiKey?: string
 ): Promise<LiveSearchResult[]> {
   const trimmed = query.trim();
   if (trimmed.length < 2) return [];
 
   const tasks: Promise<LiveSearchResult[]>[] = [];
+  const wantsWatch =
+    mediaFilter === 'all' || mediaFilter === 'tv' || mediaFilter === 'movie' || mediaFilter === 'anime';
+  const wantsRead =
+    mediaFilter === 'all' || mediaFilter === 'manga' || mediaFilter === 'comic' || mediaFilter === 'novel';
+  const wantsPlay = mediaFilter === 'all' || mediaFilter === 'game';
 
-  if (domainFilter === 'all' || domainFilter === 'watch') {
-    if (tmdbApiKey && tmdbApiKey.trim().length > 8) {
+  if (wantsWatch) {
+    const hasTmdb = Boolean(tmdbApiKey && tmdbApiKey.trim().length > 8);
+    if (hasTmdb) {
       tasks.push(
-        searchTmdbMulti(trimmed, tmdbApiKey.trim()).catch(async () => [
-          ...(await searchTvMaze(trimmed)),
-          ...(await searchItunesMovies(trimmed)),
-        ])
+        searchTmdbMulti(trimmed, tmdbApiKey!.trim()).catch(async () => {
+          const fallback: LiveSearchResult[] = [];
+          if (mediaFilter === 'all' || mediaFilter === 'tv') fallback.push(...(await searchTvMaze(trimmed)));
+          if (mediaFilter === 'all' || mediaFilter === 'movie') fallback.push(...(await searchItunesMovies(trimmed)));
+          return fallback;
+        })
       );
     } else {
-      tasks.push(searchTvMaze(trimmed));
-      tasks.push(searchItunesMovies(trimmed));
+      if (mediaFilter === 'all' || mediaFilter === 'tv') {
+        tasks.push(searchTvMaze(trimmed));
+      }
+      if (mediaFilter === 'all' || mediaFilter === 'movie') {
+        tasks.push(searchItunesMovies(trimmed));
+      }
     }
-    tasks.push(searchAniListAnime(trimmed));
+    if (mediaFilter === 'all' || mediaFilter === 'anime') {
+      tasks.push(searchAniListAnime(trimmed));
+    }
   }
 
-  if (domainFilter === 'all' || domainFilter === 'read') {
-    tasks.push(searchOpenLibrary(trimmed));
-    tasks.push(searchAniListManga(trimmed));
+  if (wantsRead) {
+    if (mediaFilter === 'all' || mediaFilter === 'comic' || mediaFilter === 'novel') {
+      tasks.push(searchOpenLibrary(trimmed));
+    }
+    if (mediaFilter === 'all' || mediaFilter === 'manga' || mediaFilter === 'novel') {
+      tasks.push(searchAniListManga(trimmed));
+    }
   }
 
-  if (domainFilter === 'all' || domainFilter === 'play') {
+  if (wantsPlay) {
     tasks.push(searchGames(trimmed));
   }
 
   const settled = await Promise.allSettled(tasks);
   const combined: LiveSearchResult[] = [];
   for (const res of settled) {
-    if (res.status === 'fulfilled') combined.push(...res.value);
+    if (res.status === 'fulfilled') {
+      combined.push(...res.value.filter((item) => matchesMediaFilter(item, mediaFilter)));
+    }
   }
   return rankAndDedupeLiveResults(combined, trimmed);
 }
@@ -505,21 +564,47 @@ function parseCollectedIssueCount(text?: string, pageCount?: number): number | u
 function buildComicEditionCovers(
   docs: OpenLibraryDoc[],
   earliestYear: number,
-  primaryCover: string
+  primaryCover: string,
+  titleHint?: string
 ): Partial<Record<ComicEditionId, string>> {
   const editionCovers: Partial<Record<ComicEditionId, string>> = {};
   if (primaryCover) {
     editionCovers.digital = primaryCover;
   }
+  const spec = titleHint ? getKnownComicEditionSpec(titleHint) : undefined;
+  const allowCompactFallback = Boolean(
+    titleHint &&
+      (titleHint.toLowerCase().includes('dc') ||
+        COMIC_WORK_HINTS.some((kw) => titleHint.toLowerCase().includes(kw)))
+  );
   for (const d of docs) {
     if (!d.cover_i) continue;
-    const ed = detectComicEdition(combinedOpenLibraryTitle(d), d.first_publish_year, earliestYear);
+    const ed = detectComicEdition(
+      combinedOpenLibraryTitle(d),
+      d.first_publish_year,
+      earliestYear,
+      allowCompactFallback
+    );
+    if (spec && !spec.availableEditions.includes(ed)) continue;
     if (!editionCovers[ed]) {
       editionCovers[ed] = `https://covers.openlibrary.org/b/id/${d.cover_i}-L.jpg`;
     }
   }
   if (primaryCover && !editionCovers.tpb) {
     editionCovers.tpb = primaryCover;
+  }
+  if (spec?.covers) {
+    for (const [edKey, url] of Object.entries(spec.covers) as Array<[ComicEditionId, string]>) {
+      if (url && spec.availableEditions.includes(edKey)) {
+        editionCovers[edKey] = url;
+      }
+    }
+  }
+  if (spec) {
+    const allowed = new Set<ComicEditionId>(spec.availableEditions);
+    for (const key of Object.keys(editionCovers) as ComicEditionId[]) {
+      if (!allowed.has(key)) delete editionCovers[key];
+    }
   }
   return editionCovers;
 }
@@ -605,15 +690,24 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
         docs.some((d) => /\b(absolute|omnibus|tpb|vol\.?\s*\d+)\b/i.test(d.title));
 
       const primaryCover = `https://covers.openlibrary.org/b/id/${primary.cover_i}-L.jpg`;
-      const editionCovers = isComic ? buildComicEditionCovers(docs, earliestYear, primaryCover) : undefined;
+      const spec = isComic ? getKnownComicEditionSpec(baseTitle) : undefined;
+      const editionCovers = isComic
+        ? buildComicEditionCovers(docs, earliestYear, primaryCover, baseTitle)
+        : undefined;
 
-      const curatedCounts = isComic ? getKnownComicEditionCounts(baseTitle) : undefined;
+      const curatedCounts = spec ? { ...spec.counts } : undefined;
       const editionIssueCounts: Partial<Record<ComicEditionId, number>> | undefined = isComic
         ? { ...(curatedCounts || {}) }
         : undefined;
       if (isComic && editionIssueCounts) {
         for (const d of docs) {
-          const ed = detectComicEdition(combinedOpenLibraryTitle(d), d.first_publish_year, earliestYear);
+          const ed = detectComicEdition(
+            combinedOpenLibraryTitle(d),
+            d.first_publish_year,
+            earliestYear,
+            true
+          );
+          if (spec && !spec.availableEditions.includes(ed)) continue;
           const inferred = parseCollectedIssueCount(d.subtitle, d.number_of_pages_median);
           if (!editionIssueCounts[ed] && inferred) {
             editionIssueCounts[ed] = inferred;
@@ -626,6 +720,12 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
           12;
         if (!editionIssueCounts.digital) editionIssueCounts.digital = fallbackBase;
         if (!editionIssueCounts.tpb) editionIssueCounts.tpb = fallbackBase;
+        if (spec) {
+          const allowed = new Set<ComicEditionId>(spec.availableEditions);
+          for (const key of Object.keys(editionIssueCounts) as ComicEditionId[]) {
+            if (!allowed.has(key)) delete editionIssueCounts[key];
+          }
+        }
       }
 
       const cleanKey = primary.key.replace('/works/', '');
@@ -681,14 +781,16 @@ export async function fetchComicEditionMetadata(
   const targetKey = canonicalReadWorkKey(cleanTitle);
   const firstAuthor = creator && creator !== 'Author' ? creator.split(/[&,]/)[0]?.trim() : '';
   const query = firstAuthor ? `${cleanTitle} ${firstAuthor}` : cleanTitle;
-  const curatedCounts = getKnownComicEditionCounts(cleanTitle) || {};
-  const issueCounts: Partial<Record<ComicEditionId, number>> = { ...curatedCounts };
+  const spec = getKnownComicEditionSpec(cleanTitle);
+  const issueCounts: Partial<Record<ComicEditionId, number>> = { ...(spec?.counts || {}) };
+  const curatedCovers: Partial<Record<ComicEditionId, string>> = { ...(spec?.covers || {}) };
+  const allowedSet = spec ? new Set<ComicEditionId>(spec.availableEditions) : null;
 
   try {
     const res = await fetch(
       `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&language=eng&limit=18&fields=key,title,subtitle,author_name,first_publish_year,cover_i,number_of_pages_median`
     );
-    if (!res.ok) return { covers: {}, issueCounts };
+    if (!res.ok) return { covers: curatedCovers, issueCounts };
     const data = (await res.json()) as { docs?: OpenLibraryDoc[] };
     const allWorkMatches = (data.docs || []).filter((d) => {
       if (!d.title) return false;
@@ -696,7 +798,7 @@ export async function fetchComicEditionMetadata(
       return !hasNonLatinScript(fullTitle) && canonicalReadWorkKey(fullTitle) === targetKey;
     });
     const matching = allWorkMatches.filter((d) => Boolean(d.cover_i));
-    if (allWorkMatches.length === 0) return { covers: {}, issueCounts };
+    if (allWorkMatches.length === 0) return { covers: curatedCovers, issueCounts };
 
     const years = allWorkMatches
       .map((d) => d.first_publish_year)
@@ -712,10 +814,16 @@ export async function fetchComicEditionMetadata(
     const primaryCover = primaryWithCover?.cover_i
       ? `https://covers.openlibrary.org/b/id/${primaryWithCover.cover_i}-L.jpg`
       : '';
-    const covers = buildComicEditionCovers(matching, earliestYear, primaryCover);
+    const covers = buildComicEditionCovers(matching, earliestYear, primaryCover, cleanTitle);
 
     for (const d of allWorkMatches) {
-      const ed = detectComicEdition(combinedOpenLibraryTitle(d), d.first_publish_year, earliestYear);
+      const ed = detectComicEdition(
+        combinedOpenLibraryTitle(d),
+        d.first_publish_year,
+        earliestYear,
+        true
+      );
+      if (allowedSet && !allowedSet.has(ed)) continue;
       const inferred = parseCollectedIssueCount(d.subtitle, d.number_of_pages_median);
       if (!issueCounts[ed] && inferred) {
         issueCounts[ed] = inferred;
@@ -741,14 +849,15 @@ export async function fetchComicEditionMetadata(
             const yearMatch = (e.publish_date || '').match(/\b(19\d\d|20\d\d)\b/);
             const pubYear = yearMatch ? Number(yearMatch[1]) : undefined;
             const fmtLower = `${e.title || ''} ${e.physical_format || ''}`.toLowerCase();
-            let ed: ComicEditionId = detectComicEdition(e.title || '', pubYear, earliestYear);
+            let ed: ComicEditionId = detectComicEdition(e.title || '', pubYear, earliestYear, true);
             if (ed === 'digital') {
               if (fmtLower.includes('hardcover') || fmtLower.includes('capa dura')) ed = 'hardcover';
               else if (fmtLower.includes('paperback') || fmtLower.includes('softcover')) ed = 'tpb';
             }
+            if (allowedSet && !allowedSet.has(ed)) continue;
 
             const coverId = e.covers?.find((c) => c > 0);
-            if (coverId) {
+            if (coverId && !curatedCovers[ed]) {
               const url = `https://covers.openlibrary.org/b/id/${coverId}-L.jpg`;
               if (!covers[ed] || (ed === 'hardcover' && fmtLower.includes('hardcover'))) {
                 covers[ed] = covers[ed] || url;
@@ -771,9 +880,19 @@ export async function fetchComicEditionMetadata(
       }
     }
 
-    return { covers, issueCounts };
+    const mergedCovers: Partial<Record<ComicEditionId, string>> = { ...covers, ...curatedCovers };
+    if (allowedSet) {
+      for (const key of Object.keys(mergedCovers) as ComicEditionId[]) {
+        if (!allowedSet.has(key)) delete mergedCovers[key];
+      }
+      for (const key of Object.keys(issueCounts) as ComicEditionId[]) {
+        if (!allowedSet.has(key)) delete issueCounts[key];
+      }
+    }
+
+    return { covers: mergedCovers, issueCounts };
   } catch {
-    return { covers: {}, issueCounts };
+    return { covers: curatedCovers, issueCounts };
   }
 }
 
@@ -850,11 +969,13 @@ async function searchAniListManga(query: string): Promise<LiveSearchResult[]> {
 
 async function searchGames(query: string): Promise<LiveSearchResult[]> {
   const results: LiveSearchResult[] = [];
-  try {
-    const res = await fetch(
-      `https://www.cheapshark.com/api/1.0/games?title=${encodeURIComponent(query)}&limit=10`
-    );
-    if (res.ok) {
+  const fetchCheapShark = async (): Promise<LiveSearchResult[]> => {
+    const out: LiveSearchResult[] = [];
+    try {
+      const res = await fetch(
+        `https://www.cheapshark.com/api/1.0/games?title=${encodeURIComponent(query)}&limit=10`
+      );
+      if (!res.ok) return out;
       const data = (await res.json()) as Array<{
         gameID: string;
         steamAppID?: string | null;
@@ -868,7 +989,7 @@ async function searchGames(query: string): Promise<LiveSearchResult[]> {
         const appId = Number(g.steamAppID);
         const cover = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900_2x.jpg`;
         const header = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg`;
-        results.push({
+        out.push({
           domain: 'play',
           kind: 'game',
           id: `steam-${appId}`,
@@ -885,16 +1006,28 @@ async function searchGames(query: string): Promise<LiveSearchResult[]> {
           backdropUrl: header,
           overview: `${g.external} — tracked in your Play log.`,
         });
-        if (results.length >= 6) break;
+        if (out.length >= 6) break;
+      }
+    } catch {
+      // ignore
+    }
+    return out;
+  };
+
+  const [wikiRes, csRes] = await Promise.allSettled([
+    searchWikipediaSummary(query, 'game'),
+    fetchCheapShark(),
+  ]);
+
+  if (wikiRes.status === 'fulfilled' && wikiRes.value) {
+    results.push(wikiRes.value);
+  }
+  if (csRes.status === 'fulfilled') {
+    for (const item of csRes.value) {
+      if (!results.some((r) => normalizeTitleKey(r.title) === normalizeTitleKey(item.title))) {
+        results.push(item);
       }
     }
-  } catch {
-    // ignore
-  }
-
-  const wikiGame = await searchWikipediaSummary(query, 'game');
-  if (wikiGame && !results.some((r) => r.title.toLowerCase() === wikiGame.title.toLowerCase())) {
-    results.unshift(wikiGame);
   }
 
   return results;
@@ -904,15 +1037,43 @@ async function searchWikipediaSummary(
   query: string,
   target: 'film' | 'game'
 ): Promise<LiveSearchResult | null> {
+  const candidates: string[] = [];
+
+  try {
+    const srSuffix = target === 'film' ? 'film' : 'video game';
+    const searchRes = await fetch(
+      `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(
+        `${query} ${srSuffix}`
+      )}&format=json&origin=*&srlimit=4`
+    );
+    if (searchRes.ok) {
+      const searchJson = (await searchRes.json()) as {
+        query?: { search?: Array<{ title?: string }> };
+      };
+      for (const hit of searchJson.query?.search || []) {
+        if (hit.title) {
+          const slug = hit.title.replace(/\s+/g, '_');
+          if (!candidates.includes(slug)) candidates.push(slug);
+        }
+      }
+    }
+  } catch {
+    // fall back to direct slug guesses
+  }
+
   const titleCased = query
     .trim()
     .split(/\s+/)
     .map((w) => (w.length ? w[0].toUpperCase() + w.slice(1) : ''))
     .join('_');
 
-  const suffixes =
+  const directSlugs =
     target === 'film' ? [`${titleCased}_(film)`, titleCased] : [`${titleCased}_(video_game)`, titleCased];
-  for (const slug of suffixes) {
+  for (const s of directSlugs) {
+    if (!candidates.includes(s)) candidates.push(s);
+  }
+
+  for (const slug of candidates.slice(0, 5)) {
     try {
       const res = await fetch(
         `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(slug)}`
@@ -935,13 +1096,14 @@ async function searchWikipediaSummary(
       if (!poster) continue;
 
       if (target === 'game') {
+        const cleanGameTitle = (data.title || query).replace(/\s*\([^)]*video game\)$/i, '');
         return {
           domain: 'play',
           kind: 'game',
           id: `wiki-game-${data.pageid || slug}`,
           source: 'wikipedia',
           externalId: data.pageid || Date.now(),
-          title: (data.title || query).replace(/\s*\([^)]*video game\)$/i, ''),
+          title: cleanGameTitle,
           subtitle: data.description || 'Video Game',
           year: yearMatch ? Number(yearMatch[1]) : 2023,
           mediaType: 'game',
@@ -977,6 +1139,77 @@ async function searchWikipediaSummary(
     }
   }
   return null;
+}
+
+export interface GameChapterLookupResponse {
+  found: boolean;
+  totalChapters?: number;
+  unit?: ChapterUnit;
+  source?: ChapterSource;
+  note?: string;
+}
+
+/** Auto-detects total story chapters/acts/missions for a game via catalog, /api/game-chapters, or Wikipedia CORS fallback. */
+export async function fetchGameChapterInfo(title: string): Promise<GameChapterLookupResponse> {
+  const curated = lookupKnownGameChapters(title);
+  if (curated) {
+    return {
+      found: true,
+      totalChapters: curated.totalChapters,
+      unit: curated.unit,
+      source: 'catalog',
+      note: curated.note,
+    };
+  }
+
+  try {
+    const res = await fetch(`/api/game-chapters?title=${encodeURIComponent(title)}`);
+    if (res.ok) {
+      const data = (await res.json()) as GameChapterLookupResponse;
+      if (data.found && typeof data.totalChapters === 'number' && data.totalChapters >= 2) {
+        return data;
+      }
+    }
+  } catch {
+    // local dev without serverless route falls through to client Wikipedia lookup
+  }
+
+  try {
+    const srRes = await fetch(
+      `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(
+        `${title} video game`
+      )}&format=json&origin=*&srlimit=3`
+    );
+    if (!srRes.ok) return { found: false };
+    const srJson = (await srRes.json()) as {
+      query?: { search?: Array<{ pageid: number; title: string }> };
+    };
+    const hit = srJson.query?.search?.[0];
+    if (!hit) return { found: false };
+
+    const exRes = await fetch(
+      `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&pageids=${hit.pageid}&format=json&origin=*`
+    );
+    if (!exRes.ok) return { found: false };
+    const exJson = (await exRes.json()) as {
+      query?: { pages?: Record<string, { extract?: string }> };
+    };
+    const extract = exJson.query?.pages?.[String(hit.pageid)]?.extract || '';
+    const parsed = parseChapterCountFromText(extract);
+    if (parsed) {
+      return {
+        found: true,
+        totalChapters: parsed.totalChapters,
+        unit: parsed.unit,
+        source: 'wikipedia',
+        note: `Detected from Wikipedia (${hit.title})`,
+      };
+    }
+  } catch {
+    // ignore network failure
+  }
+
+  return { found: false };
 }
 
 async function searchTmdbMulti(query: string, apiKey: string): Promise<LiveSearchResult[]> {
@@ -1317,6 +1550,7 @@ export function hydrateLiveReadItem(item: LiveSearchResult): ReadItem {
 }
 
 export function hydrateLiveGameItem(item: LiveSearchResult): GameItem {
+  const known = lookupKnownGameChapters(item.title);
   return {
     id: item.id,
     steamAppId: item.steamAppId,
@@ -1329,5 +1563,9 @@ export function hydrateLiveGameItem(item: LiveSearchResult): GameItem {
     coverUrl: item.posterUrl,
     backdropUrl: item.backdropUrl || item.posterUrl,
     overview: item.overview,
+    totalChapters: known?.totalChapters,
+    chapterUnit: known?.unit,
+    chapterSource: known?.source,
+    chapterNote: known?.note,
   };
 }

@@ -26,8 +26,8 @@ export const COMIC_EDITIONS: ComicEditionOption[] = [
   },
   {
     id: 'hardcover',
-    label: 'Deluxe Hardcover',
-    subtitle: 'Oversized hardcover',
+    label: 'Hardcover',
+    subtitle: 'Hardcover collection',
   },
   {
     id: 'absolute',
@@ -61,25 +61,134 @@ const DC_KEYWORDS = [
   'alan moore',
 ];
 
-export const KNOWN_COMIC_EDITION_COUNTS: Record<string, Partial<Record<ComicEditionId, number>>> = {
-  'the flash rebirth': { digital: 6, tpb: 6, compact: 13, hardcover: 6, absolute: 13 },
-  'flash rebirth': { digital: 6, tpb: 6, compact: 13, hardcover: 6, absolute: 13 },
-  'all star superman': { digital: 12, tpb: 12, compact: 12, hardcover: 12, absolute: 12 },
-  watchmen: { digital: 12, tpb: 12, compact: 12, hardcover: 12, absolute: 12 },
-  'batman year one': { digital: 4, tpb: 4, compact: 4, hardcover: 4, absolute: 4 },
-  'batman hush': { digital: 12, tpb: 12, compact: 12, hardcover: 12, absolute: 15 },
-  'batman the court of owls': { digital: 11, tpb: 7, compact: 11, hardcover: 11, absolute: 11 },
-  'batman the long halloween': { digital: 13, tpb: 13, compact: 13, hardcover: 13, absolute: 13 },
-  'kingdom come': { digital: 4, tpb: 4, compact: 4, hardcover: 4, absolute: 4 },
-  'supergirl woman of tomorrow': { digital: 8, tpb: 8, compact: 8, hardcover: 8, absolute: 8 },
-  'superman birthright': { digital: 12, tpb: 12, compact: 12, hardcover: 12, absolute: 12 },
-  'far sector': { digital: 12, tpb: 12, compact: 12, hardcover: 12, absolute: 12 },
-  dceased: { digital: 6, tpb: 6, compact: 8, hardcover: 6, absolute: 14 },
-  'american vampire': { digital: 11, tpb: 5, compact: 11, hardcover: 11, absolute: 34 },
-  'wonder woman earth one': { digital: 3, tpb: 3, compact: 9, hardcover: 9, absolute: 9 },
-  'catwoman trail of the catwoman': { digital: 9, tpb: 9, compact: 11, hardcover: 11, absolute: 11 },
-  saga: { digital: 72, tpb: 6, compact: 18, hardcover: 18, absolute: 54 },
-  invincible: { digital: 144, tpb: 6, compact: 47, hardcover: 13, absolute: 47 },
+export interface KnownComicEditionSpec {
+  availableEditions: ComicEditionId[];
+  counts: Partial<Record<ComicEditionId, number>>;
+  covers?: Partial<Record<ComicEditionId, string>>;
+}
+
+export const KNOWN_COMIC_EDITIONS: Record<string, KnownComicEditionSpec> = {
+  'the flash rebirth': {
+    availableEditions: ['digital', 'tpb', 'hardcover', 'compact'],
+    counts: { digital: 6, tpb: 6, hardcover: 6, compact: 13 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781799507697',
+      tpb: 'https://images.penguinrandomhouse.com/cover/9781401230012',
+      hardcover: 'https://images.penguinrandomhouse.com/cover/9781401225681',
+    },
+  },
+  'flash rebirth': {
+    availableEditions: ['digital', 'tpb', 'hardcover', 'compact'],
+    counts: { digital: 6, tpb: 6, hardcover: 6, compact: 13 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781799507697',
+      tpb: 'https://images.penguinrandomhouse.com/cover/9781401230012',
+      hardcover: 'https://images.penguinrandomhouse.com/cover/9781401225681',
+    },
+  },
+  'all star superman': {
+    availableEditions: ['digital', 'tpb', 'compact', 'hardcover', 'absolute'],
+    counts: { digital: 12, tpb: 12, compact: 12, hardcover: 12, absolute: 12 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781779527257',
+    },
+  },
+  watchmen: {
+    availableEditions: ['digital', 'tpb', 'compact', 'hardcover', 'absolute'],
+    counts: { digital: 12, tpb: 12, compact: 12, hardcover: 12, absolute: 12 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781779527325',
+    },
+  },
+  'batman year one': {
+    availableEditions: ['digital', 'tpb', 'hardcover', 'absolute'],
+    counts: { digital: 4, tpb: 4, hardcover: 4, absolute: 4 },
+  },
+  'batman hush': {
+    availableEditions: ['digital', 'tpb', 'compact', 'hardcover', 'absolute'],
+    counts: { digital: 12, tpb: 12, compact: 12, hardcover: 12, absolute: 15 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781779527264',
+    },
+  },
+  'batman the court of owls': {
+    availableEditions: ['digital', 'tpb', 'compact', 'hardcover', 'absolute'],
+    counts: { digital: 11, tpb: 7, compact: 11, hardcover: 11, absolute: 11 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781779527271',
+    },
+  },
+  'batman the long halloween': {
+    availableEditions: ['digital', 'tpb', 'compact', 'hardcover', 'absolute'],
+    counts: { digital: 13, tpb: 13, compact: 13, hardcover: 13, absolute: 13 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781799502883',
+    },
+  },
+  'kingdom come': {
+    availableEditions: ['digital', 'tpb', 'compact', 'hardcover', 'absolute'],
+    counts: { digital: 4, tpb: 4, compact: 4, hardcover: 4, absolute: 4 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781799501299',
+    },
+  },
+  'supergirl woman of tomorrow': {
+    availableEditions: ['digital', 'tpb', 'compact', 'hardcover'],
+    counts: { digital: 8, tpb: 8, compact: 8, hardcover: 8 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781799506904',
+    },
+  },
+  'superman birthright': {
+    availableEditions: ['digital', 'tpb', 'compact', 'hardcover'],
+    counts: { digital: 12, tpb: 12, compact: 12, hardcover: 12 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781799501916',
+    },
+  },
+  'far sector': {
+    availableEditions: ['digital', 'tpb', 'compact'],
+    counts: { digital: 12, tpb: 12, compact: 12 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781779527295',
+    },
+  },
+  dceased: {
+    availableEditions: ['digital', 'tpb', 'compact', 'hardcover', 'absolute'],
+    counts: { digital: 6, tpb: 6, compact: 8, hardcover: 6, absolute: 14 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781799501633',
+    },
+  },
+  'american vampire': {
+    availableEditions: ['digital', 'tpb', 'compact', 'hardcover', 'absolute'],
+    counts: { digital: 11, tpb: 5, compact: 11, hardcover: 11, absolute: 34 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781779527349',
+    },
+  },
+  'wonder woman earth one': {
+    availableEditions: ['digital', 'tpb', 'compact', 'hardcover'],
+    counts: { digital: 3, tpb: 3, compact: 9, hardcover: 9 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781779527332',
+    },
+  },
+  'catwoman trail of the catwoman': {
+    availableEditions: ['digital', 'tpb', 'compact'],
+    counts: { digital: 9, tpb: 9, compact: 11 },
+    covers: {
+      compact: 'https://images.penguinrandomhouse.com/cover/9781779527288',
+    },
+  },
+  saga: {
+    availableEditions: ['digital', 'tpb', 'hardcover', 'absolute'],
+    counts: { digital: 72, tpb: 6, hardcover: 18, absolute: 54 },
+  },
+  invincible: {
+    availableEditions: ['digital', 'tpb', 'hardcover', 'absolute'],
+    counts: { digital: 144, tpb: 6, hardcover: 13, absolute: 47 },
+  },
 };
 
 function normalizeEditionLookupKey(title: string): string {
@@ -91,18 +200,57 @@ function normalizeEditionLookupKey(title: string): string {
     .trim();
 }
 
+export function getKnownComicEditionSpec(title: string): KnownComicEditionSpec | undefined {
+  const norm = normalizeEditionLookupKey(title);
+  if (!norm) return undefined;
+  if (KNOWN_COMIC_EDITIONS[norm]) {
+    return KNOWN_COMIC_EDITIONS[norm];
+  }
+  const matchedKey = Object.keys(KNOWN_COMIC_EDITIONS).find(
+    (k) => norm === k || norm.startsWith(`${k} `)
+  );
+  return matchedKey ? KNOWN_COMIC_EDITIONS[matchedKey] : undefined;
+}
+
 export function getKnownComicEditionCounts(
   title: string
 ): Partial<Record<ComicEditionId, number>> | undefined {
-  const norm = normalizeEditionLookupKey(title);
-  if (!norm) return undefined;
-  if (KNOWN_COMIC_EDITION_COUNTS[norm]) {
-    return { ...KNOWN_COMIC_EDITION_COUNTS[norm] };
+  const spec = getKnownComicEditionSpec(title);
+  return spec ? { ...spec.counts } : undefined;
+}
+
+export function getKnownComicEditionCovers(
+  title: string
+): Partial<Record<ComicEditionId, string>> | undefined {
+  const spec = getKnownComicEditionSpec(title);
+  return spec?.covers ? { ...spec.covers } : undefined;
+}
+
+export function getAvailableComicEditions(
+  item: Pick<ReadItem, 'title' | 'editionCovers' | 'editionIssueCounts'>,
+  activeEdition?: ComicEditionId
+): ComicEditionOption[] {
+  const spec = getKnownComicEditionSpec(item.title);
+  if (spec) {
+    const allowed = new Set<ComicEditionId>(spec.availableEditions);
+    return COMIC_EDITIONS.filter((opt) => allowed.has(opt.id));
   }
-  const matchedKey = Object.keys(KNOWN_COMIC_EDITION_COUNTS).find(
-    (k) => norm === k || norm.startsWith(`${k} `)
-  );
-  return matchedKey ? { ...KNOWN_COMIC_EDITION_COUNTS[matchedKey] } : undefined;
+
+  return COMIC_EDITIONS.filter((opt) => {
+    if (opt.id === 'digital' || opt.id === 'tpb') return true;
+    if (activeEdition === opt.id) return true;
+    return Boolean(item.editionCovers?.[opt.id] || item.editionIssueCounts?.[opt.id]);
+  });
+}
+
+export function resolveComicEditionCover(
+  item: Pick<ReadItem, 'title' | 'coverUrl' | 'editionCovers'>,
+  edition?: ComicEditionId
+): string {
+  if (!edition) return item.coverUrl;
+  const curatedCover = getKnownComicEditionCovers(item.title)?.[edition];
+  if (curatedCover) return curatedCover;
+  return item.editionCovers?.[edition] || item.coverUrl;
 }
 
 export function resolveComicEditionTotal(
@@ -110,10 +258,13 @@ export function resolveComicEditionTotal(
   edition?: ComicEditionId
 ): number {
   if (!edition) return item.totalUnits;
+  const spec = getKnownComicEditionSpec(item.title);
+  if (spec) {
+    const curatedForEd = spec.counts[edition];
+    if (typeof curatedForEd === 'number' && curatedForEd > 0) return curatedForEd;
+  }
   const fromItem = item.editionIssueCounts?.[edition];
   if (typeof fromItem === 'number' && fromItem > 0) return fromItem;
-  const curated = getKnownComicEditionCounts(item.title)?.[edition];
-  if (typeof curated === 'number' && curated > 0) return curated;
   return item.baseTotalUnits ?? item.totalUnits;
 }
 

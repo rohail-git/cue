@@ -89,6 +89,9 @@ export interface ReadItem {
   baseTotalUnits?: number;
 }
 
+export type GameChapterUnit = 'chapters' | 'acts' | 'missions';
+export type GameChapterSource = 'catalog' | 'wikipedia' | 'web' | 'manual';
+
 export interface GameItem {
   id: string;
   steamAppId?: number;
@@ -101,6 +104,10 @@ export interface GameItem {
   coverUrl: string;
   backdropUrl: string;
   overview: string;
+  totalChapters?: number;
+  chapterUnit?: GameChapterUnit;
+  chapterSource?: GameChapterSource;
+  chapterNote?: string;
 }
 
 export interface ShowProgress {
@@ -138,6 +145,7 @@ export interface GameProgress {
   status: GameWatchStatus;
   hoursPlayed: number;
   completionPct: number;
+  currentChapter?: number;
   playthroughCount: number;
   platinum: boolean;
   platform: GamePlatform;
@@ -219,6 +227,8 @@ export type WatchFilter = 'all' | 'tv' | 'movie' | 'anime';
 export type ReadFilter = 'all' | 'novel' | 'manga' | 'comic';
 export type PlayFilter = 'all' | 'playing' | 'backlog' | 'completed';
 
+export type DetailCardMode = 'simple' | 'advanced';
+
 export interface AppSettings {
   accentColor: string;
   watchLayout: LayoutMode;
@@ -229,6 +239,7 @@ export interface AppSettings {
   playFilter: PlayFilter;
   sortBy: SortMode;
   showPosterProgress: boolean;
+  detailMode?: DetailCardMode;
   tmdbApiKey: string;
 }
 

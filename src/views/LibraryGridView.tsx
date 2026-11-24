@@ -3,6 +3,7 @@ import { ChevronLeft, Trash2 } from 'lucide-react';
 import { MediaImage } from '../components/MediaImage';
 import { useCueStore } from '../store/useCueStore';
 import type { GameItem, Movie, ReadItem, Show } from '../types';
+import { resolveComicEditionCover } from '../utils/editions';
 import { getReadStats, getShowStats } from '../utils/stats';
 
 export function LibraryGridView({
@@ -61,7 +62,12 @@ export function LibraryGridView({
                 : ref.kind === 'movie'
                   ? state.movies[ref.id]?.posterUrl
                   : ref.kind === 'read'
-                    ? state.readItems[ref.id]?.coverUrl
+                    ? state.readItems[ref.id]
+                      ? resolveComicEditionCover(
+                          state.readItems[ref.id],
+                          state.readProgress[ref.id]?.edition
+                        )
+                      : ''
                     : state.games[ref.id]?.coverUrl;
             const year =
               ref.kind === 'show'
@@ -275,7 +281,7 @@ export function LibraryGridView({
               >
                 <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
                   <MediaImage
-                    src={item.coverUrl}
+                    src={resolveComicEditionCover(item, state.readProgress[item.id]?.edition)}
                     alt={item.title}
                     className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
                   />

@@ -255,6 +255,20 @@ export function SettingsModal() {
                 <span className="w-5 h-5 rounded-full bg-white shadow" />
               </span>
             </button>
+            <button
+              type="button"
+              onClick={() =>
+                updateSettings({
+                  detailMode: state.settings.detailMode === 'advanced' ? 'simple' : 'advanced',
+                })
+              }
+              className="w-full flex items-center justify-between px-3.5 py-3 rounded-xl bg-background border border-white/8 text-sm"
+            >
+              <span>Default detail card mode</span>
+              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-white/8 text-brand capitalize">
+                {state.settings.detailMode || 'simple'}
+              </span>
+            </button>
           </section>
 
           {/* Live Search */}

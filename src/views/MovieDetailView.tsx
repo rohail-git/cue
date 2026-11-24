@@ -1,8 +1,21 @@
 import { useState } from 'react';
-import { Bookmark, Check, ChevronLeft, Clock, ListPlus, Plus, Star } from 'lucide-react';
+import {
+  Bookmark,
+  Check,
+  ChevronLeft,
+  Clock,
+  ListPlus,
+  Maximize2,
+  Minus,
+  Plus,
+  Star,
+} from 'lucide-react';
+import { CoverLightbox } from '../components/CoverLightbox';
+import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { useCueStore } from '../store/useCueStore';
+import type { DetailCardMode } from '../types';
 
 export function MovieDetailView({ movieId }: { movieId: string }) {
   const {
@@ -20,6 +33,10 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
   const [expanded, setExpanded] = useState(false);
   const [listPickerOpen, setListPickerOpen] = useState(false);
   const [newListName, setNewListName] = useState('');
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [detailMode, setDetailMode] = useState<DetailCardMode>(
+    () => state.settings.detailMode || 'simple'
+  );
 
   const movie = state.movies[movieId];
   const progress = state.movieProgress[movieId];
@@ -71,9 +88,17 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
         </button>
 
         <div className="absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto flex items-end gap-4">
-          <div className="w-24 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0">
+          <button
+            type="button"
+            onClick={() => setLightboxOpen(true)}
+            aria-label="View cover fullscreen"
+            className="group relative w-24 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface cursor-zoom-in"
+          >
             <MediaImage src={movie.posterUrl} alt={movie.title} className="w-full h-full object-cover" />
-          </div>
+            <span className="absolute bottom-1.5 right-1.5 h-6 w-6 rounded-full bg-black/70 border border-white/15 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity">
+              <Maximize2 className="w-3 h-3" />
+            </span>
+          </button>
           <div className="min-w-0 pb-1">
             <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-ink tracking-tight leading-tight">
               {movie.title}
@@ -97,7 +122,7 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
       </div>
 
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 pt-3">
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-4">
           <button
             type="button"
             onClick={() => toggleMovieWatchlist(movie.id)}
@@ -143,56 +168,116 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
           )}
         </div>
 
-        <section className="pb-5">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h2 className="font-semibold text-[16px] text-ink">Movie info</h2>
-              <p className="text-[13.5px] text-ink-dim mt-0.5">{movie.genres.join(' · ')}</p>
-            </div>
-            <div className="flex items-center gap-1">
-              {[1, 2, 3, 4, 5].map((star) => {
-                const active = (progress?.rating || 0) >= star;
-                return (
-                  <button
-                    key={star}
-                    type="button"
-                    onClick={() => rateMovie(movie.id, star)}
-                    aria-label={`Rate ${star} stars`}
-                    className="p-0.5 hover:scale-110 transition-transform"
-                  >
-                    <Star className={`w-4 h-4 ${active ? 'text-brand fill-brand' : 'text-ink-faint'}`} />
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+        <DetailModeToggle mode={detailMode} onChange={setDetailMode} />
 
-          <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>
-            {movie.overview}
-          </p>
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="text-xs font-medium text-brand mt-1"
-          >
-            {expanded ? 'Show less' : 'More'}
-          </button>
-        </section>
+        <div key={detailMode} data-detail-mode={detailMode} className="animate-detail-flip">
+          {detailMode === 'advanced' && (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-ink-dim">
+                  Watch log & runtime
+                </p>
+                <p className="text-sm font-semibold text-ink mt-0.5 tabular-nums">
+                  {(progress?.watchCount || 0) * movie.runtime} min watched total · Release {movie.releaseDate}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-ink-dim">Watches:</span>
+                <button
+                  type="button"
+                  onClick={() => incrementMovieRewatch(movie.id, -1)}
+                  aria-label="Decrease watch count"
+                  className="w-7 h-7 rounded-full bg-white/8 flex items-center justify-center text-ink-dim"
+                >
+                  <Minus className="w-3.5 h-3.5" />
+                </button>
+                <span className="text-sm font-bold text-watched tabular-nums min-w-[1.5rem] text-center">
+                  x{progress?.watchCount || 0}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => incrementMovieRewatch(movie.id, 1)}
+                  aria-label="Increase watch count"
+                  className="w-7 h-7 rounded-full bg-watched/20 flex items-center justify-center text-watched"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </section>
+          )}
 
-        <PersonalNotesSection
-          domain="watch"
-          mediaKind="movie"
-          mediaId={movie.id}
-          mediaTitle={movie.title}
-          mediaPoster={movie.posterUrl}
-          defaultContext={
-            progress && progress.watchCount > 1 ? `Rewatch x${progress.watchCount}` : undefined
-          }
-          currentRating={progress?.rating}
-          currentMood={progress?.mood}
-          onSelectMood={(mood) => setMovieMood(movie.id, mood)}
-        />
+          <section className="pb-5">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="font-semibold text-[16px] text-ink">Movie info</h2>
+                <p className="text-[13.5px] text-ink-dim mt-0.5">{movie.genres.join(' · ')}</p>
+              </div>
+              <div className="flex items-center gap-1">
+                {[1, 2, 3, 4, 5].map((star) => {
+                  const active = (progress?.rating || 0) >= star;
+                  return (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => rateMovie(movie.id, star)}
+                      aria-label={`Rate ${star} stars`}
+                      className="p-0.5 hover:scale-110 transition-transform"
+                    >
+                      <Star className={`w-4 h-4 ${active ? 'text-brand fill-brand' : 'text-ink-faint'}`} />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>
+              {movie.overview}
+            </p>
+            <div className="flex items-center justify-between gap-3 mt-1">
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="text-xs font-medium text-brand"
+              >
+                {expanded ? 'Show less' : 'More'}
+              </button>
+              {detailMode === 'simple' && (
+                <button
+                  type="button"
+                  onClick={() => setDetailMode('advanced')}
+                  className="text-xs font-medium text-ink-dim hover:text-brand transition-colors"
+                >
+                  Rewatches, moods & notes →
+                </button>
+              )}
+            </div>
+          </section>
+
+          {detailMode === 'advanced' && (
+            <PersonalNotesSection
+              domain="watch"
+              mediaKind="movie"
+              mediaId={movie.id}
+              mediaTitle={movie.title}
+              mediaPoster={movie.posterUrl}
+              defaultContext={
+                progress && progress.watchCount > 1 ? `Rewatch x${progress.watchCount}` : undefined
+              }
+              currentRating={progress?.rating}
+              currentMood={progress?.mood}
+              onSelectMood={(mood) => setMovieMood(movie.id, mood)}
+            />
+          )}
+        </div>
       </div>
+
+      <CoverLightbox
+        open={lightboxOpen}
+        src={movie.posterUrl}
+        title={movie.title}
+        subtitle={`${movie.director} · ${movie.year}`}
+        onClose={() => setLightboxOpen(false)}
+      />
 
       {listPickerOpen && (
         <div

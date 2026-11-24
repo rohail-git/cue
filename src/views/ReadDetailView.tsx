@@ -4,6 +4,7 @@ import {
   Check,
   ChevronLeft,
   ListPlus,
+  Maximize2,
   Minus,
   MoreHorizontal,
   Pencil,
@@ -11,15 +12,20 @@ import {
   RotateCcw,
   Star,
 } from 'lucide-react';
+import { CoverLightbox } from '../components/CoverLightbox';
+import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { fetchComicEditionMetadata, formatDisplayTitle } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
+import type { DetailCardMode } from '../types';
 import {
-  COMIC_EDITIONS,
+  getAvailableComicEditions,
   getComicEditionLabel,
   getKnownComicEditionCounts,
+  getKnownComicEditionCovers,
   isDcComic,
+  resolveComicEditionCover,
 } from '../utils/editions';
 import { getReadStats } from '../utils/stats';
 
@@ -48,6 +54,10 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const [newListName, setNewListName] = useState('');
   const [editingTotal, setEditingTotal] = useState(false);
   const [totalDraft, setTotalDraft] = useState('');
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [detailMode, setDetailMode] = useState<DetailCardMode>(
+    () => state.settings.detailMode || 'simple'
+  );
   const fetchedCoversRef = useRef<Set<string>>(new Set());
 
   const item = state.readItems[readId];
@@ -60,7 +70,11 @@ export function ReadDetailView({ readId }: { readId: string }) {
     const needsCounts = !item.editionIssueCounts;
     const formattedTitle = formatDisplayTitle(item.title);
     const needsTitleFix = formattedTitle !== item.title;
-    if (uniqueCoverCount > 1 && !needsCounts && !needsTitleFix) return;
+    const curatedCovers = getKnownComicEditionCovers(item.title);
+    const missingCuratedCover = curatedCovers
+      ? Object.entries(curatedCovers).some(([ed, url]) => item.editionCovers?.[ed as keyof typeof curatedCovers] !== url)
+      : false;
+    if (uniqueCoverCount > 1 && !needsCounts && !needsTitleFix && !missingCuratedCover) return;
 
     let cancelled = false;
     fetchComicEditionMetadata(item.title, item.creator).then(({ covers, issueCounts }) => {
@@ -102,17 +116,19 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const stats = getReadStats(item, progress);
   const formatLabel =
     item.format === 'manga' ? 'Manga' : item.format === 'comic' ? 'Comic' : 'Novel';
-  const activeCover = (progress?.edition && item.editionCovers?.[progress.edition]) || item.coverUrl;
+  const activeCover = resolveComicEditionCover(item, progress?.edition);
   const editionLabel =
     item.format === 'comic' ? getComicEditionLabel(progress?.edition, item) : '';
   const dcTitle = isDcComic(item);
+  const availableEditions =
+    item.format === 'comic' ? getAvailableComicEditions(item, progress?.edition) : [];
 
   return (
     <div className="min-h-dvh pb-20 bg-background">
       {/* Flat Dark Hero (no gradient) */}
       <div className="relative h-[300px] sm:h-[360px] w-full overflow-hidden border-b border-white/[0.06]">
         <MediaImage
-          src={(progress?.edition && item.editionCovers?.[progress.edition]) || item.backdropUrl || item.coverUrl}
+          src={activeCover || item.backdropUrl || item.coverUrl}
           alt={item.title}
           className="w-full h-full object-cover object-center blur-[3px] scale-105 opacity-30"
         />
@@ -189,9 +205,17 @@ export function ReadDetailView({ readId }: { readId: string }) {
         </div>
 
         <div className="absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto flex items-end gap-4">
-          <div className="w-24 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface">
+          <button
+            type="button"
+            onClick={() => setLightboxOpen(true)}
+            aria-label="View cover fullscreen"
+            className="group relative w-24 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface cursor-zoom-in"
+          >
             <MediaImage src={activeCover} alt={item.title} className="w-full h-full object-cover" />
-          </div>
+            <span className="absolute bottom-1.5 right-1.5 h-6 w-6 rounded-full bg-black/70 border border-white/15 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity">
+              <Maximize2 className="w-3 h-3" />
+            </span>
+          </button>
           <div className="min-w-0 pb-1">
             <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
               <span className="inline-block text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-brand/20 text-brand">
@@ -215,7 +239,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
 
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 pt-4">
         {/* Action Bar */}
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-4">
           <button
             type="button"
             onClick={() => toggleReadBookmark(item.id)}
@@ -263,200 +287,257 @@ export function ReadDetailView({ readId }: { readId: string }) {
           )}
         </div>
 
-        {/* Comic Edition Selector */}
-        {item.format === 'comic' && (
-          <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-6">
-            <div className="flex items-baseline justify-between gap-2 flex-wrap mb-2.5">
-              <span className="text-sm font-semibold text-ink">Which edition are you reading?</span>
-              <span className="text-xs text-ink-dim">
-                {editionLabel || 'Progress stays tracked in issues'}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              {COMIC_EDITIONS.map((opt) => {
-                const label = opt.dcLabel && dcTitle ? opt.dcLabel : opt.label;
-                const active = progress?.edition === opt.id;
-                const editionCount =
-                  item.editionIssueCounts?.[opt.id] ??
-                  getKnownComicEditionCounts(item.title)?.[opt.id];
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setReadEdition(item.id, opt.id)}
-                    title={opt.subtitle}
-                    aria-pressed={active}
-                    className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
-                      active
-                        ? 'border-brand bg-brand/15 text-ink'
-                        : 'border-white/10 bg-surface-raised/60 text-ink-dim hover:text-ink hover:border-white/20'
-                    }`}
-                  >
-                    <span>{label}</span>
-                    {typeof editionCount === 'number' && editionCount > 0 && (
-                      <span className="ml-1.5 text-[11px] text-ink-dim tabular-nums">
-                        · {editionCount}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-        )}
+        <DetailModeToggle mode={detailMode} onChange={setDetailMode} />
 
-        {/* Interactive Chapter / Issue Progress Tracker */}
-        <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-6">
-          <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-            <span className="text-sm font-semibold text-ink">
-              {item.format === 'comic' ? 'Issue run progress' : 'Chapter progress'}
-            </span>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-bold text-watched tabular-nums">
-                {stats.current} / {stats.total} {stats.unitLabel} ({Math.round(stats.ratio * 100)}%)
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setTotalDraft(String(item.totalUnits));
-                  setEditingTotal((v) => !v);
-                }}
-                aria-label="Edit total count"
-                className="p-1 rounded-full bg-white/8 text-ink-dim hover:text-ink"
-              >
-                <Pencil className="w-3 h-3" />
-              </button>
-            </div>
-          </div>
-
-          {editingTotal && (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                const val = Number(totalDraft);
-                if (val > 0) updateReadTotalUnits(item.id, val);
-                setEditingTotal(false);
-              }}
-              className="flex items-center gap-2 mb-3"
-            >
-              <input
-                type="number"
-                min={1}
-                value={totalDraft}
-                onChange={(e) => setTotalDraft(e.target.value)}
-                className="w-28 rounded-xl bg-background border border-white/12 px-3 py-1.5 text-xs text-ink outline-none focus:border-brand"
-              />
-              <button
-                type="submit"
-                className="px-3 py-1.5 rounded-xl bg-brand text-brand-ink text-xs font-semibold"
-              >
-                Set total {stats.unitLabel}
-              </button>
-            </form>
+        <div key={detailMode} data-detail-mode={detailMode} className="animate-detail-flip">
+          {/* Comic Edition Selector (only real editions for this comic) */}
+          {item.format === 'comic' && (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5">
+              <div className="flex items-baseline justify-between gap-2 flex-wrap mb-2.5">
+                <span className="text-sm font-semibold text-ink">Which edition are you reading?</span>
+                <span className="text-xs text-ink-dim">
+                  {editionLabel || 'Progress stays tracked in issues'}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {availableEditions.map((opt) => {
+                  const label = opt.dcLabel && dcTitle ? opt.dcLabel : opt.label;
+                  const active = progress?.edition === opt.id;
+                  const editionCount =
+                    getKnownComicEditionCounts(item.title)?.[opt.id] ??
+                    item.editionIssueCounts?.[opt.id];
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setReadEdition(item.id, opt.id)}
+                      title={opt.subtitle}
+                      aria-pressed={active}
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
+                        active
+                          ? 'border-brand bg-brand/15 text-ink'
+                          : 'border-white/10 bg-surface-raised/60 text-ink-dim hover:text-ink hover:border-white/20'
+                      }`}
+                    >
+                      <span>{label}</span>
+                      {typeof editionCount === 'number' && editionCount > 0 && (
+                        <span className="ml-1.5 text-[11px] text-ink-dim tabular-nums">
+                          · {editionCount}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
           )}
 
-          <input
-            type="range"
-            min={0}
-            max={stats.total}
-            value={stats.current}
-            onChange={(e) => setReadProgress(item.id, Number(e.target.value))}
-            aria-label="Reading progress slider"
-            className="w-full accent-[#DFB062] cursor-pointer mb-3"
-          />
-
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setReadProgress(item.id, stats.current - 1)}
-                className="h-9 px-3 rounded-full bg-white/8 text-xs font-semibold text-ink hover:bg-white/12 flex items-center gap-1"
-              >
-                <Minus className="w-3.5 h-3.5" />1 {stats.unitSingular}
-              </button>
-              <button
-                type="button"
-                onClick={() => advanceReadProgress(item.id, 1)}
-                className="h-9 px-3 rounded-full bg-watched/15 text-xs font-semibold text-watched hover:bg-watched/25 flex items-center gap-1"
-              >
-                <Plus className="w-3.5 h-3.5" />1 {stats.unitSingular}
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-ink-dim">Rereads:</span>
-              <button
-                type="button"
-                onClick={() => incrementReread(item.id, -1)}
-                className="w-7 h-7 rounded-full bg-white/8 flex items-center justify-center text-ink-dim"
-              >
-                <Minus className="w-3.5 h-3.5" />
-              </button>
-              <span className="text-sm font-bold text-watched tabular-nums min-w-[1.5rem] text-center">
-                x{stats.rereadCount}
-              </span>
-              <button
-                type="button"
-                onClick={() => incrementReread(item.id, 1)}
-                className="w-7 h-7 rounded-full bg-watched/20 flex items-center justify-center text-watched"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {/* Info & Star Rating */}
-        <section className="pb-5">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h2 className="font-semibold text-[16px] text-ink">About</h2>
-              <p className="text-[13.5px] text-ink-dim mt-0.5">
-                {item.genres.join(' · ')} · {item.totalUnits} {stats.unitLabel}
-              </p>
-            </div>
-            <div className="flex items-center gap-1">
-              {[1, 2, 3, 4, 5].map((star) => {
-                const active = (progress?.rating || 0) >= star;
-                return (
+          {detailMode === 'simple' ? (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5">
+              <div className="flex items-center justify-between gap-3 mb-2.5">
+                <span className="text-sm font-semibold text-ink">
+                  {item.format === 'comic' ? 'Issue run progress' : 'Reading progress'}
+                </span>
+                <span className="text-sm font-bold text-watched tabular-nums">
+                  {stats.current} / {stats.total} {stats.unitLabel} ({Math.round(stats.ratio * 100)}%)
+                </span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden mb-3">
+                <div
+                  className="h-full bg-watched transition-all duration-300"
+                  style={{ width: `${Math.round(stats.ratio * 100)}%` }}
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
                   <button
-                    key={star}
                     type="button"
-                    onClick={() => rateReadItem(item.id, star)}
-                    aria-label={`Rate ${star} stars`}
-                    className="p-0.5 hover:scale-110 transition-transform"
+                    onClick={() => setReadProgress(item.id, stats.current - 1)}
+                    className="h-9 px-3 rounded-full bg-white/8 text-xs font-semibold text-ink hover:bg-white/12 flex items-center gap-1"
                   >
-                    <Star className={`w-4 h-4 ${active ? 'text-brand fill-brand' : 'text-ink-faint'}`} />
+                    <Minus className="w-3.5 h-3.5" />1 {stats.unitSingular}
                   </button>
-                );
-              })}
+                  <button
+                    type="button"
+                    onClick={() => advanceReadProgress(item.id, 1)}
+                    className="h-9 px-3 rounded-full bg-watched/15 text-xs font-semibold text-watched hover:bg-watched/25 flex items-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" />1 {stats.unitSingular}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDetailMode('advanced')}
+                  className="text-xs font-medium text-ink-dim hover:text-brand transition-colors"
+                >
+                  Edit total, rereads & notes →
+                </button>
+              </div>
+            </section>
+          ) : (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5">
+              <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                <span className="text-sm font-semibold text-ink">
+                  {item.format === 'comic' ? 'Issue run progress' : 'Chapter progress'}
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-watched tabular-nums">
+                    {stats.current} / {stats.total} {stats.unitLabel} ({Math.round(stats.ratio * 100)}%)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTotalDraft(String(item.totalUnits));
+                      setEditingTotal((v) => !v);
+                    }}
+                    aria-label="Edit total count"
+                    className="p-1 rounded-full bg-white/8 text-ink-dim hover:text-ink"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+
+              {editingTotal && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const val = Number(totalDraft);
+                    if (val > 0) updateReadTotalUnits(item.id, val);
+                    setEditingTotal(false);
+                  }}
+                  className="flex items-center gap-2 mb-3"
+                >
+                  <input
+                    type="number"
+                    min={1}
+                    value={totalDraft}
+                    onChange={(e) => setTotalDraft(e.target.value)}
+                    className="w-28 rounded-xl bg-background border border-white/12 px-3 py-1.5 text-xs text-ink outline-none focus:border-brand"
+                  />
+                  <button
+                    type="submit"
+                    className="px-3 py-1.5 rounded-xl bg-brand text-brand-ink text-xs font-semibold"
+                  >
+                    Set total {stats.unitLabel}
+                  </button>
+                </form>
+              )}
+
+              <input
+                type="range"
+                min={0}
+                max={stats.total}
+                value={stats.current}
+                onChange={(e) => setReadProgress(item.id, Number(e.target.value))}
+                aria-label="Reading progress slider"
+                className="w-full accent-[#DFB062] cursor-pointer mb-3"
+              />
+
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setReadProgress(item.id, stats.current - 1)}
+                    className="h-9 px-3 rounded-full bg-white/8 text-xs font-semibold text-ink hover:bg-white/12 flex items-center gap-1"
+                  >
+                    <Minus className="w-3.5 h-3.5" />1 {stats.unitSingular}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => advanceReadProgress(item.id, 1)}
+                    className="h-9 px-3 rounded-full bg-watched/15 text-xs font-semibold text-watched hover:bg-watched/25 flex items-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" />1 {stats.unitSingular}
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-ink-dim">Rereads:</span>
+                  <button
+                    type="button"
+                    onClick={() => incrementReread(item.id, -1)}
+                    className="w-7 h-7 rounded-full bg-white/8 flex items-center justify-center text-ink-dim"
+                  >
+                    <Minus className="w-3.5 h-3.5" />
+                  </button>
+                  <span className="text-sm font-bold text-watched tabular-nums min-w-[1.5rem] text-center">
+                    x{stats.rereadCount}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => incrementReread(item.id, 1)}
+                    className="w-7 h-7 rounded-full bg-watched/20 flex items-center justify-center text-watched"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* Info & Star Rating */}
+          <section className="pb-5">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="font-semibold text-[16px] text-ink">About</h2>
+                <p className="text-[13.5px] text-ink-dim mt-0.5">
+                  {item.genres.join(' · ')} · {item.totalUnits} {stats.unitLabel}
+                </p>
+              </div>
+              <div className="flex items-center gap-1">
+                {[1, 2, 3, 4, 5].map((star) => {
+                  const active = (progress?.rating || 0) >= star;
+                  return (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => rateReadItem(item.id, star)}
+                      aria-label={`Rate ${star} stars`}
+                      className="p-0.5 hover:scale-110 transition-transform"
+                    >
+                      <Star className={`w-4 h-4 ${active ? 'text-brand fill-brand' : 'text-ink-faint'}`} />
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
 
-          <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>
-            {item.overview}
-          </p>
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="text-xs font-medium text-brand mt-1"
-          >
-            {expanded ? 'Show less' : 'More'}
-          </button>
-        </section>
+            <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>
+              {item.overview}
+            </p>
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="text-xs font-medium text-brand mt-1"
+            >
+              {expanded ? 'Show less' : 'More'}
+            </button>
+          </section>
 
-        <PersonalNotesSection
-          domain="read"
-          mediaKind={item.format}
-          mediaId={item.id}
-          mediaTitle={item.title}
-          mediaPoster={item.coverUrl}
-          defaultContext={stats.current > 0 ? stats.unitShort : undefined}
-          currentRating={progress?.rating}
-          currentMood={progress?.mood}
-          onSelectMood={(mood) => setReadMood(item.id, mood)}
-        />
+          {detailMode === 'advanced' && (
+            <PersonalNotesSection
+              domain="read"
+              mediaKind={item.format}
+              mediaId={item.id}
+              mediaTitle={item.title}
+              mediaPoster={activeCover}
+              defaultContext={stats.current > 0 ? stats.unitShort : undefined}
+              currentRating={progress?.rating}
+              currentMood={progress?.mood}
+              onSelectMood={(mood) => setReadMood(item.id, mood)}
+            />
+          )}
+        </div>
       </div>
+
+      <CoverLightbox
+        open={lightboxOpen}
+        src={activeCover}
+        title={item.title}
+        subtitle={editionLabel || `${item.creator} · ${item.year}`}
+        onClose={() => setLightboxOpen(false)}
+      />
 
       {listPickerOpen && (
         <div

@@ -6,7 +6,7 @@ import { MediaImage } from '../components/MediaImage';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
 import { useCueStore } from '../store/useCueStore';
 import type { ReadFilter, ReadItem } from '../types';
-import { getComicEditionLabel } from '../utils/editions';
+import { getComicEditionLabel, resolveComicEditionCover } from '../utils/editions';
 import { getReadStats } from '../utils/stats';
 
 export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
@@ -121,7 +121,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     const prog = state.readProgress[item.id];
     const stats = getReadStats(item, prog);
     const flash = Boolean(justBumped[item.id]);
-    const displayCover = (prog?.edition && item.editionCovers?.[prog.edition]) || item.coverUrl;
+    const displayCover = resolveComicEditionCover(item, prog?.edition);
     const editionLabel =
       item.format === 'comic' ? getComicEditionLabel(prog?.edition, item) : '';
 

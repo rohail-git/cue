@@ -149,6 +149,11 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
       );
     }
 
+    const chapterSummary =
+      game.totalChapters && game.totalChapters > 0
+        ? `Ch. ${prog?.currentChapter || 0}/${game.totalChapters} · `
+        : '';
+
     return (
       <BingersMediaRow
         key={game.id}
@@ -156,7 +161,7 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
         badgeLabel={prog?.platinum ? 'Platinum' : undefined}
         badgeClassName="bg-play/15 text-play"
         posterUrl={game.coverUrl}
-        primaryLine={`${prog?.hoursPlayed || 0}h played · ${prog?.completionPct || 0}%`}
+        primaryLine={`${chapterSummary}${prog?.hoursPlayed || 0}h played · ${prog?.completionPct || 0}%`}
         secondaryLine={`${prog?.platform || game.platforms[0]} · ${game.developer}`}
         progressRatio={(prog?.completionPct || 0) / 100}
         showProgress={state.settings.showPosterProgress && (prog?.completionPct || 0) > 0}

@@ -2,17 +2,77 @@ import { useEffect, useMemo, useState } from 'react';
 import { Check, Flame, Globe2, Loader2, Plus, Search, Sparkles, Star, X } from 'lucide-react';
 import { MediaImage } from '../components/MediaImage';
 import {
+  canonicalReadWorkKey,
   hydrateLiveGameItem,
   hydrateLiveMovie,
   hydrateLiveReadItem,
   hydrateLiveShow,
+  normalizeTitleKey,
   searchLiveMedia,
   type LiveSearchResult,
+  type SearchMediaFilter,
 } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
+import { resolveComicEditionCover } from '../utils/editions';
 import { computeAllMediaStats } from '../utils/stats';
 
-type SearchDomainFilter = 'all' | 'watch' | 'read' | 'play';
+interface FilterPillConfig {
+  id: SearchMediaFilter;
+  label: string;
+  activeClass: string;
+  idleClass: string;
+}
+
+const SEARCH_FILTER_PILLS: FilterPillConfig[] = [
+  {
+    id: 'all',
+    label: 'All',
+    activeClass: 'bg-white border-white text-[#131519]',
+    idleClass: 'bg-surface border-white/25 text-ink hover:border-white/45',
+  },
+  {
+    id: 'tv',
+    label: 'TV',
+    activeClass: 'bg-watch border-watch text-[#0E1A1E]',
+    idleClass: 'bg-watch/10 border-watch/30 text-watch hover:bg-watch/18',
+  },
+  {
+    id: 'movie',
+    label: 'Movies',
+    activeClass: 'bg-watch border-watch text-[#0E1A1E]',
+    idleClass: 'bg-watch/10 border-watch/30 text-watch hover:bg-watch/18',
+  },
+  {
+    id: 'anime',
+    label: 'Anime',
+    activeClass: 'bg-watch border-watch text-[#0E1A1E]',
+    idleClass: 'bg-watch/10 border-watch/30 text-watch hover:bg-watch/18',
+  },
+  {
+    id: 'manga',
+    label: 'Manga',
+    activeClass: 'bg-read border-read text-[#1D160A]',
+    idleClass: 'bg-read/10 border-read/30 text-read hover:bg-read/18',
+  },
+  {
+    id: 'comic',
+    label: 'Comics',
+    activeClass: 'bg-read border-read text-[#1D160A]',
+    idleClass: 'bg-read/10 border-read/30 text-read hover:bg-read/18',
+  },
+  {
+    id: 'novel',
+    label: 'Novels',
+    activeClass: 'bg-read border-read text-[#1D160A]',
+    idleClass: 'bg-read/10 border-read/30 text-read hover:bg-read/18',
+  },
+  {
+    id: 'game',
+    label: 'Games',
+    activeClass: 'bg-play border-play text-[#161124]',
+    idleClass: 'bg-play/10 border-play/30 text-play hover:bg-play/18',
+  },
+];
 
 const GENRE_PILLS = ['Sci-Fi', 'Fantasy', 'Drama', 'Action', 'RPG', 'Dark Fantasy', 'Thriller'];
 
@@ -32,7 +92,7 @@ export function SearchView() {
   } = useCueStore();
 
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<SearchDomainFilter>('all');
+  const [filter, setFilter] = useState<SearchMediaFilter>('all');
   const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
   const [liveResults, setLiveResults] = useState<LiveSearchResult[]>([]);
   const [loadingLive, setLoadingLive] = useState(false);
@@ -76,6 +136,7 @@ export function SearchView() {
     const items: Array<{
       domain: 'watch' | 'read' | 'play';
       kind: 'show' | 'movie' | 'read' | 'game';
+      mediaType: SearchMediaFilter;
       id: string;
       title: string;
       year: number;
@@ -86,25 +147,31 @@ export function SearchView() {
       inLibrary: boolean;
     }> = [];
 
-    if (filter === 'all' || filter === 'watch') {
+    if (filter === 'all' || filter === 'tv' || filter === 'anime') {
       for (const id of state.showOrder) {
         const s = state.shows[id];
         if (!s) continue;
+        if (filter === 'tv' && s.mediaType !== 'tv') continue;
+        if (filter === 'anime' && s.mediaType !== 'anime') continue;
         if (selectedGenre && !s.genres.some((g) => g.toLowerCase().includes(selectedGenre.toLowerCase()))) continue;
         if (q && !s.title.toLowerCase().includes(q) && !s.genres.some((g) => g.toLowerCase().includes(q))) continue;
         items.push({
           domain: 'watch',
           kind: 'show',
+          mediaType: s.mediaType === 'anime' ? 'anime' : 'tv',
           id: s.id,
           title: s.title,
           year: s.year,
-          badge: s.mediaType === 'anime' ? 'Anime' : 'Show',
+          badge: s.mediaType === 'anime' ? 'Anime' : 'TV',
           genres: s.genres,
           rating: s.rating,
           posterUrl: s.posterUrl,
           inLibrary: Boolean(state.showProgress[s.id]?.bookmarked),
         });
       }
+    }
+
+    if (filter === 'all' || filter === 'movie') {
       for (const id of state.movieOrder) {
         const m = state.movies[id];
         if (!m) continue;
@@ -113,6 +180,7 @@ export function SearchView() {
         items.push({
           domain: 'watch',
           kind: 'movie',
+          mediaType: 'movie',
           id: m.id,
           title: m.title,
           year: m.year,
@@ -125,10 +193,11 @@ export function SearchView() {
       }
     }
 
-    if (filter === 'all' || filter === 'read') {
+    if (filter === 'all' || filter === 'manga' || filter === 'comic' || filter === 'novel') {
       for (const id of state.readOrder) {
         const r = state.readItems[id];
         if (!r) continue;
+        if (filter !== 'all' && r.format !== filter) continue;
         if (selectedGenre && !r.genres.some((g) => g.toLowerCase().includes(selectedGenre.toLowerCase()))) continue;
         if (
           q &&
@@ -140,19 +209,20 @@ export function SearchView() {
         items.push({
           domain: 'read',
           kind: 'read',
+          mediaType: r.format,
           id: r.id,
           title: r.title,
           year: r.year,
           badge: r.format,
           genres: r.genres,
           rating: r.rating,
-          posterUrl: r.coverUrl,
+          posterUrl: resolveComicEditionCover(r, state.readProgress[r.id]?.edition),
           inLibrary: Boolean(state.readProgress[r.id]?.bookmarked),
         });
       }
     }
 
-    if (filter === 'all' || filter === 'play') {
+    if (filter === 'all' || filter === 'game') {
       for (const id of state.gameOrder) {
         const g = state.games[id];
         if (!g) continue;
@@ -167,6 +237,7 @@ export function SearchView() {
         items.push({
           domain: 'play',
           kind: 'game',
+          mediaType: 'game',
           id: g.id,
           title: g.title,
           year: g.year,
@@ -183,9 +254,35 @@ export function SearchView() {
   }, [state, query, filter, selectedGenre]);
 
   const dedupedLive = useMemo(() => {
-    const localTitles = new Set(localMatches.map((m) => `${m.kind}:${m.title.toLowerCase()}`));
-    return liveResults.filter((r) => !localTitles.has(`${r.kind}:${r.title.toLowerCase()}`));
-  }, [liveResults, localMatches]);
+    const localIds = new Set(localMatches.map((m) => m.id));
+    const localWorkKeys = new Set(
+      localMatches.map((m) =>
+        m.domain === 'read'
+          ? `read:${canonicalReadWorkKey(m.title)}`
+          : m.kind === 'show'
+            ? `watch:show:${normalizeTitleKey(m.title)}`
+            : `${m.domain}:${m.kind}:${normalizeTitleKey(m.title)}`
+      )
+    );
+    const seenLiveKeys = new Set<string>();
+    const filtered: LiveSearchResult[] = [];
+
+    for (const r of liveResults) {
+      if (filter !== 'all' && r.mediaType !== filter) continue;
+      if (localIds.has(r.id)) continue;
+      const key =
+        r.domain === 'read'
+          ? `read:${canonicalReadWorkKey(r.title)}`
+          : r.kind === 'show'
+            ? `watch:show:${normalizeTitleKey(r.title)}`
+            : `${r.domain}:${r.kind}:${normalizeTitleKey(r.title)}`;
+      if (localWorkKeys.has(key) || seenLiveKeys.has(key)) continue;
+      seenLiveKeys.add(key);
+      filtered.push(r);
+    }
+
+    return filtered;
+  }, [liveResults, localMatches, filter]);
 
   const featuredAllMedia = useMemo(() => {
     const picks: Array<{
@@ -301,11 +398,12 @@ export function SearchView() {
     }
   };
 
-  const hasActiveFilter = query.trim().length > 0 || selectedGenre !== null;
+  const hasActiveFilter = query.trim().length > 0 || selectedGenre !== null || filter !== 'all';
 
   return (
-    <div className="min-h-dvh pb-28 md:pb-14 pt-4 md:pt-24 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto">
-      <div className="mb-4">
+    <div className="min-h-dvh pb-28 md:pb-14 pt-2 md:pt-20 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto">
+      {/* Sticky Search Bar + Color-Coded Filtering Pills */}
+      <div className="sticky top-0 md:top-16 z-20 -mx-4 sm:-mx-6 lg:-mx-10 px-4 sm:px-6 lg:px-10 pt-2 pb-3 bg-background/95 backdrop-blur-md border-b border-white/[0.04] mb-4">
         <div className="relative flex items-center">
           <Search className="w-4 h-4 text-ink-dim absolute left-4 pointer-events-none" />
           <input
@@ -313,7 +411,7 @@ export function SearchView() {
             inputMode="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search shows, anime, movies, novels, manga, comics, or games…"
+            placeholder="Search TV, movies, anime, manga, comics, novels, or games…"
             aria-label="Search all media"
             className="w-full h-12 rounded-2xl bg-surface border border-white/10 pl-11 pr-20 text-[15px] text-ink placeholder:text-ink-faint outline-none focus:border-brand transition-colors"
           />
@@ -333,31 +431,17 @@ export function SearchView() {
         </div>
 
         <div className="flex items-center justify-between gap-2 mt-3">
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-            {(
-              [
-                { id: 'all', label: 'All' },
-                { id: 'watch', label: 'Watch' },
-                { id: 'read', label: 'Read' },
-                { id: 'play', label: 'Play' },
-              ] as const
-            ).map((tab) => {
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+            {SEARCH_FILTER_PILLS.map((tab) => {
               const active = filter === tab.id;
-              const activeClass =
-                tab.id === 'watch'
-                  ? 'bg-watch border-watch text-brand-ink'
-                  : tab.id === 'read'
-                    ? 'bg-read border-read text-brand-ink'
-                    : tab.id === 'play'
-                      ? 'bg-play border-play text-brand-ink'
-                      : 'bg-brand border-brand text-brand-ink';
               return (
                 <button
                   key={tab.id}
                   type="button"
                   onClick={() => setFilter(tab.id)}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
-                    active ? activeClass : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                  aria-pressed={active}
+                  className={`px-3 py-1 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
+                    active ? tab.activeClass : tab.idleClass
                   }`}
                 >
                   {tab.label}
@@ -366,15 +450,15 @@ export function SearchView() {
             })}
           </div>
 
-          <span className="hidden sm:inline-flex items-center gap-1 text-[11px] text-ink-dim px-2.5 py-1 rounded-full bg-surface border border-white/8 shrink-0">
+          <span className="hidden md:inline-flex items-center gap-1 text-[11px] text-ink-dim px-2.5 py-1 rounded-full bg-surface border border-white/8 shrink-0">
             <Globe2 className="w-3 h-3 text-watch" />
-            All-Media Live Search
+            Live Search
           </span>
         </div>
       </div>
 
       {/* Genre Pills */}
-      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2 mb-6">
+      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2 mb-5">
         {GENRE_PILLS.map((genre) => {
           const active = selectedGenre === genre;
           return (
@@ -532,7 +616,7 @@ export function SearchView() {
                                   : 'bg-play/15 text-play'
                             }`}
                           >
-                            {item.mediaType}
+                            {item.mediaType === 'tv' ? 'TV' : item.mediaType}
                           </span>
                         </div>
                         <p className="text-xs text-ink-dim mt-0.5 truncate">
@@ -576,7 +660,7 @@ export function SearchView() {
                 <div className="rounded-2xl bg-surface border border-white/8 p-8 text-center">
                   <p className="font-semibold text-ink">No matches found for "{query}"</p>
                   <p className="text-xs text-ink-dim mt-1">
-                    Try another title or switch between All, Watch, Read, and Play.
+                    Try another title or switch filter pills above.
                   </p>
                 </div>
               )}

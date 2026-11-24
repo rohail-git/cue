@@ -1,28 +1,46 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Bookmark,
   Check,
   ChevronLeft,
   ListPlus,
+  Loader2,
+  Maximize2,
   Minus,
   MoreHorizontal,
+  Pencil,
   Plus,
   RotateCcw,
+  Sparkles,
   Star,
   Trophy,
 } from 'lucide-react';
+import { CoverLightbox } from '../components/CoverLightbox';
+import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
+import { fetchGameChapterInfo } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
-import type { GamePlatform } from '../types';
+import type { DetailCardMode, GameChapterUnit, GamePlatform } from '../types';
+import { lookupKnownGameChapters } from '../utils/gameChapters';
 
 const PLATFORMS: GamePlatform[] = ['PC', 'PS5', 'Switch', 'Xbox', 'Steam Deck'];
+const CHAPTER_UNITS: GameChapterUnit[] = ['chapters', 'acts', 'missions'];
+
+function unitSingular(unit: GameChapterUnit): string {
+  if (unit === 'acts') return 'act';
+  if (unit === 'missions') return 'mission';
+  return 'chapter';
+}
 
 export function GameDetailView({ gameId }: { gameId: string }) {
   const {
     state,
     goBack,
     logGameSession,
+    advanceGameChapter,
+    setGameChapter,
+    updateGameChaptersMeta,
     updateGameProgress,
     toggleGameCompleted,
     toggleGamePlatinum,
@@ -39,9 +57,62 @@ export function GameDetailView({ gameId }: { gameId: string }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [listPickerOpen, setListPickerOpen] = useState(false);
   const [newListName, setNewListName] = useState('');
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [detailMode, setDetailMode] = useState<DetailCardMode>(
+    () => state.settings.detailMode || 'simple'
+  );
+  const [checkingChapters, setCheckingChapters] = useState(false);
+  const [editingChapters, setEditingChapters] = useState(false);
+  const [chapterDraft, setChapterDraft] = useState('');
+  const [unitDraft, setUnitDraft] = useState<GameChapterUnit>('chapters');
+  const fetchedChaptersRef = useRef<Set<string>>(new Set());
 
   const game = state.games[gameId];
   const progress = state.gameProgress[gameId];
+
+  useEffect(() => {
+    if (!game) return;
+    if (game.totalChapters && game.totalChapters > 0) return;
+    if (game.chapterSource === 'manual') return;
+    if (fetchedChaptersRef.current.has(game.id)) return;
+
+    const curatedSync = lookupKnownGameChapters(game.title);
+    if (curatedSync) {
+      fetchedChaptersRef.current.add(game.id);
+      updateGameChaptersMeta(
+        game.id,
+        curatedSync.totalChapters,
+        curatedSync.unit,
+        'catalog',
+        curatedSync.note
+      );
+      return;
+    }
+
+    let cancelled = false;
+    setCheckingChapters(true);
+    fetchGameChapterInfo(game.title)
+      .then((res) => {
+        if (cancelled) return;
+        fetchedChaptersRef.current.add(game.id);
+        if (res.found && res.totalChapters) {
+          updateGameChaptersMeta(
+            game.id,
+            res.totalChapters,
+            res.unit || 'chapters',
+            res.source || 'web',
+            res.note
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCheckingChapters(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [game, updateGameChaptersMeta]);
 
   if (!game) {
     return (
@@ -62,6 +133,35 @@ export function GameDetailView({ gameId }: { gameId: string }) {
   const hours = progress?.hoursPlayed || 0;
   const pct = progress?.completionPct || 0;
   const platform = progress?.platform || game.platforms[0] || 'PC';
+  const totalChapters = game.totalChapters || 0;
+  const chapterUnit: GameChapterUnit = game.chapterUnit || 'chapters';
+  const chapterSingle = unitSingular(chapterUnit);
+  const currentChapter = totalChapters > 0 ? Math.min(totalChapters, progress?.currentChapter || 0) : 0;
+  const chapterRatio = totalChapters > 0 ? Math.min(1, currentChapter / totalChapters) : 0;
+
+  const handleOpenChapterEditor = () => {
+    setChapterDraft(totalChapters > 0 ? String(totalChapters) : '');
+    setUnitDraft(chapterUnit);
+    setEditingChapters((v) => !v);
+  };
+
+  const handleRedetectChapters = async () => {
+    setCheckingChapters(true);
+    try {
+      const res = await fetchGameChapterInfo(game.title);
+      if (res.found && res.totalChapters) {
+        updateGameChaptersMeta(
+          game.id,
+          res.totalChapters,
+          res.unit || 'chapters',
+          res.source || 'web',
+          res.note
+        );
+      }
+    } finally {
+      setCheckingChapters(false);
+    }
+  };
 
   return (
     <div className="min-h-dvh pb-20 bg-background">
@@ -144,19 +244,32 @@ export function GameDetailView({ gameId }: { gameId: string }) {
           )}
         </div>
 
-        <div className="absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto">
-          <p className="text-xs font-semibold uppercase tracking-wider text-brand mb-1">
-            {game.developer} · {game.year}
-          </p>
-          <h1 className="font-display font-extrabold text-3xl sm:text-5xl text-ink tracking-tight">
-            {game.title}
-          </h1>
+        <div className="absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto flex items-end gap-4">
+          <button
+            type="button"
+            onClick={() => setLightboxOpen(true)}
+            aria-label="View cover fullscreen"
+            className="group relative w-20 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface cursor-zoom-in"
+          >
+            <MediaImage src={game.coverUrl} alt={game.title} className="w-full h-full object-cover" />
+            <span className="absolute bottom-1.5 right-1.5 h-6 w-6 rounded-full bg-black/70 border border-white/15 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity">
+              <Maximize2 className="w-3 h-3" />
+            </span>
+          </button>
+          <div className="min-w-0 pb-1">
+            <p className="text-xs font-semibold uppercase tracking-wider text-brand mb-1">
+              {game.developer} · {game.year}
+            </p>
+            <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-ink tracking-tight leading-tight">
+              {game.title}
+            </h1>
+          </div>
         </div>
       </div>
 
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 pt-4">
         {/* Action Bar */}
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-4">
           <button
             type="button"
             onClick={() => toggleGameBookmark(game.id)}
@@ -170,183 +283,404 @@ export function GameDetailView({ gameId }: { gameId: string }) {
             <Bookmark className="w-5 h-5" fill={progress?.bookmarked ? 'currentColor' : 'none'} />
           </button>
 
-          <button
-            type="button"
-            onClick={() => toggleGameCompleted(game.id)}
-            className={`flex-1 h-12 rounded-full font-semibold text-[15px] flex items-center justify-center gap-2 transition-all ${
-              isCompleted
-                ? 'border-2 border-watched bg-watched/[0.08] text-ink'
-                : 'bg-brand text-brand-ink hover:opacity-95'
-            }`}
-          >
-            <Check
-              className={`w-5 h-5 ${isCompleted ? 'text-watched' : 'text-brand-ink'}`}
-              strokeWidth={2.5}
-            />
-            <span>
-              {isCompleted
-                ? `Completed${
-                    progress && progress.playthroughCount > 1
-                      ? ` · x${progress.playthroughCount}`
-                      : ''
-                  }`
-                : 'Mark Completed'}
-            </span>
-          </button>
+          {totalChapters > 0 && !isCompleted ? (
+            <button
+              type="button"
+              onClick={() => advanceGameChapter(game.id, 1)}
+              className="flex-1 h-12 rounded-full bg-brand text-brand-ink font-semibold text-[15px] flex items-center justify-center gap-2 hover:opacity-95 transition-opacity"
+            >
+              <Plus className="w-5 h-5" strokeWidth={2.5} />
+              <span>Log +1 {chapterSingle}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => toggleGameCompleted(game.id)}
+              className={`flex-1 h-12 rounded-full font-semibold text-[15px] flex items-center justify-center gap-2 transition-all ${
+                isCompleted
+                  ? 'border-2 border-watched bg-watched/[0.08] text-ink'
+                  : 'bg-brand text-brand-ink hover:opacity-95'
+              }`}
+            >
+              <Check
+                className={`w-5 h-5 ${isCompleted ? 'text-watched' : 'text-brand-ink'}`}
+                strokeWidth={2.5}
+              />
+              <span>
+                {isCompleted
+                  ? `Completed${
+                      progress && progress.playthroughCount > 1
+                        ? ` · x${progress.playthroughCount}`
+                        : ''
+                    }`
+                  : 'Mark Completed'}
+              </span>
+            </button>
+          )}
+
+          {totalChapters > 0 && !isCompleted && (
+            <button
+              type="button"
+              onClick={() => toggleGameCompleted(game.id)}
+              className="h-12 px-4 rounded-full bg-surface-raised border border-white/12 text-sm font-semibold text-watched hover:bg-white/10"
+            >
+              Complete
+            </button>
+          )}
 
           <button
             type="button"
             onClick={() => toggleGamePlatinum(game.id)}
             aria-label="Toggle 100% Platinum trophy"
-            className={`h-12 px-4 rounded-full border text-sm font-semibold flex items-center gap-1.5 transition-colors ${
+            className={`h-12 px-3.5 rounded-full border text-sm font-semibold flex items-center gap-1.5 transition-colors ${
               progress?.platinum
                 ? 'border-brand bg-brand/15 text-brand'
                 : 'border-white/12 bg-surface-raised text-ink-dim hover:text-ink'
             }`}
           >
             <Trophy className="w-4 h-4" />
-            <span>100%</span>
+            <span className="hidden sm:inline">100%</span>
           </button>
         </div>
 
-        {/* Interactive Session & Completion Card */}
-        <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-4 mb-6">
-          <div className="flex items-center justify-between flex-wrap gap-3">
-            <div>
-              <p className="text-xs text-ink-dim uppercase tracking-wider font-semibold">
-                Hours played
-              </p>
-              <div className="flex items-center gap-2.5 mt-1">
+        <DetailModeToggle mode={detailMode} onChange={setDetailMode} />
+
+        <div key={detailMode} data-detail-mode={detailMode} className="animate-detail-flip">
+          {/* Story Chapter Tracker (Simple + Advanced) */}
+          <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5">
+            <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-ink">Story chapter progress</span>
+                {checkingChapters && (
+                  <span className="inline-flex items-center gap-1 text-[11px] text-brand">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Detecting…
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {totalChapters > 0 ? (
+                  <span className="text-sm font-bold text-watched tabular-nums">
+                    {currentChapter} / {totalChapters} {chapterUnit} ({Math.round(chapterRatio * 100)}%)
+                  </span>
+                ) : (
+                  <span className="text-xs text-ink-dim">No chapter structure set</span>
+                )}
                 <button
                   type="button"
-                  onClick={() => logGameSession(game.id, -1)}
-                  className="w-8 h-8 rounded-full bg-white/8 flex items-center justify-center text-ink"
+                  onClick={handleOpenChapterEditor}
+                  aria-label="Edit total chapters"
+                  className="p-1.5 rounded-full bg-white/8 text-ink-dim hover:text-ink"
                 >
-                  <Minus className="w-3.5 h-3.5" />
-                </button>
-                <span className="font-display font-bold text-2xl text-ink tabular-nums min-w-[3.5rem] text-center">
-                  {hours}h
-                </span>
-                <button
-                  type="button"
-                  onClick={() => logGameSession(game.id, 1)}
-                  className="w-8 h-8 rounded-full bg-brand/20 text-brand flex items-center justify-center"
-                >
-                  <Plus className="w-3.5 h-3.5" />
+                  <Pencil className="w-3 h-3" />
                 </button>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-ink-dim">Playthroughs:</span>
-              <button
-                type="button"
-                onClick={() => incrementGamePlaythrough(game.id, -1)}
-                className="w-7 h-7 rounded-full bg-white/8 flex items-center justify-center text-ink-dim"
+            {editingChapters && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const val = Number(chapterDraft);
+                  if (val > 0) {
+                    updateGameChaptersMeta(game.id, val, unitDraft, 'manual', 'Custom chapter count');
+                  }
+                  setEditingChapters(false);
+                }}
+                className="flex items-center gap-2 flex-wrap mb-3 pt-1"
               >
-                <Minus className="w-3.5 h-3.5" />
-              </button>
-              <span className="text-sm font-bold text-watched tabular-nums min-w-[1.5rem] text-center">
-                x{progress?.playthroughCount || 0}
-              </span>
-              <button
-                type="button"
-                onClick={() => incrementGamePlaythrough(game.id, 1)}
-                className="w-7 h-7 rounded-full bg-watched/20 flex items-center justify-center text-watched"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-xs font-semibold text-ink-dim">Completion</span>
-              <span className="text-xs font-bold text-watched tabular-nums">{pct}%</span>
-            </div>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={pct}
-              onChange={(e) =>
-                updateGameProgress(game.id, { completionPct: Number(e.target.value) })
-              }
-              aria-label="Game completion percentage"
-              className="w-full accent-[#A894E8] cursor-pointer"
-            />
-          </div>
-
-          <div>
-            <p className="text-xs font-semibold text-ink-dim mb-2">Platform</p>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {PLATFORMS.map((plat) => (
-                <button
-                  key={plat}
-                  type="button"
-                  onClick={() => updateGameProgress(game.id, { platform: plat })}
-                  className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
-                    platform === plat
-                      ? 'border-brand bg-brand/15 text-ink'
-                      : 'border-white/8 bg-background text-ink-dim hover:text-ink'
-                  }`}
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  placeholder="e.g. 23"
+                  value={chapterDraft}
+                  onChange={(e) => setChapterDraft(e.target.value)}
+                  className="w-24 rounded-xl bg-background border border-white/12 px-3 py-1.5 text-xs text-ink outline-none focus:border-brand"
+                />
+                <select
+                  value={unitDraft}
+                  onChange={(e) => setUnitDraft(e.target.value as GameChapterUnit)}
+                  aria-label="Chapter unit type"
+                  className="rounded-xl bg-background border border-white/12 px-2.5 py-1.5 text-xs text-ink outline-none focus:border-brand"
                 >
-                  {plat}
+                  {CHAPTER_UNITS.map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="submit"
+                  className="px-3 py-1.5 rounded-xl bg-brand text-brand-ink text-xs font-semibold"
+                >
+                  Save
                 </button>
-              ))}
-            </div>
-          </div>
-        </section>
+                <button
+                  type="button"
+                  onClick={handleRedetectChapters}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white/8 text-xs text-ink-dim hover:text-ink"
+                >
+                  <Sparkles className="w-3 h-3 text-brand" />
+                  <span>Auto-detect</span>
+                </button>
+              </form>
+            )}
 
-        {/* Info & Star Rating */}
-        <section className="pb-5">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h2 className="font-semibold text-[16px] text-ink">Game info</h2>
-              <p className="text-[13.5px] text-ink-dim mt-0.5">{game.genres.join(' · ')}</p>
-            </div>
-            <div className="flex items-center gap-1">
-              {[1, 2, 3, 4, 5].map((star) => {
-                const active = (progress?.rating || 0) >= star;
-                return (
+            {totalChapters > 0 ? (
+              <>
+                {detailMode === 'simple' ? (
+                  <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden mb-3">
+                    <div
+                      className="h-full bg-watched transition-all duration-300"
+                      style={{ width: `${Math.round(chapterRatio * 100)}%` }}
+                    />
+                  </div>
+                ) : (
+                  <input
+                    type="range"
+                    min={0}
+                    max={totalChapters}
+                    value={currentChapter}
+                    onChange={(e) => setGameChapter(game.id, Number(e.target.value))}
+                    aria-label="Story chapter progress slider"
+                    className="w-full accent-[#A894E8] cursor-pointer mb-3"
+                  />
+                )}
+
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setGameChapter(game.id, currentChapter - 1)}
+                      className="h-9 px-3 rounded-full bg-white/8 text-xs font-semibold text-ink hover:bg-white/12 flex items-center gap-1"
+                    >
+                      <Minus className="w-3.5 h-3.5" />1 {chapterSingle}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => advanceGameChapter(game.id, 1)}
+                      className="h-9 px-3 rounded-full bg-watched/15 text-xs font-semibold text-watched hover:bg-watched/25 flex items-center gap-1"
+                    >
+                      <Plus className="w-3.5 h-3.5" />1 {chapterSingle}
+                    </button>
+                  </div>
+
+                  {game.chapterNote && (
+                    <span className="text-[11px] text-ink-dim">{game.chapterNote}</span>
+                  )}
+                </div>
+              </>
+            ) : (
+              !checkingChapters &&
+              !editingChapters && (
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <p className="text-xs text-ink-dim">
+                    Track chapters, acts, or missions alongside your hours.
+                  </p>
                   <button
-                    key={star}
                     type="button"
-                    onClick={() => rateGame(game.id, star)}
-                    aria-label={`Rate ${star} stars`}
-                    className="p-0.5 hover:scale-110 transition-transform"
+                    onClick={handleOpenChapterEditor}
+                    className="px-3 py-1.5 rounded-full bg-white/8 hover:bg-white/12 text-xs font-semibold text-ink shrink-0"
                   >
-                    <Star className={`w-4 h-4 ${active ? 'text-brand fill-brand' : 'text-ink-faint'}`} />
+                    Set chapters
                   </button>
-                );
-              })}
+                </div>
+              )
+            )}
+          </section>
+
+          {detailMode === 'simple' ? (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <p className="text-xs text-ink-dim uppercase tracking-wider font-semibold">
+                  Hours played · {platform}
+                </p>
+                <p className="font-display font-bold text-xl text-ink tabular-nums mt-0.5">
+                  {hours}h <span className="text-xs font-normal text-ink-dim">({pct}% done)</span>
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => logGameSession(game.id, -1)}
+                  aria-label="Subtract 1 hour"
+                  className="h-9 px-3 rounded-full bg-white/8 text-xs font-semibold text-ink hover:bg-white/12 flex items-center gap-1"
+                >
+                  <Minus className="w-3.5 h-3.5" />1h
+                </button>
+                <button
+                  type="button"
+                  onClick={() => logGameSession(game.id, 1)}
+                  aria-label="Log 1 hour"
+                  className="h-9 px-3 rounded-full bg-brand/20 text-xs font-semibold text-brand hover:bg-brand/30 flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />1h
+                </button>
+              </div>
+            </section>
+          ) : (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-4 mb-5">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <p className="text-xs text-ink-dim uppercase tracking-wider font-semibold">
+                    Hours played
+                  </p>
+                  <div className="flex items-center gap-2.5 mt-1">
+                    <button
+                      type="button"
+                      onClick={() => logGameSession(game.id, -1)}
+                      className="w-8 h-8 rounded-full bg-white/8 flex items-center justify-center text-ink"
+                    >
+                      <Minus className="w-3.5 h-3.5" />
+                    </button>
+                    <span className="font-display font-bold text-2xl text-ink tabular-nums min-w-[3.5rem] text-center">
+                      {hours}h
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => logGameSession(game.id, 1)}
+                      className="w-8 h-8 rounded-full bg-brand/20 text-brand flex items-center justify-center"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-ink-dim">Playthroughs:</span>
+                  <button
+                    type="button"
+                    onClick={() => incrementGamePlaythrough(game.id, -1)}
+                    className="w-7 h-7 rounded-full bg-white/8 flex items-center justify-center text-ink-dim"
+                  >
+                    <Minus className="w-3.5 h-3.5" />
+                  </button>
+                  <span className="text-sm font-bold text-watched tabular-nums min-w-[1.5rem] text-center">
+                    x{progress?.playthroughCount || 0}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => incrementGamePlaythrough(game.id, 1)}
+                    className="w-7 h-7 rounded-full bg-watched/20 flex items-center justify-center text-watched"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs font-semibold text-ink-dim">Completion</span>
+                  <span className="text-xs font-bold text-watched tabular-nums">{pct}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={pct}
+                  onChange={(e) =>
+                    updateGameProgress(game.id, { completionPct: Number(e.target.value) })
+                  }
+                  aria-label="Game completion percentage"
+                  className="w-full accent-[#A894E8] cursor-pointer"
+                />
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold text-ink-dim mb-2">Platform</p>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {PLATFORMS.map((plat) => (
+                    <button
+                      key={plat}
+                      type="button"
+                      onClick={() => updateGameProgress(game.id, { platform: plat })}
+                      className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                        platform === plat
+                          ? 'border-brand bg-brand/15 text-ink'
+                          : 'border-white/8 bg-background text-ink-dim hover:text-ink'
+                      }`}
+                    >
+                      {plat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* Info & Star Rating */}
+          <section className="pb-5">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="font-semibold text-[16px] text-ink">Game info</h2>
+                <p className="text-[13.5px] text-ink-dim mt-0.5">{game.genres.join(' · ')}</p>
+              </div>
+              <div className="flex items-center gap-1">
+                {[1, 2, 3, 4, 5].map((star) => {
+                  const active = (progress?.rating || 0) >= star;
+                  return (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => rateGame(game.id, star)}
+                      aria-label={`Rate ${star} stars`}
+                      className="p-0.5 hover:scale-110 transition-transform"
+                    >
+                      <Star className={`w-4 h-4 ${active ? 'text-brand fill-brand' : 'text-ink-faint'}`} />
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
 
-          <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>
-            {game.overview}
-          </p>
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="text-xs font-medium text-brand mt-1"
-          >
-            {expanded ? 'Show less' : 'More'}
-          </button>
-        </section>
+            <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>
+              {game.overview}
+            </p>
+            <div className="flex items-center justify-between gap-3 mt-1">
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="text-xs font-medium text-brand"
+              >
+                {expanded ? 'Show less' : 'More'}
+              </button>
+              {detailMode === 'simple' && (
+                <button
+                  type="button"
+                  onClick={() => setDetailMode('advanced')}
+                  className="text-xs font-medium text-ink-dim hover:text-brand transition-colors"
+                >
+                  Platform, playthroughs, moods & notes →
+                </button>
+              )}
+            </div>
+          </section>
 
-        <PersonalNotesSection
-          domain="play"
-          mediaKind="game"
-          mediaId={game.id}
-          mediaTitle={game.title}
-          mediaPoster={game.coverUrl}
-          defaultContext={hours > 0 ? `${hours}h · ${platform}` : platform}
-          currentRating={progress?.rating}
-          currentMood={progress?.mood}
-          onSelectMood={(mood) => setGameMood(game.id, mood)}
-        />
+          {detailMode === 'advanced' && (
+            <PersonalNotesSection
+              domain="play"
+              mediaKind="game"
+              mediaId={game.id}
+              mediaTitle={game.title}
+              mediaPoster={game.coverUrl}
+              defaultContext={hours > 0 ? `${hours}h · ${platform}` : platform}
+              currentRating={progress?.rating}
+              currentMood={progress?.mood}
+              onSelectMood={(mood) => setGameMood(game.id, mood)}
+            />
+          )}
+        </div>
       </div>
+
+      <CoverLightbox
+        open={lightboxOpen}
+        src={game.coverUrl}
+        title={game.title}
+        subtitle={`${game.developer} · ${game.year}`}
+        onClose={() => setLightboxOpen(false)}
+      />
 
       {listPickerOpen && (
         <div

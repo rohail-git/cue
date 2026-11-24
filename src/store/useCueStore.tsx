@@ -11,6 +11,8 @@ import type {
   AppSettings,
   ComicEditionId,
   CueStoreState,
+  GameChapterSource,
+  GameChapterUnit,
   GameItem,
   GamePlatform,
   GameWatchStatus,
@@ -28,7 +30,13 @@ import type {
   ShowProgress,
   UserProfile,
 } from '../types';
-import { getComicEditionLabel, resolveComicEditionTotal } from '../utils/editions';
+import {
+  getComicEditionLabel,
+  getKnownComicEditionSpec,
+  resolveComicEditionCover,
+  resolveComicEditionTotal,
+} from '../utils/editions';
+import { lookupKnownGameChapters } from '../utils/gameChapters';
 import { formatEpisodeCode, getAllEpisodes, getEpisodeKey, getShowStats } from '../utils/stats';
 
 const STORAGE_KEY = 'cue_state_v3';
@@ -53,6 +61,9 @@ function loadInitialState(): CueStoreState {
       if (parsed && parsed.shows && parsed.movies && parsed.readItems && parsed.games) {
         if (!Array.isArray(parsed.history) || parsed.history.length === 0) {
           parsed.history = createSeedState().history;
+        }
+        if (parsed.settings && !parsed.settings.detailMode) {
+          parsed.settings.detailMode = 'simple';
         }
         return parsed;
       }
@@ -179,6 +190,15 @@ interface CueContextValue {
 
   // Play actions
   logGameSession: (gameId: string, hoursDelta: number) => void;
+  advanceGameChapter: (gameId: string, delta?: number) => void;
+  setGameChapter: (gameId: string, chapter: number) => void;
+  updateGameChaptersMeta: (
+    gameId: string,
+    totalChapters: number,
+    unit?: GameChapterUnit,
+    source?: GameChapterSource,
+    note?: string
+  ) => void;
   updateGameProgress: (
     gameId: string,
     patch: Partial<{
@@ -1063,7 +1083,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const unitLabel =
           item.unit === 'issues' ? `Issue #${updated.currentUnit}` : `Ch. ${updated.currentUnit}`;
         msg = updated.status === 'finished' ? `Finished ${item.title}` : `${item.title} · ${unitLabel}`;
-        const activeCover = (updated.edition && item.editionCovers?.[updated.edition]) || item.coverUrl;
+        const activeCover = resolveComicEditionCover(item, updated.edition);
         const nextHistory =
           step > 0
             ? appendHistory(prev.history || [], {
@@ -1280,7 +1300,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const preservedMax = Math.max(existing?.currentUnit || 0, existing?.maxCompletedUnit || 0);
         const nextCurrent = Math.min(nextTotal, preservedMax);
         const finished = nextCurrent >= nextTotal;
-        const nextCover = item.editionCovers?.[edition] || item.coverUrl;
+        const nextCover = resolveComicEditionCover(item, edition);
+        const nextCoversMap =
+          nextCover && nextCover !== item.coverUrl
+            ? { ...(item.editionCovers || {}), [edition]: nextCover }
+            : item.editionCovers;
         const nextHistory = nextCover
           ? (prev.history || []).map((h) =>
               h.domain === 'read' && h.mediaId === readId ? { ...h, posterUrl: nextCover } : h
@@ -1293,6 +1317,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             ...prev.readItems,
             [readId]: {
               ...item,
+              editionCovers: nextCoversMap,
               baseTotalUnits: item.baseTotalUnits ?? item.totalUnits,
               totalUnits: nextTotal,
             },
@@ -1329,19 +1354,41 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       setState((prev) => {
         const item = prev.readItems[readId];
         if (!item) return prev;
-        const mergedCovers = { ...(item.editionCovers || {}), ...editionCovers };
-        const mergedCounts = { ...(item.editionIssueCounts || {}), ...(editionIssueCounts || {}) };
         const nextTitle = cleanTitle || item.title;
+        const spec = getKnownComicEditionSpec(nextTitle);
+        const mergedCovers: Partial<Record<ComicEditionId, string>> = {
+          ...(item.editionCovers || {}),
+          ...editionCovers,
+          ...(spec?.covers || {}),
+        };
+        const mergedCounts: Partial<Record<ComicEditionId, number>> = {
+          ...(item.editionIssueCounts || {}),
+          ...(editionIssueCounts || {}),
+          ...(spec?.counts || {}),
+        };
+        if (spec) {
+          const allowed = new Set<ComicEditionId>(spec.availableEditions);
+          for (const k of Object.keys(mergedCovers) as ComicEditionId[]) {
+            if (!allowed.has(k)) delete mergedCovers[k];
+          }
+          for (const k of Object.keys(mergedCounts) as ComicEditionId[]) {
+            if (!allowed.has(k)) delete mergedCounts[k];
+          }
+        }
         const existingProg = prev.readProgress[readId];
         const activeEdition = existingProg?.edition;
+        const safeActiveEdition =
+          activeEdition && spec && !spec.availableEditions.includes(activeEdition)
+            ? spec.availableEditions[0]
+            : activeEdition;
         const tempItem: ReadItem = {
           ...item,
           title: nextTitle,
           editionCovers: mergedCovers,
           editionIssueCounts: mergedCounts,
         };
-        const resolvedTotal = activeEdition
-          ? resolveComicEditionTotal(tempItem, activeEdition)
+        const resolvedTotal = safeActiveEdition
+          ? resolveComicEditionTotal(tempItem, safeActiveEdition)
           : !item.editionIssueCounts && mergedCounts.digital && item.totalUnits === 12
             ? mergedCounts.digital
             : item.totalUnits;
@@ -1350,7 +1397,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           baseTotalUnits: item.baseTotalUnits ?? resolvedTotal,
           totalUnits: resolvedTotal,
         };
-        const nextCover = (activeEdition && mergedCovers[activeEdition]) || item.coverUrl;
+        const nextCover = resolveComicEditionCover(updatedItem, safeActiveEdition);
         const nextHistory = (prev.history || []).map((h) =>
           h.domain === 'read' && h.mediaId === readId
             ? { ...h, title: nextTitle, posterUrl: nextCover }
@@ -1365,7 +1412,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           readProgress: existingProg
             ? {
                 ...prev.readProgress,
-                [readId]: normalizeReadProgress(updatedItem, existingProg.currentUnit, existingProg),
+                [readId]: normalizeReadProgress(updatedItem, existingProg.currentUnit, {
+                  ...existingProg,
+                  edition: safeActiveEdition,
+                }),
               }
             : prev.readProgress,
           history: nextHistory,
@@ -1400,6 +1450,145 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   );
 
   // Play actions
+  const formatGameChapterCode = (chapter: number, unit: GameChapterUnit = 'chapters'): string => {
+    if (unit === 'acts') return `Act ${chapter}`;
+    if (unit === 'missions') return `Mission ${chapter}`;
+    return `Ch. ${chapter}`;
+  };
+
+  const applyGameChapter = (
+    game: GameItem,
+    existing: CueStoreState['gameProgress'][string] | undefined,
+    rawChapter: number
+  ): CueStoreState['gameProgress'][string] => {
+    const total = game.totalChapters && game.totalChapters > 0 ? game.totalChapters : undefined;
+    const clamped = total
+      ? Math.max(0, Math.min(total, Math.round(rawChapter)))
+      : Math.max(0, Math.round(rawChapter));
+    const nextPct = total
+      ? Math.min(100, Math.round((clamped / total) * 100))
+      : existing?.completionPct || 0;
+    const isFinished = Boolean(total && clamped >= total);
+    const nextStatus: GameWatchStatus = isFinished
+      ? 'completed'
+      : clamped > 0 || (existing?.hoursPlayed || 0) > 0
+        ? 'playing'
+        : 'backlog';
+    return {
+      status: nextStatus,
+      hoursPlayed: existing?.hoursPlayed || 0,
+      completionPct: nextPct,
+      currentChapter: clamped,
+      playthroughCount: isFinished
+        ? Math.max(1, existing?.playthroughCount || 0)
+        : existing?.playthroughCount || 0,
+      platinum: existing?.platinum ?? false,
+      platform: existing?.platform || game.platforms[0] || 'PC',
+      bookmarked: existing?.bookmarked ?? true,
+      lastPlayedAt: new Date().toISOString(),
+      rating: existing?.rating,
+      mood: existing?.mood,
+    };
+  };
+
+  const advanceGameChapter = useCallback(
+    (gameId: string, delta = 1) => {
+      let toastMsg = '';
+      setState((prev) => {
+        const game = prev.games[gameId];
+        if (!game) return prev;
+        const prog = prev.gameProgress[gameId];
+        const nextVal = (prog?.currentChapter || 0) + delta;
+        const updated = applyGameChapter(game, prog, nextVal);
+        const unit = game.chapterUnit || 'chapters';
+        const codeLabel = formatGameChapterCode(updated.currentChapter || 0, unit);
+        toastMsg =
+          updated.status === 'completed'
+            ? `Completed ${game.title}`
+            : `${game.title} · ${codeLabel}`;
+        const activePlatform = updated.platform;
+        const nextHistory =
+          delta > 0 && (updated.currentChapter || 0) > 0
+            ? appendHistory(prev.history || [], {
+                id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                domain: 'play',
+                mediaKind: 'game',
+                mediaId: gameId,
+                title: game.title,
+                posterUrl: game.coverUrl,
+                codeLabel,
+                subtitle: `${activePlatform} · ${game.developer}`,
+                loggedAt: new Date().toISOString(),
+              })
+            : prev.history;
+        return {
+          ...prev,
+          gameProgress: {
+            ...prev.gameProgress,
+            [gameId]: updated,
+          },
+          history: nextHistory,
+        };
+      });
+      if (toastMsg) showToast(toastMsg, 'Log note', () => pushRoute({ view: 'game-detail', gameId }));
+    },
+    [pushRoute, showToast]
+  );
+
+  const setGameChapter = useCallback((gameId: string, chapter: number) => {
+    setState((prev) => {
+      const game = prev.games[gameId];
+      if (!game) return prev;
+      const prog = prev.gameProgress[gameId];
+      return {
+        ...prev,
+        gameProgress: {
+          ...prev.gameProgress,
+          [gameId]: applyGameChapter(game, prog, chapter),
+        },
+      };
+    });
+  }, []);
+
+  const updateGameChaptersMeta = useCallback(
+    (
+      gameId: string,
+      totalChapters: number,
+      unit: GameChapterUnit = 'chapters',
+      source: GameChapterSource = 'manual',
+      note?: string
+    ) => {
+      const safeTotal = Math.max(1, Math.min(200, Math.round(totalChapters)));
+      setState((prev) => {
+        const game = prev.games[gameId];
+        if (!game) return prev;
+        if (source !== 'manual' && game.chapterSource === 'manual') {
+          return prev;
+        }
+        const updatedGame: GameItem = {
+          ...game,
+          totalChapters: safeTotal,
+          chapterUnit: unit,
+          chapterSource: source,
+          chapterNote: note,
+        };
+        const existingProg = prev.gameProgress[gameId];
+        const nextProg =
+          existingProg && typeof existingProg.currentChapter === 'number' && existingProg.currentChapter > 0
+            ? applyGameChapter(updatedGame, existingProg, existingProg.currentChapter)
+            : existingProg;
+        return {
+          ...prev,
+          games: { ...prev.games, [gameId]: updatedGame },
+          gameProgress: nextProg
+            ? { ...prev.gameProgress, [gameId]: nextProg }
+            : prev.gameProgress,
+        };
+      });
+    },
+    []
+  );
+
   const logGameSession = useCallback(
     (gameId: string, hoursDelta: number) => {
       let label = '';
@@ -1436,6 +1625,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               status: prog?.status === 'completed' ? 'completed' : nextHours > 0 ? 'playing' : 'backlog',
               hoursPlayed: nextHours,
               completionPct: nextPct,
+              currentChapter: prog?.currentChapter,
               playthroughCount: prog?.playthroughCount || 0,
               platinum: prog?.platinum ?? false,
               platform: activePlatform,
@@ -1481,6 +1671,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               status: nextStatus,
               hoursPlayed: patch.hoursPlayed ?? existing?.hoursPlayed ?? 0,
               completionPct: nextPct,
+              currentChapter: existing?.currentChapter,
               playthroughCount: nextPlaythroughs,
               platinum: existing?.platinum ?? false,
               platform: patch.platform ?? existing?.platform ?? game.platforms[0] ?? 'PC',
@@ -1514,6 +1705,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               status: nextDone ? 'completed' : 'playing',
               hoursPlayed: existing?.hoursPlayed || 0,
               completionPct: nextDone ? Math.max(100, existing?.completionPct || 100) : existing?.completionPct || 50,
+              currentChapter: nextDone && game.totalChapters ? game.totalChapters : existing?.currentChapter,
               playthroughCount: nextDone ? Math.max(1, existing?.playthroughCount || 0) : existing?.playthroughCount || 0,
               platinum: existing?.platinum ?? false,
               platform: existing?.platform || game.platforms[0] || 'PC',
@@ -1544,6 +1736,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             status: nextPlat ? 'completed' : existing?.status || 'playing',
             hoursPlayed: existing?.hoursPlayed || 0,
             completionPct: nextPlat ? 100 : existing?.completionPct || 0,
+            currentChapter: nextPlat && game.totalChapters ? game.totalChapters : existing?.currentChapter,
             playthroughCount: nextPlat ? Math.max(1, existing?.playthroughCount || 0) : existing?.playthroughCount || 0,
             platinum: nextPlat,
             platform: existing?.platform || game.platforms[0] || 'PC',
@@ -1572,6 +1765,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               status: nextCount > 0 ? 'completed' : 'playing',
               hoursPlayed: existing?.hoursPlayed || 0,
               completionPct: existing?.completionPct || 100,
+              currentChapter: existing?.currentChapter,
               playthroughCount: nextCount,
               platinum: existing?.platinum ?? false,
               platform: existing?.platform || game.platforms[0] || 'PC',
@@ -1604,6 +1798,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               status: existing?.status || 'backlog',
               hoursPlayed: existing?.hoursPlayed || 0,
               completionPct: existing?.completionPct || 0,
+              currentChapter: existing?.currentChapter,
               playthroughCount: existing?.playthroughCount || 0,
               platinum: existing?.platinum ?? false,
               platform: existing?.platform || game.platforms[0] || 'PC',
@@ -1633,6 +1828,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             status: existing?.status || 'playing',
             hoursPlayed: existing?.hoursPlayed || 0,
             completionPct: existing?.completionPct || 0,
+            currentChapter: existing?.currentChapter,
             playthroughCount: existing?.playthroughCount || 0,
             platinum: existing?.platinum ?? false,
             platform: existing?.platform || game.platforms[0] || 'PC',
@@ -1659,6 +1855,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             status: existing?.status || 'playing',
             hoursPlayed: existing?.hoursPlayed || 0,
             completionPct: existing?.completionPct || 0,
+            currentChapter: existing?.currentChapter,
             playthroughCount: existing?.playthroughCount || 0,
             platinum: existing?.platinum ?? false,
             platform: existing?.platform || game.platforms[0] || 'PC',
@@ -1686,6 +1883,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               status: 'backlog',
               hoursPlayed: 0,
               completionPct: 0,
+              currentChapter: 0,
               playthroughCount: 0,
               platinum: false,
               platform: existing?.platform || game.platforms[0] || 'PC',
@@ -1775,27 +1973,38 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const addLiveGameToStore = useCallback(
     (game: GameItem, status: GameWatchStatus = 'backlog') => {
+      const known = !game.totalChapters ? lookupKnownGameChapters(game.title) : null;
+      const enrichedGame: GameItem = known
+        ? {
+            ...game,
+            totalChapters: known.totalChapters,
+            chapterUnit: known.unit,
+            chapterSource: known.source,
+            chapterNote: known.note,
+          }
+        : game;
       setState((prev) => {
-        const exists = Boolean(prev.games[game.id]);
+        const exists = Boolean(prev.games[enrichedGame.id]);
         return {
           ...prev,
-          games: { ...prev.games, [game.id]: game },
-          gameOrder: exists ? prev.gameOrder : [game.id, ...prev.gameOrder],
+          games: { ...prev.games, [enrichedGame.id]: enrichedGame },
+          gameOrder: exists ? prev.gameOrder : [enrichedGame.id, ...prev.gameOrder],
           gameProgress: {
             ...prev.gameProgress,
-            [game.id]: prev.gameProgress[game.id] || {
+            [enrichedGame.id]: prev.gameProgress[enrichedGame.id] || {
               status,
               hoursPlayed: 0,
               completionPct: 0,
+              currentChapter: 0,
               playthroughCount: 0,
               platinum: false,
-              platform: game.platforms[0] || 'PC',
+              platform: enrichedGame.platforms[0] || 'PC',
               bookmarked: true,
             },
           },
         };
       });
-      showToast(`Added ${game.title} to Play`);
+      showToast(`Added ${enrichedGame.title} to Play`);
     },
     [showToast]
   );
@@ -2050,6 +2259,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             status: 'backlog',
             hoursPlayed: 0,
             completionPct: 0,
+            currentChapter: 0,
             playthroughCount: 0,
             platinum: false,
           };
@@ -2117,6 +2327,9 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         updateReadTotalUnits,
         resetReadProgress,
         logGameSession,
+        advanceGameChapter,
+        setGameChapter,
+        updateGameChaptersMeta,
         updateGameProgress,
         toggleGameCompleted,
         toggleGamePlatinum,

@@ -5,6 +5,7 @@ import { MediaImage } from '../components/MediaImage';
 import { MOOD_OPTIONS } from '../components/PersonalNotesSection';
 import { useCueStore } from '../store/useCueStore';
 import type { GameItem, MediaDomain, Movie, PersonalMood, ReadItem, Show } from '../types';
+import { resolveComicEditionCover } from '../utils/editions';
 import { computeAllMediaStats, formatRelativeTime, getReadStats, getShowStats } from '../utils/stats';
 
 export function JournalView() {
@@ -464,7 +465,7 @@ export function JournalView() {
                 >
                   <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
                     <MediaImage
-                      src={item.coverUrl}
+                      src={resolveComicEditionCover(item, state.readProgress[item.id]?.edition)}
                       alt={item.title}
                       className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
                     />

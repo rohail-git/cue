@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Film } from 'lucide-react';
 
 interface MediaImageProps {
@@ -20,6 +20,11 @@ export function MediaImage({
 }: MediaImageProps) {
   const [useFallback, setUseFallback] = useState(false);
   const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setUseFallback(false);
+    setFailed(false);
+  }, [src, fallbackSrc]);
 
   const activeSrc = useFallback ? fallbackSrc : src;
 

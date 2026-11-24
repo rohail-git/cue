@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ListPlus,
+  Maximize2,
   Minus,
   MoreHorizontal,
   Plus,
@@ -14,10 +15,12 @@ import {
   Star,
   X,
 } from 'lucide-react';
+import { CoverLightbox } from '../components/CoverLightbox';
+import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { useCueStore } from '../store/useCueStore';
-import type { Episode, Season } from '../types';
+import type { DetailCardMode, Episode, Season } from '../types';
 import {
   formatAirDate,
   formatEpisodeCode,
@@ -63,6 +66,10 @@ export function ShowDetailView({ showId }: { showId: string }) {
   const [rewatchStepperEp, setRewatchStepperEp] = useState<string | null>(null);
   const [activeEpisodeDrawer, setActiveEpisodeDrawer] = useState<Episode | null>(null);
   const [epNoteText, setEpNoteText] = useState('');
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [detailMode, setDetailMode] = useState<DetailCardMode>(
+    () => state.settings.detailMode || 'simple'
+  );
 
   const stats = useMemo(() => {
     if (!show) return null;
@@ -351,17 +358,33 @@ export function ShowDetailView({ showId }: { showId: string }) {
           )}
         </div>
 
-        <div className="absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto">
-          <h1 className="font-display font-extrabold text-3xl sm:text-5xl text-ink tracking-tight">
-            {show.title}
-          </h1>
+        <div className="absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto flex items-end gap-4">
+          <button
+            type="button"
+            onClick={() => setLightboxOpen(true)}
+            aria-label="View cover fullscreen"
+            className="group relative w-20 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface cursor-zoom-in"
+          >
+            <MediaImage src={show.posterUrl} alt={show.title} className="w-full h-full object-cover" />
+            <span className="absolute bottom-1.5 right-1.5 h-6 w-6 rounded-full bg-black/70 border border-white/15 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity">
+              <Maximize2 className="w-3 h-3" />
+            </span>
+          </button>
+          <div className="min-w-0 pb-1">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-brand mb-1">
+              {show.mediaType === 'anime' ? 'Anime' : 'Series'} · {show.year}
+            </p>
+            <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-ink tracking-tight leading-tight">
+              {show.title}
+            </h1>
+          </div>
         </div>
       </div>
 
       {/* Main Content */}
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 pt-3">
         {/* Primary Action Bar */}
-        <div className="flex items-center gap-3 mb-6">
+        <div className="flex items-center gap-3 mb-4">
           <button
             type="button"
             onClick={() => toggleShowBookmark(show.id)}
@@ -409,131 +432,183 @@ export function ShowDetailView({ showId }: { showId: string }) {
           )}
         </div>
 
-        {/* Show Info */}
-        <section className="pb-4 border-b border-white/[0.08]">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h2 className="font-semibold text-[16px] text-ink">Show info</h2>
-              <p className="text-[13.5px] text-ink-dim mt-0.5 flex items-center gap-1.5 flex-wrap">
-                <span>{show.year}</span>
-                <span>·</span>
-                <span>{show.genres.slice(0, 2).join(', ')}</span>
-                <span>·</span>
-                <span className="inline-flex items-center gap-1 text-brand">
-                  <Star className="w-3.5 h-3.5 fill-brand" />
-                  {show.rating.toFixed(1)}
-                </span>
-              </p>
-            </div>
+        <DetailModeToggle mode={detailMode} onChange={setDetailMode} />
 
-            <div className="flex items-center gap-1">
-              {[1, 2, 3, 4, 5].map((star) => {
-                const active = (progress?.rating || 0) >= star;
-                return (
-                  <button
-                    key={star}
-                    type="button"
-                    onClick={() => rateShow(show.id, star)}
-                    aria-label={`Rate ${star} stars`}
-                    className="p-0.5 hover:scale-110 transition-transform"
-                  >
-                    <Star className={`w-4 h-4 ${active ? 'text-brand fill-brand' : 'text-ink-faint'}`} />
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {show.overview && (
-            <div className="mt-2.5">
-              <p
-                className={`text-[13.5px] text-ink-dim leading-relaxed ${
-                  expandedOverview ? '' : 'line-clamp-2'
-                }`}
-              >
-                {show.overview}
-              </p>
-              <button
-                type="button"
-                onClick={() => setExpandedOverview((e) => !e)}
-                className="text-xs font-medium text-brand mt-1"
-              >
-                {expandedOverview ? 'Show less' : 'More'}
-              </button>
-            </div>
+        <div key={detailMode} data-detail-mode={detailMode} className="animate-detail-flip">
+          {detailMode === 'advanced' && (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 grid grid-cols-3 gap-3 text-center">
+              <div>
+                <p className="text-[11px] text-ink-dim uppercase tracking-wider font-semibold">Progress</p>
+                <p className="font-display font-bold text-lg text-watched tabular-nums mt-0.5">
+                  {stats.watchedUnique} / {stats.totalEpisodes}
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] text-ink-dim uppercase tracking-wider font-semibold">Runtime</p>
+                <p className="font-display font-bold text-lg text-ink tabular-nums mt-0.5">
+                  {show.runtimeAvg}m avg
+                </p>
+              </div>
+              <div>
+                <p className="text-[11px] text-ink-dim uppercase tracking-wider font-semibold">Network</p>
+                <p className="font-display font-bold text-sm text-ink truncate mt-1">
+                  {show.network || 'Streaming'}
+                </p>
+              </div>
+            </section>
           )}
 
-          {show.cast.length > 0 && (
-            <div className="mt-3.5 flex items-center gap-3 overflow-x-auto no-scrollbar pb-1">
-              {show.cast.map((c) => (
-                <div key={c.id} className="w-16 shrink-0 text-center">
-                  <div className="w-12 h-12 mx-auto rounded-full overflow-hidden bg-surface border border-white/10">
-                    <MediaImage
-                      src={c.avatarUrl}
-                      alt={c.character}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                  <p className="text-[11px] font-medium text-ink truncate mt-1">{c.character}</p>
-                  <p className="text-[10px] text-ink-faint truncate">{c.actor}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+          {/* Show Info */}
+          <section className="pb-4 border-b border-white/[0.08]">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="font-semibold text-[16px] text-ink">Show info</h2>
+                <p className="text-[13.5px] text-ink-dim mt-0.5 flex items-center gap-1.5 flex-wrap">
+                  <span>{show.year}</span>
+                  <span>·</span>
+                  <span>{show.genres.slice(0, 2).join(', ')}</span>
+                  <span>·</span>
+                  <span className="tabular-nums">
+                    {stats.watchedUnique}/{stats.totalEpisodes} ep
+                  </span>
+                  <span>·</span>
+                  <span className="inline-flex items-center gap-1 text-brand">
+                    <Star className="w-3.5 h-3.5 fill-brand" />
+                    {show.rating.toFixed(1)}
+                  </span>
+                </p>
+              </div>
 
-        {/* Seasons & Episodes */}
-        <section className="pt-5 pb-6">
-          <div className="lg:hidden">{activeSeasonObj && renderSeasonColumn(activeSeasonObj, true)}</div>
-
-          <div className="hidden lg:block">
-            {show.seasons.length > 2 && (
-              <div className="flex items-center gap-2 mb-4 overflow-x-auto no-scrollbar">
-                {Array.from({ length: Math.ceil(show.seasons.length / 2) }, (_, idx) => {
-                  const sStart = idx * 2;
-                  const s1 = show.seasons[sStart];
-                  const s2 = show.seasons[sStart + 1];
-                  const active = seasonPairStart === sStart;
+              <div className="flex items-center gap-1">
+                {[1, 2, 3, 4, 5].map((star) => {
+                  const active = (progress?.rating || 0) >= star;
                   return (
                     <button
-                      key={sStart}
+                      key={star}
                       type="button"
-                      onClick={() => setSeasonPairStart(sStart)}
-                      className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                        active
-                          ? 'bg-brand text-brand-ink'
-                          : 'bg-surface border border-white/10 text-ink-dim hover:text-ink'
-                      }`}
+                      onClick={() => rateShow(show.id, star)}
+                      aria-label={`Rate ${star} stars`}
+                      className="p-0.5 hover:scale-110 transition-transform"
                     >
-                      {s2 ? `Seasons ${s1.number}–${s2.number}` : `Season ${s1.number}`}
+                      <Star className={`w-4 h-4 ${active ? 'text-brand fill-brand' : 'text-ink-faint'}`} />
                     </button>
                   );
                 })}
               </div>
-            )}
-            <div className="grid grid-cols-2 gap-8">
-              {desktopSeasons.map((season) => renderSeasonColumn(season, false))}
             </div>
-          </div>
-        </section>
 
-        {/* Private Personal Mood & Notes */}
-        <PersonalNotesSection
-          domain="watch"
-          mediaKind="show"
-          mediaId={show.id}
-          mediaTitle={show.title}
-          mediaPoster={show.posterUrl}
-          defaultContext={
-            stats.nextEpisode
-              ? formatEpisodeCode(stats.nextEpisode.season, stats.nextEpisode.number)
-              : undefined
-          }
-          currentRating={progress?.rating}
-          currentMood={progress?.mood}
-          onSelectMood={(mood) => setShowMood(show.id, mood)}
-        />
+            {show.overview && (
+              <div className="mt-2.5">
+                <p
+                  className={`text-[13.5px] text-ink-dim leading-relaxed ${
+                    expandedOverview ? '' : 'line-clamp-2'
+                  }`}
+                >
+                  {show.overview}
+                </p>
+                <div className="flex items-center justify-between gap-2 mt-1">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedOverview((e) => !e)}
+                    className="text-xs font-medium text-brand"
+                  >
+                    {expandedOverview ? 'Show less' : 'More'}
+                  </button>
+                  {detailMode === 'simple' && (
+                    <button
+                      type="button"
+                      onClick={() => setDetailMode('advanced')}
+                      className="text-xs font-medium text-ink-dim hover:text-brand transition-colors"
+                    >
+                      Cast, stats, moods & notes →
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {detailMode === 'advanced' && show.cast.length > 0 && (
+              <div className="mt-3.5 flex items-center gap-3 overflow-x-auto no-scrollbar pb-1">
+                {show.cast.map((c) => (
+                  <div key={c.id} className="w-16 shrink-0 text-center">
+                    <div className="w-12 h-12 mx-auto rounded-full overflow-hidden bg-surface border border-white/10">
+                      <MediaImage
+                        src={c.avatarUrl}
+                        alt={c.character}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <p className="text-[11px] font-medium text-ink truncate mt-1">{c.character}</p>
+                    <p className="text-[10px] text-ink-faint truncate">{c.actor}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Seasons & Episodes */}
+          <section className="pt-5 pb-6">
+            <div className="lg:hidden">{activeSeasonObj && renderSeasonColumn(activeSeasonObj, true)}</div>
+
+            <div className="hidden lg:block">
+              {show.seasons.length > 2 && (
+                <div className="flex items-center gap-2 mb-4 overflow-x-auto no-scrollbar">
+                  {Array.from({ length: Math.ceil(show.seasons.length / 2) }, (_, idx) => {
+                    const sStart = idx * 2;
+                    const s1 = show.seasons[sStart];
+                    const s2 = show.seasons[sStart + 1];
+                    const active = seasonPairStart === sStart;
+                    return (
+                      <button
+                        key={sStart}
+                        type="button"
+                        onClick={() => setSeasonPairStart(sStart)}
+                        className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                          active
+                            ? 'bg-brand text-brand-ink'
+                            : 'bg-surface border border-white/10 text-ink-dim hover:text-ink'
+                        }`}
+                      >
+                        {s2 ? `Seasons ${s1.number}–${s2.number}` : `Season ${s1.number}`}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-8">
+                {desktopSeasons.map((season) => renderSeasonColumn(season, false))}
+              </div>
+            </div>
+          </section>
+
+          {/* Private Personal Mood & Notes */}
+          {detailMode === 'advanced' && (
+            <PersonalNotesSection
+              domain="watch"
+              mediaKind="show"
+              mediaId={show.id}
+              mediaTitle={show.title}
+              mediaPoster={show.posterUrl}
+              defaultContext={
+                stats.nextEpisode
+                  ? formatEpisodeCode(stats.nextEpisode.season, stats.nextEpisode.number)
+                  : undefined
+              }
+              currentRating={progress?.rating}
+              currentMood={progress?.mood}
+              onSelectMood={(mood) => setShowMood(show.id, mood)}
+            />
+          )}
+        </div>
       </div>
+
+      <CoverLightbox
+        open={lightboxOpen}
+        src={show.posterUrl}
+        title={show.title}
+        subtitle={`${show.year} · ${show.genres.slice(0, 2).join(', ')}`}
+        onClose={() => setLightboxOpen(false)}
+      />
 
       {/* Private Episode Note & Rewatch Drawer */}
       {activeEpisodeDrawer && (

@@ -834,6 +834,7 @@ export function createSeedState(): CueStoreState {
       playFilter: 'all',
       sortBy: 'recent',
       showPosterProgress: true,
+      detailMode: 'simple',
       tmdbApiKey: '',
     },
   };
