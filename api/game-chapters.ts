@@ -95,16 +95,15 @@ function lookupKnownGameChapters(title: string) {
     .replace(/\s+/g, ' ')
     .trim();
 
+  const exact = KNOWN_GAME_CHAPTERS[rawWithRemake] || KNOWN_GAME_CHAPTERS[norm];
   const candidate =
-    KNOWN_GAME_CHAPTERS[rawWithRemake] ||
-    KNOWN_GAME_CHAPTERS[norm] ||
-    Object.entries(KNOWN_GAME_CHAPTERS).find(
-      ([k]) =>
-        rawWithRemake === k ||
-        norm === k ||
-        rawWithRemake.startsWith(`${k} `) ||
-        norm.startsWith(`${k} `)
-    )?.[1];
+    exact ||
+    Object.entries(KNOWN_GAME_CHAPTERS).find(([k]) => {
+      const checkSuffix = (str: string) =>
+        str.startsWith(`${k} `) &&
+        !/^(?:\d+|ii|iii|iv|v|vi|x|part|rebirth)\b/i.test(str.slice(k.length + 1));
+      return checkSuffix(rawWithRemake) || checkSuffix(norm);
+    })?.[1];
 
   if (!candidate) return null;
   return {
