@@ -171,9 +171,9 @@ export function QueueView() {
         if (!item || !prog?.bookmarked) continue;
         const st = getReadStats(item, prog);
         if (st.isFinished) continue;
-        const displayCover = resolveComicEditionCover(item, prog.edition);
+        const displayCover = resolveComicEditionCover(item, prog.edition, prog);
         const editionLabel =
-          item.format === 'comic' ? getComicEditionLabel(prog.edition, item) : '';
+          item.format === 'comic' ? getComicEditionLabel(prog.edition, item, prog) : '';
         const formatBadge =
           item.format === 'manga' ? 'Manga' : item.format === 'comic' ? 'Comic' : 'Novel';
         const row: UnifiedQueueRow = {
@@ -300,7 +300,7 @@ export function QueueView() {
       stickyHeader={
         <MobileDomainBar
           title="Active Rotation"
-          domainLabel="Queue"
+          domainLabel="Cue"
           rightSlot={
             <button
               type="button"
@@ -346,7 +346,7 @@ export function QueueView() {
           </h2>
           <p className="text-sm text-ink-dim mt-1 max-w-md mx-auto">
             Line up episodes, comic issues, manga chapters, novels, movies, and game chapters in one
-            calm queue.
+            calm cue.
           </p>
           <div className="mt-4 flex items-center justify-center gap-2.5 flex-wrap">
             <button

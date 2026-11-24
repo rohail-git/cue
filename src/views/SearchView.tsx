@@ -213,7 +213,11 @@ export function SearchView() {
           badge: r.format,
           genres: r.genres,
           rating: r.rating,
-          posterUrl: resolveComicEditionCover(r, state.readProgress[r.id]?.edition),
+          posterUrl: resolveComicEditionCover(
+            r,
+            state.readProgress[r.id]?.edition,
+            state.readProgress[r.id]
+          ),
           inLibrary: Boolean(state.readProgress[r.id]?.bookmarked),
         });
       }
@@ -308,7 +312,11 @@ export function SearchView() {
           id: r.id,
           title: r.title,
           subtitle: r.format === 'manga' ? 'Manga' : r.format === 'comic' ? 'Comic' : 'Novel',
-          poster: resolveComicEditionCover(r, state.readProgress[r.id]?.edition),
+          poster: resolveComicEditionCover(
+            r,
+            state.readProgress[r.id]?.edition,
+            state.readProgress[r.id]
+          ),
         });
       }
     }
@@ -723,7 +731,7 @@ export function SearchView() {
             <section>
               <div className="flex items-center gap-2 mb-3">
                 <Sparkles className="w-5 h-5 text-brand" />
-                <h2 className="font-display font-bold text-[20px] text-ink">Up next in your queue</h2>
+                <h2 className="font-display font-bold text-[20px] text-ink">Up next in your cue</h2>
               </div>
               <div className="flex gap-3.5 overflow-x-auto no-scrollbar pb-1">
                 {queueSuggestions.map((entry) => (

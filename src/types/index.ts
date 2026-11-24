@@ -3,6 +3,31 @@ export type ReadFormat = 'novel' | 'manga' | 'comic';
 export type ReadUnit = 'chapters' | 'issues';
 export type GeneralizedComicEditionId = 'digital' | 'tpb' | 'compact' | 'hardcover';
 export type ComicEditionId = GeneralizedComicEditionId | 'absolute';
+export type ComicEditionFormat =
+  | 'digital'
+  | 'tpb'
+  | 'compact'
+  | 'hardcover'
+  | 'deluxe'
+  | 'absolute'
+  | 'omnibus';
+
+export interface ComicEditionRecord {
+  id: string;
+  format: ComicEditionFormat;
+  category: GeneralizedComicEditionId;
+  title: string;
+  shortLabel: string;
+  subtitle?: string;
+  issueCount: number;
+  coverUrl?: string;
+  year?: number;
+  publisher?: string;
+  isbn?: string;
+  pageCount?: number;
+  source?: 'curated' | 'openlibrary' | 'custom';
+}
+
 export type GamePlatform = 'PC' | 'PS5' | 'Switch' | 'Xbox' | 'Steam Deck';
 
 export type ShowWatchStatus = 'watching' | 'not_started' | 'finished';
@@ -88,6 +113,7 @@ export interface ReadItem {
   editionCovers?: Partial<Record<ComicEditionId, string>>;
   editionIssueCounts?: Partial<Record<ComicEditionId, number>>;
   editionVariants?: Partial<Record<GeneralizedComicEditionId, string[]>>;
+  editions?: ComicEditionRecord[];
   baseTotalUnits?: number;
 }
 
@@ -150,6 +176,9 @@ export interface ReadProgress {
   rereadCount: number;
   bookmarked: boolean;
   edition?: ComicEditionId;
+  editionId?: string;
+  editionTitle?: string;
+  editionCoverUrl?: string;
   lastReadAt?: string;
   rating?: number;
   ratingSource?: RatingSource;
@@ -270,6 +299,7 @@ export type RouteView =
   | { view: 'show-detail'; showId: string }
   | { view: 'movie-detail'; movieId: string }
   | { view: 'read-detail'; readId: string }
+  | { view: 'read-editions'; readId: string }
   | { view: 'game-detail'; gameId: string }
   | { view: 'library-watch' }
   | { view: 'library-read' }

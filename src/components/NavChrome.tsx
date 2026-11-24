@@ -134,7 +134,7 @@ export function NavChrome() {
   };
 
   const navItems = [
-    { id: 'queue' as const, label: 'Queue', Icon: Layers, activeColor: 'text-ink' },
+    { id: 'queue' as const, label: 'Cue', Icon: Layers, activeColor: 'text-ink' },
     { id: 'watch' as const, label: 'Watch', Icon: Tv, activeColor: 'text-watch' },
     { id: 'read' as const, label: 'Read', Icon: BookOpen, activeColor: 'text-read' },
     { id: 'play' as const, label: 'Play', Icon: Gamepad2, activeColor: 'text-play' },

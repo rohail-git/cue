@@ -1,6 +1,8 @@
 import type {
   CastMember,
+  ComicEditionFormat,
   ComicEditionId,
+  ComicEditionRecord,
   GameItem,
   GeneralizedComicEditionId,
   Movie,
@@ -9,8 +11,11 @@ import type {
   Show,
 } from '../types';
 import {
+  classifyDetailedComicEdition,
   classifyRawComicEdition,
+  getComicEditionFormatLabel,
   getKnownComicEditionSpec,
+  mergeComicEditionCatalog,
 } from '../utils/editions';
 import {
   type ChapterSource,
@@ -530,6 +535,45 @@ interface OpenLibraryDoc {
   number_of_pages_median?: number;
   subject?: string[];
   edition_count?: number;
+  isbn?: string[];
+  publisher?: string[];
+}
+
+const PRH_COMIC_ISBN_PREFIXES = [
+  '97817795',
+  '97817995',
+  '97814012',
+  '97815638',
+  '97813029',
+  '97807851',
+];
+
+export function resolveOpenLibraryCoverFromIsbn(
+  isbns?: string[],
+  coverId?: number
+): string | undefined {
+  const cleanIsbn13 = (isbns || [])
+    .map((s) => s.replace(/[^0-9X]/gi, '').toUpperCase())
+    .find((s) => /^97[89]\d{10}$/.test(s));
+
+  if (cleanIsbn13) {
+    const isPrh = PRH_COMIC_ISBN_PREFIXES.some((p) => cleanIsbn13.startsWith(p));
+    const preferModernPrh =
+      cleanIsbn13.startsWith('97817795') || cleanIsbn13.startsWith('97817995');
+    if (isPrh && (!coverId || coverId <= 0 || preferModernPrh)) {
+      return `https://images.penguinrandomhouse.com/cover/${cleanIsbn13}`;
+    }
+  }
+
+  if (coverId && coverId > 0) {
+    return `https://covers.openlibrary.org/b/id/${coverId}-L.jpg`;
+  }
+
+  if (cleanIsbn13) {
+    return `https://covers.openlibrary.org/b/isbn/${cleanIsbn13}-L.jpg?default=false`;
+  }
+
+  return undefined;
 }
 
 function combinedOpenLibraryTitle(d: Pick<OpenLibraryDoc, 'title' | 'subtitle'>): string {
@@ -802,9 +846,10 @@ export async function fetchComicEditionMetadata(
   creator?: string
 ): Promise<ComicEditionMetadata> {
   const cleanTitle = stripEditionAffixes(title);
+  const cleanQuery = cleanTitle.replace(/[,/]+/g, ' ').replace(/\s+/g, ' ').trim();
   const targetKey = canonicalReadWorkKey(cleanTitle);
   const firstAuthor = creator && creator !== 'Author' ? creator.split(/[&,]/)[0]?.trim() : '';
-  const query = firstAuthor ? `${cleanTitle} ${firstAuthor}` : cleanTitle;
+  const query = firstAuthor ? `${cleanQuery} ${firstAuthor}` : cleanQuery;
   const spec = getKnownComicEditionSpec(cleanTitle);
   const issueCounts: Partial<Record<ComicEditionId, number>> = { ...(spec?.counts || {}) };
   const curatedCovers: Partial<Record<ComicEditionId, string>> = { ...(spec?.covers || {}) };
@@ -942,6 +987,325 @@ export async function fetchComicEditionCovers(
 ): Promise<Partial<Record<ComicEditionId, string>>> {
   const { covers } = await fetchComicEditionMetadata(title, creator);
   return covers;
+}
+
+function buildShortEditionLabel(
+  format: ComicEditionFormat,
+  rawTitle: string,
+  subtitle: string | undefined,
+  isDc: boolean
+): string {
+  const combined = `${rawTitle} ${subtitle || ''}`.trim();
+  if (format === 'compact') {
+    return /dc\s*compact/i.test(combined) || isDc ? 'DC Compact TPB' : 'Compact TPB';
+  }
+  if (format === 'omnibus') {
+    const vol = combined.match(/\b(vol\.?|volume)\s*(\d+)/i);
+    return vol ? `Omnibus Vol. ${vol[2]}` : 'Omnibus';
+  }
+  if (format === 'absolute') {
+    const vol = combined.match(/\b(vol\.?|volume)\s*(\d+)/i);
+    return vol ? `Absolute Vol. ${vol[2]}` : 'Absolute HC';
+  }
+  if (format === 'deluxe') {
+    return /anniversary/i.test(combined) ? 'Anniversary HC' : 'Deluxe HC';
+  }
+  if (format === 'tpb') {
+    const vol = rawTitle.match(/\b(vol\.?|volume)\s*(\d+)/i);
+    if (vol) {
+      const subClean = subtitle?.trim();
+      if (subClean && subClean.length <= 24 && !/edition|paperback|tpb/i.test(subClean)) {
+        return `Vol. ${vol[2]}: ${subClean}`;
+      }
+      return `Vol. ${vol[2]} TPB`;
+    }
+  }
+  if (format === 'hardcover') {
+    const vol = rawTitle.match(/\b(vol\.?|volume)\s*(\d+)/i);
+    if (vol) return `Vol. ${vol[2]} HC`;
+  }
+  return getComicEditionFormatLabel(format, isDc);
+}
+
+/** Fetches curated + live OpenLibrary / PRH detailed edition records across all matching works of a comic. */
+export async function fetchComicEditionsCatalog(
+  title: string,
+  creator?: string,
+  baseCover?: string,
+  baseTotalUnits?: number
+): Promise<ComicEditionRecord[]> {
+  const cleanTitle = stripEditionAffixes(title);
+  const cleanQuery = cleanTitle.replace(/[,/]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const targetKey = canonicalReadWorkKey(cleanTitle);
+  const firstAuthor = creator && creator !== 'Author' ? creator.split(/[&,]/)[0]?.trim() : '';
+  const mainQ = firstAuthor ? `${cleanQuery} ${firstAuthor}` : cleanQuery;
+  const spec = getKnownComicEditionSpec(cleanTitle);
+  const curated = spec?.editions ? [...spec.editions] : [];
+  const defaultUnits = Math.max(1, spec?.counts.digital ?? baseTotalUnits ?? 12);
+  const hayDc = `${cleanTitle} ${creator || ''}`.toLowerCase();
+  const isDc =
+    hayDc.includes('dc') ||
+    hayDc.includes('superman') ||
+    hayDc.includes('batman') ||
+    hayDc.includes('flash') ||
+    hayDc.includes('watchmen') ||
+    hayDc.includes('wonder woman') ||
+    hayDc.includes('jeph loeb') ||
+    Boolean(spec);
+
+  const liveRecords: ComicEditionRecord[] = [];
+
+  try {
+    const fields =
+      'key,title,subtitle,author_name,first_publish_year,cover_i,number_of_pages_median,isbn,publisher';
+    const [mainRes, compactRes] = await Promise.allSettled([
+      fetch(
+        `https://openlibrary.org/search.json?q=${encodeURIComponent(mainQ)}&language=eng&limit=25&fields=${fields}`
+      ),
+      fetch(
+        `https://openlibrary.org/search.json?q=${encodeURIComponent(`${cleanQuery} compact`)}&language=eng&limit=8&fields=${fields}`
+      ),
+    ]);
+
+    const rawDocs: OpenLibraryDoc[] = [];
+    for (const r of [mainRes, compactRes]) {
+      if (r.status === 'fulfilled' && r.value.ok) {
+        const json = (await r.value.json()) as { docs?: OpenLibraryDoc[] };
+        for (const d of json.docs || []) rawDocs.push(d);
+      }
+    }
+
+    // Deduplicate docs across parallel searches while keeping works without cover_i
+    const uniqueDocMap = new Map<string, OpenLibraryDoc>();
+    for (const d of rawDocs) {
+      if (!d.title) continue;
+      const fullTitle = combinedOpenLibraryTitle(d);
+      if (hasNonLatinScript(fullTitle)) continue;
+      const lowerTitle = fullTitle.toLowerCase();
+      if (
+        lowerTitle.includes('coloring book') ||
+        lowerTitle.includes('activity book') ||
+        lowerTitle.includes('sticker book') ||
+        lowerTitle.includes('study guide') ||
+        lowerTitle.includes('summary of')
+      ) {
+        continue;
+      }
+      const docKey = canonicalReadWorkKey(fullTitle);
+      const normTitle = normalizeTitleKey(fullTitle);
+      const matchesWork =
+        docKey === targetKey || (targetKey.length >= 4 && normTitle.startsWith(`${targetKey} `));
+      if (!matchesWork) continue;
+
+      const dedupeKey = `${d.key}::${d.title.toLowerCase()}::${(d.subtitle || '').toLowerCase()}`;
+      if (!uniqueDocMap.has(dedupeKey)) {
+        uniqueDocMap.set(dedupeKey, d);
+      }
+    }
+
+    const matchingDocs = Array.from(uniqueDocMap.values());
+    if (matchingDocs.length > 0) {
+      const years = matchingDocs
+        .map((d) => d.first_publish_year)
+        .filter((y): y is number => typeof y === 'number' && y > 1900);
+      const earliestYear = years.length > 0 ? Math.min(...years) : 2020;
+
+      // Prioritize canonical early work, recent >=2024 printings, and explicit special formats (<=4 works)
+      const workMap = new Map<string, { workKey: string; score: number }>();
+      for (const d of matchingDocs) {
+        if (!d.key?.startsWith('/works/')) continue;
+        const text = `${d.title} ${d.subtitle || ''}`.toLowerCase();
+        let score = 0;
+        if (d.first_publish_year && d.first_publish_year >= 2024) score += 40;
+        if (/\b(compact|omnibus|absolute|deluxe|vol\.?\s*1)\b/.test(text)) score += 30;
+        if (!/\b(vol\.?|volume|absolute|deluxe|omnibus|compact)\b/.test(text)) score += 20;
+        if (!d.cover_i && d.isbn?.some((i) => i.length === 13)) score += 15;
+        const prev = workMap.get(d.key);
+        if (!prev || score > prev.score) workMap.set(d.key, { workKey: d.key, score });
+      }
+
+      const selectedWorks = Array.from(workMap.values())
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 4)
+        .map((w) => w.workKey);
+
+      const workEditionsRes = await Promise.allSettled(
+        selectedWorks.map((wk) => fetch(`https://openlibrary.org${wk}/editions.json?limit=25`))
+      );
+
+      for (const r of workEditionsRes) {
+        if (r.status !== 'fulfilled' || !r.value.ok) continue;
+        const edData = (await r.value.json()) as {
+          entries?: Array<{
+            key?: string;
+            title?: string;
+            subtitle?: string;
+            description?: string | { value?: string };
+            publish_date?: string;
+            publishers?: string[];
+            physical_format?: string;
+            number_of_pages?: number;
+            isbn_13?: string[];
+            isbn_10?: string[];
+            covers?: number[];
+          }>;
+        };
+
+        for (const e of edData.entries || []) {
+          const rawTitle = (e.title || cleanTitle).trim();
+          const sub = e.subtitle?.trim();
+          const fullText = sub && !rawTitle.toLowerCase().includes(sub.toLowerCase())
+            ? `${rawTitle}: ${sub}`
+            : rawTitle;
+          if (hasNonLatinScript(fullText)) continue;
+          if (/\b(dvd|bluray|book and dvd|audio)\b/i.test(fullText)) continue;
+
+          const yearMatch = (e.publish_date || '').match(/\b(19\d\d|20\d\d)\b/);
+          const pubYear = yearMatch ? Number(yearMatch[1]) : undefined;
+          const isbn13 = (e.isbn_13 || [])
+            .map((s) => s.replace(/[^0-9X]/gi, '').toUpperCase())
+            .find((s) => /^97[89]\d{10}$/.test(s));
+
+          let classified = classifyDetailedComicEdition(
+            fullText,
+            e.physical_format,
+            pubYear,
+            earliestYear,
+            isDc
+          );
+          if (
+            isbn13 &&
+            (isbn13.startsWith('9781779527') ||
+              (isbn13.startsWith('978179950') && /compact/i.test(`${rawTitle} ${sub || ''}`)))
+          ) {
+            classified = {
+              format: 'compact',
+              category: 'compact',
+              variantTag: 'DC Compact',
+            };
+          }
+
+          const descText =
+            typeof e.description === 'string' ? e.description : e.description?.value || '';
+          const inferredCount =
+            parseCollectedIssueCount(`${sub || ''} ${descText}`, e.number_of_pages) ?? defaultUnits;
+          const coverId = e.covers?.find((c) => c > 0);
+          const coverUrl = resolveOpenLibraryCoverFromIsbn(
+            isbn13 ? [isbn13] : undefined,
+            coverId
+          );
+
+          if (!coverUrl && !isbn13 && !e.number_of_pages) continue;
+          const cleanEdId = (e.key || `ol-${rawTitle}-${pubYear || 'x'}-${isbn13 || ''}`)
+            .replace('/books/', 'ol-book-')
+            .replace(/[^a-zA-Z0-9_-]/g, '-');
+
+          liveRecords.push({
+            id: cleanEdId,
+            format: classified.format,
+            category: classified.category,
+            title: formatDisplayTitle(fullText),
+            shortLabel: buildShortEditionLabel(classified.format, rawTitle, sub, isDc),
+            subtitle:
+              sub && sub.toLowerCase() !== rawTitle.toLowerCase()
+                ? sub
+                : descText
+                  ? descText.slice(0, 90)
+                  : undefined,
+            issueCount: inferredCount,
+            coverUrl,
+            year: pubYear,
+            publisher: e.publishers?.[0],
+            isbn: isbn13,
+            pageCount: e.number_of_pages,
+            source: 'openlibrary',
+          });
+        }
+      }
+
+      // Also convert matching search docs directly so multi-work entries without editions.json data stay visible
+      for (const d of matchingDocs) {
+        const sub = d.subtitle?.trim();
+        const fullText = combinedOpenLibraryTitle(d);
+        const isbn13 = (d.isbn || [])
+          .map((s) => s.replace(/[^0-9X]/gi, '').toUpperCase())
+          .find((s) => /^97[89]\d{10}$/.test(s));
+        let classified = classifyDetailedComicEdition(
+          fullText,
+          undefined,
+          d.first_publish_year,
+          earliestYear,
+          isDc
+        );
+        if (
+          isbn13 &&
+          (isbn13.startsWith('9781779527') ||
+            (isbn13.startsWith('978179950') &&
+              d.first_publish_year &&
+              d.first_publish_year >= 2025 &&
+              !/omnibus|absolute|finest|deluxe/i.test(fullText)))
+        ) {
+          classified = { format: 'compact', category: 'compact', variantTag: 'DC Compact' };
+        }
+        const inferredCount =
+          parseCollectedIssueCount(sub, d.number_of_pages_median) ?? defaultUnits;
+        const coverUrl = resolveOpenLibraryCoverFromIsbn(d.isbn, d.cover_i);
+        const cleanDocId = `${d.key.replace('/works/', 'ol-work-')}-${classified.format}-${isbn13 || d.first_publish_year || 'x'}`;
+
+        liveRecords.push({
+          id: cleanDocId,
+          format: classified.format,
+          category: classified.category,
+          title: formatDisplayTitle(fullText),
+          shortLabel: buildShortEditionLabel(classified.format, d.title, sub, isDc),
+          subtitle: sub || (inferredCount !== defaultUnits ? `~${inferredCount} issues` : undefined),
+          issueCount: inferredCount,
+          coverUrl,
+          year: d.first_publish_year,
+          publisher: d.publisher?.[0],
+          isbn: isbn13,
+          pageCount: d.number_of_pages_median,
+          source: 'openlibrary',
+        });
+      }
+    }
+  } catch {
+    // gracefully fall back to curated/baseline catalog below
+  }
+
+  // Avoid generic live duplicates colliding with verified curated entries of the same format+count
+  const curatedSigSet = new Set(curated.map((c) => `${c.format}::${c.issueCount}`));
+  const filteredLive = liveRecords.filter((rec) => {
+    if (rec.format === 'digital') return false;
+    if (
+      curatedSigSet.has(`${rec.format}::${rec.issueCount}`) &&
+      (!rec.isbn || curated.some((c) => c.isbn === rec.isbn || c.format === rec.format))
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  let combined = mergeComicEditionCatalog(curated, filteredLive);
+  if (!combined.some((r) => r.format === 'digital')) {
+    combined = mergeComicEditionCatalog(
+      [
+        {
+          id: 'baseline-digital',
+          format: 'digital',
+          category: 'digital',
+          title: `${formatDisplayTitle(cleanTitle)} — Single Issues & Digital`,
+          shortLabel: 'Digital / Issues',
+          subtitle: 'Individual issues',
+          issueCount: defaultUnits,
+          coverUrl: baseCover,
+          source: 'curated',
+        },
+      ],
+      combined
+    );
+  }
+  return combined;
 }
 
 async function searchAniListManga(query: string): Promise<LiveSearchResult[]> {

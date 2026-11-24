@@ -12,6 +12,7 @@ import { MovieDetailView } from './views/MovieDetailView';
 import { PlayView } from './views/PlayView';
 import { QueueView } from './views/QueueView';
 import { ReadDetailView } from './views/ReadDetailView';
+import { ReadEditionsView } from './views/ReadEditionsView';
 import { ReadView } from './views/ReadView';
 import { SearchView } from './views/SearchView';
 import { ShowDetailView } from './views/ShowDetailView';
@@ -26,7 +27,10 @@ function CueShell() {
     route.view === 'movie-detail' ||
     route.view === 'library-watch'
       ? 'watch'
-      : route.view === 'read' || route.view === 'read-detail' || route.view === 'library-read'
+      : route.view === 'read' ||
+          route.view === 'read-detail' ||
+          route.view === 'read-editions' ||
+          route.view === 'library-read'
         ? 'read'
         : route.view === 'play' || route.view === 'game-detail' || route.view === 'library-play'
           ? 'play'
@@ -52,6 +56,8 @@ function CueShell() {
         return <MovieDetailView movieId={route.movieId} />;
       case 'read-detail':
         return <ReadDetailView readId={route.readId} />;
+      case 'read-editions':
+        return <ReadEditionsView readId={route.readId} />;
       case 'game-detail':
         return <GameDetailView gameId={route.gameId} />;
       case 'library-watch':

@@ -10,6 +10,7 @@ import {
 import type {
   AppSettings,
   ComicEditionId,
+  ComicEditionRecord,
   CueStoreState,
   GameChapterSource,
   GameChapterUnit,
@@ -43,6 +44,7 @@ import {
 import {
   getComicEditionLabel,
   getKnownComicEditionSpec,
+  mergeComicEditionCatalog,
   normalizeComicEditionId,
   resolveComicEditionCover,
   resolveComicEditionTotal,
@@ -220,6 +222,8 @@ interface CueContextValue {
   rateReadItem: (readId: string, rating: number | undefined, source?: RatingSource) => void;
   setReadMood: (readId: string, mood: PersonalMood | undefined) => void;
   setReadEdition: (readId: string, edition: ComicEditionId) => void;
+  selectComicEdition: (readId: string, editionRecord: ComicEditionRecord) => void;
+  updateReadEditionsCatalog: (readId: string, editions: ComicEditionRecord[]) => void;
   updateReadEditionCovers: (
     readId: string,
     editionCovers: Partial<Record<ComicEditionId, string>>,
@@ -1424,7 +1428,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           item.unit === 'issues'
             ? `Issue #${step > 0 ? touchedUnit : updated.currentUnit}`
             : `Ch. ${step > 0 ? touchedUnit : updated.currentUnit}`;
-        const activeCover = resolveComicEditionCover(item, updated.edition);
+        const activeCover = resolveComicEditionCover(item, updated.edition, updated);
         const nextHistory =
           step > 0 && touchedUnit > 0
             ? appendHistory(prev.history || [], {
@@ -1488,7 +1492,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const combined = [...new Set([...nextActive, ...existingHigh])].sort((a, b) => a - b);
         const updated = normalizeReadProgress(item, nextActive.length, prog, combined);
         const unitLabel = item.unit === 'issues' ? `Issue #${unitNumber}` : `Ch. ${unitNumber}`;
-        const activeCover = resolveComicEditionCover(item, updated.edition);
+        const activeCover = resolveComicEditionCover(item, updated.edition, updated);
         const nextHistory = !hadUnit
           ? appendHistory(prev.history || [], {
               id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1571,10 +1575,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           edition: prog?.edition,
           lastReadAt: new Date().toISOString(),
         };
-        const activeCover = resolveComicEditionCover(item, updated.edition);
+        const activeCover = resolveComicEditionCover(item, updated.edition, updated);
         const editionLabel =
           item.format === 'comic' && updated.edition
-            ? getComicEditionLabel(updated.edition, item)
+            ? getComicEditionLabel(updated.edition, item, updated)
             : '';
         const nextHistory = !isDone
           ? appendHistory(prev.history || [], {
@@ -1735,6 +1739,80 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const applyEditionSwitchState = (
+    prev: CueStoreState,
+    readId: string,
+    nextCategory: GeneralizedComicEditionId,
+    nextTotal: number,
+    nextLabel: string,
+    nextCover: string,
+    extraProgress?: Partial<ReadProgress>,
+    editionRecord?: ComicEditionRecord
+  ): CueStoreState => {
+    const item = prev.readItems[readId];
+    if (!item) return prev;
+    const existing = prev.readProgress[readId];
+    const preservedMax = Math.max(existing?.currentUnit || 0, existing?.maxCompletedUnit || 0);
+    const existingUnits = existing?.completedUnits;
+    let nextCompletedList: number[];
+    if (Array.isArray(existingUnits) && existingUnits.length > 0) {
+      nextCompletedList = [...existingUnits];
+    } else {
+      nextCompletedList = [];
+      for (let i = 1; i <= preservedMax; i += 1) nextCompletedList.push(i);
+    }
+    const activeCount = nextCompletedList.filter((u) => u <= nextTotal).length;
+    const finished = activeCount >= nextTotal;
+    const nextCoversMap =
+      nextCover && nextCover !== item.coverUrl
+        ? { ...(item.editionCovers || {}), [nextCategory]: nextCover }
+        : item.editionCovers;
+    const nextCountsMap = { ...(item.editionIssueCounts || {}), [nextCategory]: nextTotal };
+    const nextEditionsList = editionRecord
+      ? mergeComicEditionCatalog(
+          (item.editions || []).filter((e) => e.id !== editionRecord.id),
+          [editionRecord]
+        )
+      : item.editions;
+    const nextHistory = nextCover
+      ? (prev.history || []).map((h) =>
+          h.domain === 'read' && h.mediaId === readId ? { ...h, posterUrl: nextCover } : h
+        )
+      : prev.history;
+
+    return {
+      ...prev,
+      readItems: {
+        ...prev.readItems,
+        [readId]: {
+          ...item,
+          editionCovers: nextCoversMap,
+          editionIssueCounts: nextCountsMap,
+          editions: nextEditionsList,
+          baseTotalUnits: item.baseTotalUnits ?? item.totalUnits,
+          totalUnits: Math.max(1, nextTotal),
+        },
+      },
+      readProgress: {
+        ...prev.readProgress,
+        [readId]: {
+          ...(existing || {}),
+          status: finished ? 'finished' : activeCount > 0 ? 'reading' : 'want_to_read',
+          currentUnit: activeCount,
+          completedUnits: nextCompletedList,
+          maxCompletedUnit: Math.max(preservedMax, activeCount),
+          rereadCount: finished ? Math.max(1, existing?.rereadCount || 0) : existing?.rereadCount || 0,
+          bookmarked: existing?.bookmarked ?? true,
+          edition: nextCategory,
+          editionTitle: extraProgress?.editionTitle ?? (nextLabel || undefined),
+          editionId: extraProgress?.editionId,
+          editionCoverUrl: extraProgress?.editionCoverUrl,
+        },
+      },
+      history: nextHistory,
+    };
+  };
+
   const setReadEdition = useCallback(
     (readId: string, edition: ComicEditionId) => {
       const normalizedEdition = normalizeComicEditionId(edition) || 'digital';
@@ -1742,61 +1820,72 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       commitState((prev) => {
         const item = prev.readItems[readId];
         if (!item) return prev;
-        const existing = prev.readProgress[readId];
         const label = getComicEditionLabel(normalizedEdition, item);
         const nextTotal = resolveComicEditionTotal(item, normalizedEdition);
-        const preservedMax = Math.max(existing?.currentUnit || 0, existing?.maxCompletedUnit || 0);
-        const existingUnits = existing?.completedUnits;
-        let nextCompletedList: number[];
-        if (Array.isArray(existingUnits) && existingUnits.length > 0) {
-          nextCompletedList = [...existingUnits];
-        } else {
-          nextCompletedList = [];
-          for (let i = 1; i <= preservedMax; i += 1) nextCompletedList.push(i);
-        }
-        const activeCount = nextCompletedList.filter((u) => u <= nextTotal).length;
-        const finished = activeCount >= nextTotal;
         const nextCover = resolveComicEditionCover(item, normalizedEdition);
-        const nextCoversMap =
-          nextCover && nextCover !== item.coverUrl
-            ? { ...(item.editionCovers || {}), [normalizedEdition]: nextCover }
-            : item.editionCovers;
-        const nextHistory = nextCover
-          ? (prev.history || []).map((h) =>
-              h.domain === 'read' && h.mediaId === readId ? { ...h, posterUrl: nextCover } : h
-            )
-          : prev.history;
         toastMsg = label ? `${label} · ${nextTotal} ${item.unit}` : '';
+        return applyEditionSwitchState(prev, readId, normalizedEdition, nextTotal, label, nextCover, {
+          editionId: undefined,
+          editionTitle: undefined,
+          editionCoverUrl: undefined,
+        });
+      });
+      if (toastMsg) showToast(toastMsg);
+    },
+    [showToast]
+  );
+
+  const selectComicEdition = useCallback(
+    (readId: string, editionRecord: ComicEditionRecord) => {
+      let toastMsg = '';
+      commitState((prev) => {
+        const item = prev.readItems[readId];
+        if (!item) return prev;
+        const nextTotal = Math.max(1, editionRecord.issueCount);
+        const nextLabel = editionRecord.shortLabel || editionRecord.title;
+        const nextCover =
+          editionRecord.coverUrl || resolveComicEditionCover(item, editionRecord.category);
+        toastMsg = `${nextLabel} · ${nextTotal} ${item.unit}`;
+        return applyEditionSwitchState(
+          prev,
+          readId,
+          editionRecord.category,
+          nextTotal,
+          nextLabel,
+          nextCover,
+          {
+            editionId: editionRecord.id,
+            editionTitle: nextLabel,
+            editionCoverUrl: editionRecord.coverUrl || undefined,
+          },
+          editionRecord
+        );
+      });
+      if (toastMsg) showToast(toastMsg);
+    },
+    [showToast]
+  );
+
+  const updateReadEditionsCatalog = useCallback(
+    (readId: string, editions: ComicEditionRecord[]) => {
+      commitState((prev) => {
+        const item = prev.readItems[readId];
+        if (!item) return prev;
+        const customExisting = (item.editions || []).filter((e) => e.source === 'custom');
+        const merged = mergeComicEditionCatalog(editions, customExisting);
         return {
           ...prev,
           readItems: {
             ...prev.readItems,
             [readId]: {
               ...item,
-              editionCovers: nextCoversMap,
-              baseTotalUnits: item.baseTotalUnits ?? item.totalUnits,
-              totalUnits: nextTotal,
+              editions: merged,
             },
           },
-          readProgress: {
-            ...prev.readProgress,
-            [readId]: {
-              ...(existing || {}),
-              status: finished ? 'finished' : activeCount > 0 ? 'reading' : 'want_to_read',
-              currentUnit: activeCount,
-              completedUnits: nextCompletedList,
-              maxCompletedUnit: Math.max(preservedMax, activeCount),
-              rereadCount: finished ? Math.max(1, existing?.rereadCount || 0) : existing?.rereadCount || 0,
-              bookmarked: existing?.bookmarked ?? true,
-              edition: normalizedEdition,
-            },
-          },
-          history: nextHistory,
         };
       });
-      if (toastMsg) showToast(toastMsg);
     },
-    [showToast]
+    []
   );
 
   const updateReadEditionCovers = useCallback(
@@ -1859,17 +1948,19 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           editionIssueCounts: mergedCounts,
           editionVariants: mergedVariants,
         };
-        const resolvedTotal = safeActiveEdition
-          ? resolveComicEditionTotal(tempItem, safeActiveEdition)
-          : !item.editionIssueCounts && mergedCounts.digital && item.totalUnits === 12
-            ? mergedCounts.digital
-            : item.totalUnits;
+        const resolvedTotal = existingProg?.editionId
+          ? item.totalUnits
+          : safeActiveEdition
+            ? resolveComicEditionTotal(tempItem, safeActiveEdition)
+            : !item.editionIssueCounts && mergedCounts.digital && item.totalUnits === 12
+              ? mergedCounts.digital
+              : item.totalUnits;
         const updatedItem: ReadItem = {
           ...tempItem,
           baseTotalUnits: item.baseTotalUnits ?? resolvedTotal,
           totalUnits: resolvedTotal,
         };
-        const nextCover = resolveComicEditionCover(updatedItem, safeActiveEdition);
+        const nextCover = resolveComicEditionCover(updatedItem, safeActiveEdition, existingProg);
         const nextHistory = (prev.history || []).map((h) =>
           h.domain === 'read' && h.mediaId === readId
             ? { ...h, title: nextTitle, posterUrl: nextCover }
@@ -2407,7 +2498,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           return { ...l, pinnedToQueue: pinned };
         }),
       }));
-      showToast(pinned ? 'Pinned run to Queue' : 'Unpinned from Queue');
+      showToast(pinned ? 'Pinned run to Cue' : 'Unpinned from Cue');
     },
     [showToast]
   );
@@ -3205,6 +3296,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         rateReadItem,
         setReadMood,
         setReadEdition,
+        selectComicEdition,
+        updateReadEditionsCatalog,
         updateReadEditionCovers,
         updateReadTotalUnits,
         resetReadProgress,

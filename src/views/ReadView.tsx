@@ -123,9 +123,9 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     const prog = state.readProgress[item.id];
     const stats = getReadStats(item, prog);
     const flash = Boolean(justBumped[item.id]);
-    const displayCover = resolveComicEditionCover(item, prog?.edition);
+    const displayCover = resolveComicEditionCover(item, prog?.edition, prog);
     const editionLabel =
-      item.format === 'comic' ? getComicEditionLabel(prog?.edition, item) : '';
+      item.format === 'comic' ? getComicEditionLabel(prog?.edition, item, prog) : '';
 
     if (isPosterLayout) {
       return (

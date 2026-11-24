@@ -47,6 +47,15 @@ export function MediaImage({
       alt={alt}
       loading="lazy"
       decoding="async"
+      onLoad={(e) => {
+        if (e.currentTarget.naturalWidth <= 2 || e.currentTarget.naturalHeight <= 2) {
+          if (!useFallback && fallbackSrc && fallbackSrc !== src) {
+            setUseFallback(true);
+          } else {
+            setFailed(true);
+          }
+        }
+      }}
       onError={() => {
         if (!useFallback && fallbackSrc && fallbackSrc !== src) {
           setUseFallback(true);

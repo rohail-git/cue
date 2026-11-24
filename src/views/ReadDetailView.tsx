@@ -24,16 +24,18 @@ import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode } from '../types';
 import {
   evaluateBookSeriesProgress,
-  evaluateComicEditionContainers,
   findBookSeries,
 } from '../utils/containers';
 import {
   getComicEditionLabel,
+  getCuratedComicEditionRecords,
   getKnownComicEditionCovers,
   resolveComicEditionCover,
 } from '../utils/editions';
 import { formatRating, getReadUnitsAverage } from '../utils/ratings';
 import { getCompletedReadUnits, getReadStats } from '../utils/stats';
+
+const sessionDetailModeByReadId = new Map<string, DetailCardMode>();
 
 export function ReadDetailView({ readId }: { readId: string }) {
   const {
@@ -50,7 +52,6 @@ export function ReadDetailView({ readId }: { readId: string }) {
     rateReadItem,
     rateCollection,
     setReadMood,
-    setReadEdition,
     updateReadEditionCovers,
     updateReadTotalUnits,
     resetReadProgress,
@@ -68,9 +69,14 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const [selectedUnit, setSelectedUnit] = useState<number>(1);
   const [unitPageStart, setUnitPageStart] = useState<number>(1);
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
-    () => state.settings.detailMode || 'simple'
+    () => sessionDetailModeByReadId.get(readId) || state.settings.detailMode || 'simple'
   );
   const fetchedCoversRef = useRef<Set<string>>(new Set());
+
+  const handleDetailModeChange = (nextMode: DetailCardMode) => {
+    sessionDetailModeByReadId.set(readId, nextMode);
+    setDetailMode(nextMode);
+  };
 
   const item = state.readItems[readId];
   const progress = state.readProgress[readId];
@@ -131,8 +137,8 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const unitAvg = getReadUnitsAverage(progress);
   const completedList = getCompletedReadUnits(item, progress);
   const completedSet = new Set(completedList);
-  const overlappingContainers =
-    item.format === 'comic' ? evaluateComicEditionContainers(item, progress) : [];
+  const editionRecords =
+    item.format === 'comic' ? getCuratedComicEditionRecords(item) : [];
   const bookSeries = item.format === 'novel' ? findBookSeries(item.title) : null;
   const evalBookSeries = bookSeries ? evaluateBookSeriesProgress(bookSeries, state) : null;
   const seriesRatingKey = bookSeries ? `book-series:${bookSeries.id}` : '';
@@ -148,9 +154,9 @@ export function ReadDetailView({ readId }: { readId: string }) {
 
   const formatLabel =
     item.format === 'manga' ? 'Manga' : item.format === 'comic' ? 'Comic' : 'Novel';
-  const activeCover = resolveComicEditionCover(item, progress?.edition);
+  const activeCover = resolveComicEditionCover(item, progress?.edition, progress);
   const editionLabel =
-    item.format === 'comic' ? getComicEditionLabel(progress?.edition, item) : '';
+    item.format === 'comic' ? getComicEditionLabel(progress?.edition, item, progress) : '';
 
   return (
     <div className="min-h-dvh pb-20 bg-background">
@@ -316,7 +322,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
           )}
         </div>
 
-        <DetailModeToggle mode={detailMode} onChange={setDetailMode} />
+        <DetailModeToggle mode={detailMode} onChange={handleDetailModeChange} />
 
         <div key={detailMode} data-detail-mode={detailMode} className="animate-detail-flip">
           {detailMode === 'simple' ? (
@@ -354,7 +360,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setDetailMode('advanced')}
+                  onClick={() => handleDetailModeChange('advanced')}
                   className="text-xs font-medium text-ink-dim hover:text-brand transition-colors"
                 >
                   Edit total, rereads & notes →
@@ -463,64 +469,44 @@ export function ReadDetailView({ readId }: { readId: string }) {
             </section>
           )}
 
-          {/* Advanced Unified Edition Selector + Smart Containers (max 4 generalized formats) */}
-          {detailMode === 'advanced' && item.format === 'comic' && overlappingContainers.length > 0 && (
-            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 space-y-3">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
+          {/* Advanced Compact Comic Edition Entry -> Separate Editions Page */}
+          {detailMode === 'advanced' && item.format === 'comic' && (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5">
+              <div className="flex items-center justify-between gap-2 mb-3">
                 <div className="flex items-center gap-2">
                   <Layers className="w-4 h-4 text-read shrink-0" />
-                  <h2 className="text-sm font-semibold text-ink">Which edition are you reading?</h2>
+                  <h2 className="text-sm font-semibold text-ink">Comic Edition</h2>
                 </div>
-                <span className="text-[11px] text-ink-dim tabular-nums">
-                  {editionLabel || `${completedList.length} ${item.unit} logged`}
+                <span className="text-[11px] font-medium text-ink-dim tabular-nums">
+                  {editionRecords.length} {editionRecords.length === 1 ? 'edition' : 'editions'}
                 </span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {overlappingContainers.map((ed) => {
-                  const pct = Math.round(ed.ratio * 100);
-                  return (
-                    <button
-                      key={ed.id}
-                      type="button"
-                      onClick={() => setReadEdition(item.id, ed.id)}
-                      aria-pressed={ed.isActive}
-                      className={`w-full rounded-2xl p-3 border text-left transition-colors ${
-                        ed.isActive
-                          ? 'bg-surface-raised border-brand'
-                          : 'bg-background/50 border-white/[0.06] hover:bg-surface-raised/60'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-xs font-semibold text-ink truncate">{ed.label}</span>
-                          {ed.isActive && (
-                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-brand/20 text-brand shrink-0">
-                              Active
-                            </span>
-                          )}
-                        </div>
-                        <span
-                          className={`text-xs font-bold tabular-nums shrink-0 ${
-                            ed.isTechnicallyComplete ? 'text-watched' : 'text-ink-dim'
-                          }`}
-                        >
-                          {ed.completedIssues}/{ed.totalIssues}{' '}
-                          {ed.isTechnicallyComplete ? '· Complete' : `(${pct}%)`}
-                        </span>
-                      </div>
-                      {ed.summary && (
-                        <p className="text-[11px] text-ink-faint truncate mt-1">{ed.summary}</p>
-                      )}
-                      <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden mt-2">
-                        <div
-                          className="h-full bg-watched transition-all duration-300"
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+              <button
+                type="button"
+                onClick={() => pushRoute({ view: 'read-editions', readId: item.id })}
+                className="w-full rounded-2xl p-3 border border-white/[0.08] bg-background/50 hover:bg-surface-raised/70 flex items-center justify-between gap-3 text-left transition-colors"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-11 aspect-[2/3] rounded-lg overflow-hidden border border-white/10 shrink-0 bg-surface-raised">
+                    <MediaImage src={activeCover} alt={item.title} className="w-full h-full object-cover" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-ink truncate">
+                      {editionLabel || 'Digital / Issues'}
+                    </p>
+                    <p className="text-xs text-ink-dim tabular-nums mt-0.5">
+                      {stats.total} {stats.unitLabel} · {completedList.length} logged
+                    </p>
+                    <p className="text-[11px] text-ink-faint truncate mt-0.5">
+                      Browse covers, printings & collected issues
+                    </p>
+                  </div>
+                </div>
+                <span className="px-3 py-1.5 rounded-full bg-surface-raised border border-white/10 text-xs font-semibold text-ink inline-flex items-center gap-1 shrink-0">
+                  <span>Browse editions</span>
+                  <ChevronRight className="w-3.5 h-3.5 text-read" />
+                </span>
+              </button>
             </section>
           )}
 

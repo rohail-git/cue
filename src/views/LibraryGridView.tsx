@@ -73,7 +73,7 @@ export function LibraryGridView({
               }`}
             >
               <Pin className="w-3.5 h-3.5" />
-              <span>{list.pinnedToQueue ? 'Pinned to Queue' : 'Pin to Queue'}</span>
+              <span>{list.pinnedToQueue ? 'Pinned to Cue' : 'Pin to Cue'}</span>
             </button>
             <button
               type="button"
@@ -151,7 +151,8 @@ export function LibraryGridView({
                     ? state.readItems[ref.id]
                       ? resolveComicEditionCover(
                           state.readItems[ref.id],
-                          state.readProgress[ref.id]?.edition
+                          state.readProgress[ref.id]?.edition,
+                          state.readProgress[ref.id]
                         )
                       : ''
                     : state.games[ref.id]?.coverUrl;
@@ -257,7 +258,7 @@ export function LibraryGridView({
           {[
             { id: 'all', label: 'All' },
             { id: 'active', label: 'Watching' },
-            { id: 'queued', label: 'Queued' },
+            { id: 'queued', label: 'Cued' },
             { id: 'done', label: 'Finished' },
           ].map((f) => (
             <button
@@ -367,7 +368,11 @@ export function LibraryGridView({
               >
                 <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
                   <MediaImage
-                    src={resolveComicEditionCover(item, state.readProgress[item.id]?.edition)}
+                    src={resolveComicEditionCover(
+                      item,
+                      state.readProgress[item.id]?.edition,
+                      state.readProgress[item.id]
+                    )}
                     alt={item.title}
                     className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
                   />

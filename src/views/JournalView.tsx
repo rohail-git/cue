@@ -494,7 +494,11 @@ export function JournalView() {
                   >
                     <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
                       <MediaImage
-                        src={resolveComicEditionCover(item, state.readProgress[item.id]?.edition)}
+                        src={resolveComicEditionCover(
+                          item,
+                          state.readProgress[item.id]?.edition,
+                          state.readProgress[item.id]
+                        )}
                         alt={item.title}
                         className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
                       />
