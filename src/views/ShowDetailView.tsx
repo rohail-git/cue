@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bell,
   BellOff,
@@ -21,6 +21,7 @@ import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
+import { fetchAnimeEpisodeDetails } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode, Episode, Season } from '../types';
 import {
@@ -56,6 +57,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
     rateSeason,
     rateShow,
     setShowMood,
+    updateShowEpisodes,
     addJournalEntry,
     toggleItemInList,
     createCustomList,
@@ -97,6 +99,47 @@ export function ShowDetailView({ showId }: { showId: string }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showId]);
+
+  const enrichedAnimeRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!show || show.mediaType !== 'anime') return;
+    if (enrichedAnimeRef.current.has(show.id)) return;
+    const allEps = show.seasons.flatMap((s) => s.episodes);
+    const uniqueStills = new Set(allEps.map((e) => e.stillUrl).filter(Boolean));
+    const hasPlaceholderTitles =
+      allEps.length > 0 && allEps.every((e) => /^Episode \d+$/i.test(e.title));
+    const needsEnrich =
+      allEps.length > 0 &&
+      (uniqueStills.size <= 1 || hasPlaceholderTitles || show.cast.length === 0);
+    if (!needsEnrich) return;
+
+    const anilistId =
+      show.anilistId ||
+      (show.id.startsWith('anilist-') ? Number(show.id.replace('anilist-', '')) : undefined);
+    let cancelled = false;
+    fetchAnimeEpisodeDetails(
+      anilistId,
+      show.title,
+      allEps.length,
+      show.backdropUrl || show.posterUrl,
+      show.id
+    ).then((res) => {
+      if (cancelled) return;
+      enrichedAnimeRef.current.add(show.id);
+      if (res && res.episodes.length > 0) {
+        updateShowEpisodes(
+          show.id,
+          [{ number: show.seasons[0]?.number || 1, episodes: res.episodes }],
+          res.cast,
+          res.runtimeAvg
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [show, updateShowEpisodes]);
 
   const handleDetailModeChange = (nextMode: DetailCardMode) => {
     sessionDetailModeByShowId.set(showId, nextMode);

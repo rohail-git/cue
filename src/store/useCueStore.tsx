@@ -9,8 +9,10 @@ import {
 } from '../services/syncApi';
 import type {
   AppSettings,
+  CastMember,
   ComicEditionId,
   ComicEditionRecord,
+  ComicIssueMeta,
   CueStoreState,
   GameChapterSource,
   GameChapterUnit,
@@ -29,6 +31,7 @@ import type {
   ReadProgress,
   ReadWatchStatus,
   RouteView,
+  Season,
   Show,
   ShowProgress,
   UserProfile,
@@ -204,6 +207,12 @@ interface CueContextValue {
   ) => void;
   rateShow: (showId: string, rating: number | undefined, source?: RatingSource) => void;
   setShowMood: (showId: string, mood: PersonalMood | undefined) => void;
+  updateShowEpisodes: (
+    showId: string,
+    seasons: Season[],
+    cast?: CastMember[],
+    runtimeAvg?: number
+  ) => void;
 
   toggleMovieWatched: (movieId: string) => void;
   incrementMovieRewatch: (movieId: string, delta: number) => void;
@@ -224,6 +233,11 @@ interface CueContextValue {
   setReadEdition: (readId: string, edition: ComicEditionId) => void;
   selectComicEdition: (readId: string, editionRecord: ComicEditionRecord) => void;
   updateReadEditionsCatalog: (readId: string, editions: ComicEditionRecord[]) => void;
+  updateReadIssueDetails: (
+    readId: string,
+    issueDetails: Record<number, ComicIssueMeta>,
+    detailsKey: string
+  ) => void;
   updateReadEditionCovers: (
     readId: string,
     editionCovers: Partial<Record<ComicEditionId, string>>,
@@ -1078,6 +1092,30 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const updateShowEpisodes = useCallback(
+    (showId: string, seasons: Season[], cast?: CastMember[], runtimeAvg?: number) => {
+      commitState((prev) => {
+        const show = prev.shows[showId];
+        if (!show || seasons.length === 0) return prev;
+        const totalEpisodes = seasons.reduce((sum, s) => sum + s.episodes.length, 0);
+        return {
+          ...prev,
+          shows: {
+            ...prev.shows,
+            [showId]: {
+              ...show,
+              seasons,
+              totalEpisodes: totalEpisodes > 0 ? totalEpisodes : show.totalEpisodes,
+              runtimeAvg: runtimeAvg || show.runtimeAvg,
+              cast: cast && cast.length > 0 && show.cast.length === 0 ? cast : show.cast,
+            },
+          },
+        };
+      });
+    },
+    []
+  );
+
   const rateShow = useCallback(
     (showId: string, rating: number | undefined, source: RatingSource = 'manual') => {
       commitState((prev) => {
@@ -1880,6 +1918,27 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             [readId]: {
               ...item,
               editions: merged,
+            },
+          },
+        };
+      });
+    },
+    []
+  );
+
+  const updateReadIssueDetails = useCallback(
+    (readId: string, issueDetails: Record<number, ComicIssueMeta>, detailsKey: string) => {
+      commitState((prev) => {
+        const item = prev.readItems[readId];
+        if (!item) return prev;
+        return {
+          ...prev,
+          readItems: {
+            ...prev.readItems,
+            [readId]: {
+              ...item,
+              issueDetails,
+              issueDetailsKey: detailsKey,
             },
           },
         };
@@ -3281,6 +3340,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         rateSeason,
         rateShow,
         setShowMood,
+        updateShowEpisodes,
         toggleMovieWatched,
         incrementMovieRewatch,
         toggleMovieWatchlist,
@@ -3298,6 +3358,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         setReadEdition,
         selectComicEdition,
         updateReadEditionsCatalog,
+        updateReadIssueDetails,
         updateReadEditionCovers,
         updateReadTotalUnits,
         resetReadProgress,

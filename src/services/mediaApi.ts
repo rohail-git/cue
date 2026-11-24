@@ -3,6 +3,8 @@ import type {
   ComicEditionFormat,
   ComicEditionId,
   ComicEditionRecord,
+  ComicIssueMeta,
+  Episode,
   GameItem,
   GeneralizedComicEditionId,
   Movie,
@@ -1681,39 +1683,675 @@ export async function hydrateLiveShow(item: LiveSearchResult, tmdbApiKey?: strin
     return hydrateTmdbShow(item, tmdbApiKey);
   }
   if (item.source === 'anilist') {
+    const anilistId = Number(item.externalId) || undefined;
     const epCount = Math.max(1, Math.min(100, item.anilistEpisodes || 12));
+    const fallbackStill = item.backdropUrl || item.posterUrl;
+    const details = await fetchAnimeEpisodeDetails(
+      anilistId,
+      item.title,
+      epCount,
+      fallbackStill,
+      item.id
+    );
+    const episodes =
+      details?.episodes && details.episodes.length > 0
+        ? details.episodes
+        : Array.from({ length: epCount }, (_, idx) => ({
+            id: `${item.id}-s1e${idx + 1}`,
+            season: 1,
+            number: idx + 1,
+            title: `Episode ${idx + 1}`,
+            airdate: '',
+            runtime: 24,
+            stillUrl: fallbackStill,
+            overview: '',
+          }));
     return {
       id: item.id,
-      anilistId: Number(item.externalId),
+      anilistId,
       title: item.title,
       year: item.year,
       genres: item.genres,
       rating: item.rating,
       mediaType: 'anime',
       posterUrl: item.posterUrl,
-      backdropUrl: item.backdropUrl || item.posterUrl,
+      backdropUrl: fallbackStill,
       overview: item.overview,
-      runtimeAvg: 24,
-      totalEpisodes: epCount,
+      runtimeAvg: details?.runtimeAvg || 24,
+      totalEpisodes: episodes.length,
       seasons: [
         {
           number: 1,
-          episodes: Array.from({ length: epCount }, (_, idx) => ({
-            id: `${item.id}-s1e${idx + 1}`,
-            season: 1,
-            number: idx + 1,
-            title: `Episode ${idx + 1}`,
-            airdate: `${item.year}-01-01`,
-            runtime: 24,
-            stillUrl: item.backdropUrl || item.posterUrl,
-            overview: '',
-          })),
+          episodes,
         },
       ],
-      cast: [],
+      cast: details?.cast || [],
     };
   }
   return hydrateTvMazeShow(item);
+}
+
+interface AniZipEpisodeRaw {
+  seasonNumber?: number;
+  episodeNumber?: number;
+  title?: { en?: string; ja?: string; 'x-jat'?: string };
+  airdate?: string;
+  airDate?: string;
+  runtime?: number;
+  length?: number;
+  overview?: string;
+  summary?: string;
+  image?: string;
+}
+
+/** Fetches per-episode thumbnails, titles, airdates, runtimes, and voice cast for anime using AniZip + AniList + TVMaze fallback. */
+export async function fetchAnimeEpisodeDetails(
+  anilistId: number | undefined,
+  title: string,
+  fallbackEpCount: number,
+  fallbackStill: string,
+  showId: string
+): Promise<{ episodes: Episode[]; cast: CastMember[]; runtimeAvg?: number } | null> {
+  const anizipByNum = new Map<
+    number,
+    { title: string; airdate: string; runtime: number; stillUrl: string; overview: string }
+  >();
+  const anilistStreamByNum = new Map<number, { title: string; thumbnail: string }>();
+  const anilistAirByNum = new Map<number, string>();
+  const cast: CastMember[] = [];
+  let anilistEpisodesCount = 0;
+  let anilistDuration: number | undefined;
+
+  const gql = `query($id:Int){Media(id:$id,type:ANIME){episodes duration streamingEpisodes{title thumbnail} airingSchedule(perPage:50){nodes{episode airingAt}} characters(perPage:8,sort:[ROLE,RELEVANCE]){edges{node{id name{full} image{large}} voiceActors(language:JAPANESE,sort:RELEVANCE){id name{full} image{large}}}}}}`;
+
+  if (anilistId && Number.isFinite(anilistId)) {
+    const [aniZipRes, aniListRes] = await Promise.allSettled([
+      fetch(`https://api.ani.zip/mappings?anilist_id=${anilistId}`),
+      fetch('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: gql, variables: { id: anilistId } }),
+      }),
+    ]);
+
+    if (aniZipRes.status === 'fulfilled' && aniZipRes.value.ok) {
+      try {
+        const az = (await aniZipRes.value.json()) as {
+          episodes?: Record<string, AniZipEpisodeRaw>;
+        };
+        for (const [key, raw] of Object.entries(az.episodes || {})) {
+          if (!/^\d+$/.test(key)) continue;
+          const epNum = raw.episodeNumber && raw.episodeNumber > 0 ? raw.episodeNumber : Number(key);
+          if (!epNum || epNum <= 0) continue;
+          const cleanTitle = (raw.title?.en || raw.title?.['x-jat'] || raw.title?.ja || '')
+            .replace(/`/g, "'")
+            .trim();
+          const cleanOverview = (raw.overview || raw.summary || '')
+            .replace(/\s*Source:\s*.*$/is, '')
+            .replace(/`/g, "'")
+            .trim();
+          const airdate = (raw.airdate || raw.airDate || '').slice(0, 10);
+          anizipByNum.set(epNum, {
+            title: cleanTitle,
+            airdate,
+            runtime: raw.runtime || raw.length || 24,
+            stillUrl: raw.image || '',
+            overview: cleanOverview,
+          });
+        }
+      } catch {
+        // ignore parse failure
+      }
+    }
+
+    if (aniListRes.status === 'fulfilled' && aniListRes.value.ok) {
+      try {
+        const alJson = (await aniListRes.value.json()) as {
+          data?: {
+            Media?: {
+              episodes?: number;
+              duration?: number;
+              streamingEpisodes?: Array<{ title?: string; thumbnail?: string }>;
+              airingSchedule?: { nodes?: Array<{ episode?: number; airingAt?: number }> };
+              characters?: {
+                edges?: Array<{
+                  node?: { id?: number; name?: { full?: string }; image?: { large?: string } };
+                  voiceActors?: Array<{
+                    id?: number;
+                    name?: { full?: string };
+                    image?: { large?: string };
+                  }>;
+                }>;
+              };
+            };
+          };
+        };
+        const media = alJson.data?.Media;
+        if (media?.episodes) anilistEpisodesCount = media.episodes;
+        if (media?.duration) anilistDuration = media.duration;
+
+        (media?.streamingEpisodes || []).forEach((se, idx) => {
+          const rawTitle = (se.title || '').trim();
+          const m = rawTitle.match(/^(?:Episode|Ep\.?)\s*(\d+)\s*[-–—:]?\s*(.*)$/i);
+          const epNum = m ? Number(m[1]) : idx + 1;
+          const cleanTitle = (m ? m[2] : rawTitle).trim();
+          if (epNum > 0) {
+            anilistStreamByNum.set(epNum, {
+              title: cleanTitle,
+              thumbnail: se.thumbnail || '',
+            });
+          }
+        });
+
+        for (const node of media?.airingSchedule?.nodes || []) {
+          if (node.episode && node.airingAt) {
+            const iso = new Date(node.airingAt * 1000).toISOString().slice(0, 10);
+            anilistAirByNum.set(node.episode, iso);
+          }
+        }
+
+        for (const edge of (media?.characters?.edges || []).slice(0, 8)) {
+          const charName = edge.node?.name?.full;
+          if (!charName) continue;
+          const va = edge.voiceActors?.[0];
+          const avatar = edge.node?.image?.large || va?.image?.large || '';
+          cast.push({
+            id: String(edge.node?.id || `${showId}-char-${cast.length}`),
+            actor: va?.name?.full || charName,
+            character: charName,
+            avatarUrl: avatar,
+          });
+        }
+      } catch {
+        // ignore AniList failure
+      }
+    }
+  }
+
+  const maxAz = anizipByNum.size > 0 ? Math.max(...anizipByNum.keys()) : 0;
+  const epCount = Math.max(1, Math.min(120, Math.max(maxAz, anilistEpisodesCount, fallbackEpCount)));
+  const runtimeAvg = anilistDuration || anizipByNum.get(1)?.runtime || 24;
+
+  const episodes: Episode[] = Array.from({ length: epCount }, (_, idx) => {
+    const n = idx + 1;
+    const az = anizipByNum.get(n);
+    const alStream = anilistStreamByNum.get(n);
+    const alAir = anilistAirByNum.get(n);
+    return {
+      id: `${showId}-s1e${n}`,
+      season: 1,
+      number: n,
+      title: az?.title || alStream?.title || `Episode ${n}`,
+      airdate: az?.airdate || alAir || '',
+      runtime: az?.runtime || runtimeAvg,
+      stillUrl: az?.stillUrl || alStream?.thumbnail || fallbackStill,
+      overview: az?.overview || '',
+    };
+  });
+
+  // Tertiary TVMaze fallback if neither AniZip nor AniList provided distinct per-episode stills
+  const uniqueStillsBeforeFallback = new Set(episodes.map((e) => e.stillUrl).filter(Boolean));
+  if (uniqueStillsBeforeFallback.size <= 1) {
+    try {
+      const seasonMatch = title.match(/\bseason\s*(\d+)\b/i);
+      const targetSeason = seasonMatch ? Number(seasonMatch[1]) : 1;
+      const baseTitle = title
+        .replace(/\b(?:season\s*\d+|part\s*\d+|cour\s*\d+|\d+(?:st|nd|rd|th)\s+season)\b/gi, '')
+        .replace(/[:\-–—\s]+$/g, '')
+        .trim();
+      if (baseTitle.length >= 2) {
+        const tvRes = await fetch(
+          `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(baseTitle)}&embed=episodes`
+        );
+        if (tvRes.ok) {
+          const tvData = (await tvRes.json()) as {
+            _embedded?: {
+              episodes?: Array<{
+                season?: number;
+                number?: number;
+                name?: string;
+                airdate?: string;
+                runtime?: number;
+                image?: { medium?: string; original?: string };
+                summary?: string;
+              }>;
+            };
+          };
+          const tvEps = tvData._embedded?.episodes || [];
+          const matchingSeason = tvEps.filter((e) => e.season === targetSeason);
+          const pool = matchingSeason.length > 0 ? matchingSeason : targetSeason === 1 ? tvEps : [];
+          for (const tvEp of pool) {
+            if (!tvEp.number || tvEp.number < 1 || tvEp.number > episodes.length) continue;
+            const slot = episodes[tvEp.number - 1];
+            const img = tvEp.image?.medium || tvEp.image?.original || '';
+            if (img && (!slot.stillUrl || slot.stillUrl === fallbackStill)) {
+              slot.stillUrl = img;
+            }
+            if (tvEp.name && /^Episode \d+$/i.test(slot.title)) {
+              slot.title = tvEp.name;
+            }
+            if (tvEp.airdate && !slot.airdate) {
+              slot.airdate = tvEp.airdate;
+            }
+            if (tvEp.summary && !slot.overview) {
+              slot.overview = stripHtml(tvEp.summary);
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore TVMaze fallback failure
+    }
+  }
+
+  const finalUniqueStills = new Set(episodes.map((e) => e.stillUrl).filter(Boolean));
+  const hasRealTitles = episodes.some((e) => !/^Episode \d+$/i.test(e.title));
+  const hasRealAirdates = episodes.some((e) => Boolean(e.airdate));
+  if (
+    finalUniqueStills.size <= 1 &&
+    !hasRealTitles &&
+    !hasRealAirdates &&
+    cast.length === 0
+  ) {
+    return null;
+  }
+
+  return { episodes, cast, runtimeAvg };
+}
+
+type FandomWikiSlug = 'dc' | 'marvel' | 'imagecomics';
+
+interface CuratedComicWikiRule {
+  wiki: FandomWikiSlug;
+  resolveSlot: (slot: number, totalIssues: number, editionId?: string) => {
+    pageTitle: string;
+    issueLabel: string;
+  };
+}
+
+const CURATED_COMIC_WIKI_MAP: Record<string, CuratedComicWikiRule> = {
+  'superman batman': {
+    wiki: 'dc',
+    resolveSlot: (slot, _total, editionId) => {
+      if (editionId === 'curated-sb-tpb-v2') {
+        const n = slot + 7;
+        return { pageTitle: `Superman/Batman Vol 1 ${n}`, issueLabel: `#${n}` };
+      }
+      if (editionId === 'curated-sb-compact') {
+        if (slot <= 6) {
+          return { pageTitle: `Superman/Batman Vol 1 ${slot}`, issueLabel: `#${slot}` };
+        }
+        if (slot <= 12) {
+          const n = slot + 1;
+          return { pageTitle: `Superman/Batman Vol 1 ${n}`, issueLabel: `#${n}` };
+        }
+        return {
+          pageTitle: 'Superman/Batman Secret Files & Origins 2003',
+          issueLabel: 'Secret Files',
+        };
+      }
+      return { pageTitle: `Superman/Batman Vol 1 ${slot}`, issueLabel: `#${slot}` };
+    },
+  },
+  'superman batman public enemies': {
+    wiki: 'dc',
+    resolveSlot: (slot, total, editionId) =>
+      CURATED_COMIC_WIKI_MAP['superman batman'].resolveSlot(slot, total, editionId),
+  },
+  'the flash rebirth': {
+    wiki: 'dc',
+    resolveSlot: (slot) => {
+      if (slot <= 6) {
+        return { pageTitle: `The Flash: Rebirth Vol 1 ${slot}`, issueLabel: `Rebirth #${slot}` };
+      }
+      if (slot <= 12) {
+        const n = slot - 6;
+        return { pageTitle: `The Flash Vol 3 ${n}`, issueLabel: `The Flash #${n}` };
+      }
+      if (slot === 13) {
+        return {
+          pageTitle: 'The Flash Secret Files and Origins Vol 1 2010',
+          issueLabel: 'Secret Files',
+        };
+      }
+      const n = slot - 7;
+      return { pageTitle: `The Flash Vol 3 ${n}`, issueLabel: `The Flash #${n}` };
+    },
+  },
+  'flash rebirth': {
+    wiki: 'dc',
+    resolveSlot: (slot, total, editionId) =>
+      CURATED_COMIC_WIKI_MAP['the flash rebirth'].resolveSlot(slot, total, editionId),
+  },
+  'all star superman': {
+    wiki: 'dc',
+    resolveSlot: (slot) => ({
+      pageTitle: `All-Star Superman Vol 1 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+  watchmen: {
+    wiki: 'dc',
+    resolveSlot: (slot) => ({
+      pageTitle: `Watchmen Vol 1 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+  'batman hush': {
+    wiki: 'dc',
+    resolveSlot: (slot) => {
+      const n = 607 + slot;
+      return { pageTitle: `Batman Vol 1 ${n}`, issueLabel: `Batman #${n}` };
+    },
+  },
+  'batman year one': {
+    wiki: 'dc',
+    resolveSlot: (slot) => {
+      const n = 403 + slot;
+      return { pageTitle: `Batman Vol 1 ${n}`, issueLabel: `Batman #${n}` };
+    },
+  },
+  'batman the court of owls': {
+    wiki: 'dc',
+    resolveSlot: (slot) => ({
+      pageTitle: `Batman Vol 2 ${slot}`,
+      issueLabel: `Batman #${slot}`,
+    }),
+  },
+  'batman the long halloween': {
+    wiki: 'dc',
+    resolveSlot: (slot) => ({
+      pageTitle: `Batman: The Long Halloween Vol 1 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+  'kingdom come': {
+    wiki: 'dc',
+    resolveSlot: (slot) => ({
+      pageTitle: `Kingdom Come Vol 1 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+  'supergirl woman of tomorrow': {
+    wiki: 'dc',
+    resolveSlot: (slot) => ({
+      pageTitle: `Supergirl: Woman of Tomorrow Vol 1 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+  'superman birthright': {
+    wiki: 'dc',
+    resolveSlot: (slot) => ({
+      pageTitle: `Superman: Birthright Vol 1 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+  'far sector': {
+    wiki: 'dc',
+    resolveSlot: (slot) => ({
+      pageTitle: `Far Sector Vol 1 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+  dceased: {
+    wiki: 'dc',
+    resolveSlot: (slot) => ({
+      pageTitle: `DCeased Vol 1 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+  'american vampire': {
+    wiki: 'dc',
+    resolveSlot: (slot) => ({
+      pageTitle: `American Vampire Vol 1 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+  'wonder woman earth one': {
+    wiki: 'dc',
+    resolveSlot: (slot) => ({
+      pageTitle: `Wonder Woman: Earth One Vol 1 ${slot}`,
+      issueLabel: `Vol. ${slot}`,
+    }),
+  },
+  'catwoman trail of the catwoman': {
+    wiki: 'dc',
+    resolveSlot: (slot) => ({
+      pageTitle: `Catwoman Vol 3 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+  'spider man blue': {
+    wiki: 'marvel',
+    resolveSlot: (slot) => ({
+      pageTitle: `Spider-Man: Blue Vol 1 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+  'ultimate spider man': {
+    wiki: 'marvel',
+    resolveSlot: (slot) => ({
+      pageTitle: `Ultimate Spider-Man Vol 1 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+  saga: {
+    wiki: 'imagecomics',
+    resolveSlot: (slot) => ({
+      pageTitle: `Saga Vol 1 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+  invincible: {
+    wiki: 'imagecomics',
+    resolveSlot: (slot) => ({
+      pageTitle: `Invincible Vol 1 ${slot}`,
+      issueLabel: `#${slot}`,
+    }),
+  },
+};
+
+const MONTH_ABBR = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+function cleanFandomStoryTitle(raw: string, seriesNorm: string): string | undefined {
+  let s = raw
+    .replace(/\[\[([^|\]]+)\|([^\]]+)\]\]/g, '$2')
+    .replace(/\[\[([^\]]+)/g, '$1')
+    .replace(/\]\]/g, '')
+    .replace(/\{\{[^}]*\}\}/g, '')
+    .replace(/<[^>]+>/g, '')
+    .trim();
+  s = s.replace(/^["'“”]+|["'“”]+$/g, '').trim();
+  if (!s || s.length < 2) return undefined;
+  if (normalizeTitleKey(s) === seriesNorm) return undefined;
+  return s;
+}
+
+function formatFandomReleaseDate(rawWikitext: string): string | undefined {
+  const moRaw = rawWikitext.match(/\|\s*Month\s*=\s*([^\n|]+)/i)?.[1]?.trim();
+  const yrRaw = rawWikitext.match(/\|\s*Year\s*=\s*(\d{4})/i)?.[1]?.trim();
+  if (!yrRaw) return undefined;
+  if (!moRaw) return yrRaw;
+
+  let monthAbbr = '';
+  const numMonth = Number(moRaw);
+  if (Number.isInteger(numMonth) && numMonth >= 1 && numMonth <= 12) {
+    monthAbbr = MONTH_ABBR[numMonth - 1];
+  } else {
+    const cleanMo = moRaw.replace(/[^a-zA-Z]/g, '').toLowerCase();
+    const matched = MONTH_ABBR.find(
+      (m) => cleanMo.startsWith(m.toLowerCase()) || m.toLowerCase() === cleanMo.slice(0, 3)
+    );
+    if (matched) monthAbbr = matched;
+  }
+  return monthAbbr ? `${monthAbbr} ${yrRaw}` : yrRaw;
+}
+
+/** Fetches per-issue comic cover thumbnails, story titles, and release dates via Fandom MediaWiki APIs. */
+export async function fetchComicIssueDetails(
+  title: string,
+  totalIssues: number,
+  creator?: string,
+  editionId?: string
+): Promise<Record<number, ComicIssueMeta>> {
+  const cappedTotal = Math.max(1, Math.min(48, Math.round(totalIssues)));
+  const cleanSeries = stripEditionAffixes(title)
+    .replace(/[,]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const seriesNorm = normalizeTitleKey(cleanSeries);
+
+  const matchedKey =
+    (CURATED_COMIC_WIKI_MAP[seriesNorm] ? seriesNorm : undefined) ||
+    Object.keys(CURATED_COMIC_WIKI_MAP).find((k) => seriesNorm.startsWith(`${k} `));
+
+  let targetWiki: FandomWikiSlug | null = matchedKey ? CURATED_COMIC_WIKI_MAP[matchedKey].wiki : null;
+  let slotSpecs: Array<{ slot: number; pageTitle: string; issueLabel: string }> = [];
+
+  if (matchedKey) {
+    const rule = CURATED_COMIC_WIKI_MAP[matchedKey];
+    for (let slot = 1; slot <= cappedTotal; slot += 1) {
+      const resolved = rule.resolveSlot(slot, cappedTotal, editionId);
+      slotSpecs.push({ slot, ...resolved });
+    }
+  } else {
+    const marvelHay = `${title} ${creator || ''}`.toLowerCase();
+    const isLikelyMarvel =
+      /\b(marvel|spider-man|x-men|avengers|daredevil|wolverine|iron man|captain america|thor|hulk)\b/.test(
+        marvelHay
+      );
+    const wikiOrder: FandomWikiSlug[] = isLikelyMarvel
+      ? ['marvel', 'dc', 'imagecomics']
+      : ['dc', 'marvel', 'imagecomics'];
+
+    for (const w of wikiOrder) {
+      try {
+        const searchRes = await fetch(
+          `https://${w}.fandom.com/api.php?action=query&list=prefixsearch&pssearch=${encodeURIComponent(
+            `${cleanSeries} Vol`
+          )}&pslimit=12&format=json&origin=*`
+        );
+        if (!searchRes.ok) continue;
+        const json = (await searchRes.json()) as {
+          query?: { prefixsearch?: Array<{ title?: string }> };
+        };
+        const volHits = (json.query?.prefixsearch || [])
+          .map((x) => x.title || '')
+          .map((t) => t.match(/^(.+?\bVol\s+\d+)\s+\d+$/i))
+          .filter((m): m is RegExpMatchArray => Boolean(m));
+        if (volHits.length > 0) {
+          targetWiki = w;
+          const prefix = volHits[0][1];
+          for (let slot = 1; slot <= cappedTotal; slot += 1) {
+            slotSpecs.push({
+              slot,
+              pageTitle: `${prefix} ${slot}`,
+              issueLabel: `#${slot}`,
+            });
+          }
+          break;
+        }
+      } catch {
+        // try next wiki
+      }
+    }
+  }
+
+  if (!targetWiki || slotSpecs.length === 0) return {};
+
+  const result: Record<number, ComicIssueMeta> = {};
+  const batchSize = 20;
+  const batches: Array<typeof slotSpecs> = [];
+  for (let i = 0; i < slotSpecs.length; i += batchSize) {
+    batches.push(slotSpecs.slice(i, i + batchSize));
+  }
+
+  const batchResponses = await Promise.allSettled(
+    batches.map((b) =>
+      fetch(
+        `https://${targetWiki}.fandom.com/api.php?action=query&titles=${encodeURIComponent(
+          b.map((item) => item.pageTitle).join('|')
+        )}&prop=pageimages|revisions&rvprop=content&rvslots=main&rvsection=0&pithumbsize=240&redirects=1&format=json&origin=*`
+      )
+    )
+  );
+
+  for (let bIdx = 0; bIdx < batchResponses.length; bIdx += 1) {
+    const resp = batchResponses[bIdx];
+    const batch = batches[bIdx];
+    if (resp.status !== 'fulfilled' || !resp.value.ok) continue;
+
+    try {
+      const data = (await resp.value.json()) as {
+        query?: {
+          normalized?: Array<{ from: string; to: string }>;
+          redirects?: Array<{ from: string; to: string }>;
+          pages?: Record<
+            string,
+            {
+              missing?: string;
+              title?: string;
+              thumbnail?: { source?: string };
+              revisions?: Array<{ slots?: { main?: { '*'?: string } } }>;
+            }
+          >;
+        };
+      };
+
+      const normMap = new Map<string, string>();
+      for (const n of data.query?.normalized || []) normMap.set(n.from, n.to);
+      const redirMap = new Map<string, string>();
+      for (const r of data.query?.redirects || []) redirMap.set(r.from, r.to);
+
+      const pageByTitle = new Map<
+        string,
+        NonNullable<NonNullable<typeof data.query>['pages']>[string]
+      >();
+      for (const p of Object.values(data.query?.pages || {})) {
+        if (p.title) pageByTitle.set(p.title.toLowerCase(), p);
+      }
+
+      for (const spec of batch) {
+        let cur = spec.pageTitle;
+        if (normMap.has(cur)) cur = normMap.get(cur)!;
+        if (redirMap.has(cur)) cur = redirMap.get(cur)!;
+
+        const page = pageByTitle.get(cur.toLowerCase()) || pageByTitle.get(spec.pageTitle.toLowerCase());
+        if (!page || page.missing !== undefined) continue;
+
+        const rawWikitext = page.revisions?.[0]?.slots?.main?.['*'] || '';
+        const storyRaw = rawWikitext.match(/\|\s*StoryTitle1\s*=\s*([^\n]+)/i)?.[1];
+        const storyTitle = storyRaw ? cleanFandomStoryTitle(storyRaw, seriesNorm) : undefined;
+        const releaseDate = rawWikitext ? formatFandomReleaseDate(rawWikitext) : undefined;
+        const coverUrl = page.thumbnail?.source;
+
+        result[spec.slot] = {
+          number: spec.slot,
+          issueLabel: spec.issueLabel,
+          title: storyTitle,
+          releaseDate,
+          coverUrl,
+        };
+      }
+    } catch {
+      // ignore batch parse failure
+    }
+  }
+
+  return result;
 }
 
 async function hydrateTvMazeShow(item: LiveSearchResult): Promise<Show> {

@@ -47,6 +47,7 @@ export function MediaImage({
       alt={alt}
       loading="lazy"
       decoding="async"
+      referrerPolicy="no-referrer"
       onLoad={(e) => {
         if (e.currentTarget.naturalWidth <= 2 || e.currentTarget.naturalHeight <= 2) {
           if (!useFallback && fallbackSrc && fallbackSrc !== src) {

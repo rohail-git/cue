@@ -28,6 +28,14 @@ export interface ComicEditionRecord {
   source?: 'curated' | 'openlibrary' | 'custom';
 }
 
+export interface ComicIssueMeta {
+  number: number;
+  issueLabel?: string;
+  title?: string;
+  releaseDate?: string;
+  coverUrl?: string;
+}
+
 export type GamePlatform = 'PC' | 'PS5' | 'Switch' | 'Xbox' | 'Steam Deck';
 
 export type ShowWatchStatus = 'watching' | 'not_started' | 'finished';
@@ -114,6 +122,8 @@ export interface ReadItem {
   editionIssueCounts?: Partial<Record<ComicEditionId, number>>;
   editionVariants?: Partial<Record<GeneralizedComicEditionId, string[]>>;
   editions?: ComicEditionRecord[];
+  issueDetails?: Record<number, ComicIssueMeta>;
+  issueDetailsKey?: string;
   baseTotalUnits?: number;
 }
 

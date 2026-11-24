@@ -22,7 +22,11 @@ import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
-import { fetchComicEditionMetadata, formatDisplayTitle } from '../services/mediaApi';
+import {
+  fetchComicEditionMetadata,
+  fetchComicIssueDetails,
+  formatDisplayTitle,
+} from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode } from '../types';
 import {
@@ -56,6 +60,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
     rateCollection,
     setReadMood,
     updateReadEditionCovers,
+    updateReadIssueDetails,
     updateReadTotalUnits,
     resetReadProgress,
     toggleItemInList,
@@ -69,6 +74,11 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const [editingTotal, setEditingTotal] = useState(false);
   const [totalDraft, setTotalDraft] = useState('');
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxOverride, setLightboxOverride] = useState<{
+    src: string;
+    title: string;
+    subtitle?: string;
+  } | null>(null);
   const [selectedUnit, setSelectedUnit] = useState<number>(1);
   const [unitPageStart, setUnitPageStart] = useState<number>(1);
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
@@ -76,6 +86,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   );
   const [expandedBuckets, setExpandedBuckets] = useState<Record<number, boolean>>({ 0: true });
   const fetchedCoversRef = useRef<Set<string>>(new Set());
+  const fetchedIssueKeyRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setDetailMode(sessionDetailModeByReadId.get(readId) || state.settings.detailMode || 'simple');
@@ -126,6 +137,35 @@ export function ReadDetailView({ readId }: { readId: string }) {
       cancelled = true;
     };
   }, [item, updateReadEditionCovers]);
+
+  useEffect(() => {
+    if (!item || item.format !== 'comic') return;
+    const total = Math.max(1, item.totalUnits);
+    const detailsKey = `${progress?.editionId || progress?.edition || 'default'}::${total}`;
+    if (
+      item.issueDetailsKey === detailsKey &&
+      item.issueDetails &&
+      Object.keys(item.issueDetails).length > 0
+    ) {
+      return;
+    }
+    const cacheKey = `${item.id}::${detailsKey}`;
+    if (fetchedIssueKeyRef.current.has(cacheKey)) return;
+
+    let cancelled = false;
+    fetchComicIssueDetails(item.title, total, item.creator, progress?.editionId).then(
+      (details) => {
+        if (cancelled) return;
+        fetchedIssueKeyRef.current.add(cacheKey);
+        if (Object.keys(details).length > 0) {
+          updateReadIssueDetails(item.id, details, detailsKey);
+        }
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [item, progress?.edition, progress?.editionId, updateReadIssueDetails]);
 
   if (!item) {
     return (
@@ -283,7 +323,10 @@ export function ReadDetailView({ readId }: { readId: string }) {
         <div className="absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto flex items-end gap-4">
           <button
             type="button"
-            onClick={() => setLightboxOpen(true)}
+            onClick={() => {
+              setLightboxOverride(null);
+              setLightboxOpen(true);
+            }}
             aria-label="View cover fullscreen"
             className="group relative w-24 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface cursor-zoom-in"
           >
@@ -499,8 +542,24 @@ export function ReadDetailView({ readId }: { readId: string }) {
                         <div className="divide-y divide-white/[0.06] pt-1">
                           {unitNums.map((u) => {
                             const done = completedSet.has(u);
-                            const label =
+                            const meta = item.format === 'comic' ? item.issueDetails?.[u] : undefined;
+                            const fallbackLabel =
                               item.unit === 'issues' ? `Issue #${u}` : `Chapter ${u}`;
+                            const primaryTitle =
+                              item.format === 'comic'
+                                ? meta?.title ||
+                                  (meta?.issueLabel
+                                    ? `${item.title} ${meta.issueLabel}`
+                                    : fallbackLabel)
+                                : fallbackLabel;
+                            const issueSub =
+                              item.format === 'comic'
+                                ? [meta?.issueLabel || `Issue #${u}`, meta?.releaseDate]
+                                    .filter(Boolean)
+                                    .join(' · ')
+                                : '';
+                            const issueThumb = meta?.coverUrl || activeCover;
+
                             return (
                               <div
                                 key={u}
@@ -513,16 +572,52 @@ export function ReadDetailView({ readId }: { readId: string }) {
                                     toggleReadUnit(item.id, u);
                                   }
                                 }}
-                                className="py-2.5 flex items-center justify-between gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors"
+                                className="py-2.5 flex items-center gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors"
                               >
-                                <div className="min-w-0">
-                                  <p className="text-[14px] font-medium text-ink truncate">
-                                    {label}
+                                {item.format === 'comic' && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setLightboxOverride({
+                                        src: issueThumb,
+                                        title: primaryTitle,
+                                        subtitle: [
+                                          item.title,
+                                          meta?.issueLabel || `Issue #${u}`,
+                                          meta?.releaseDate,
+                                        ]
+                                          .filter(Boolean)
+                                          .join(' · '),
+                                      });
+                                      setLightboxOpen(true);
+                                    }}
+                                    aria-label={`View ${primaryTitle} cover fullscreen`}
+                                    className="w-[44px] h-[64px] rounded-lg overflow-hidden bg-surface border border-white/10 shrink-0 cursor-zoom-in"
+                                  >
+                                    <MediaImage
+                                      src={issueThumb}
+                                      fallbackSrc={activeCover}
+                                      alt={primaryTitle}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  </button>
+                                )}
+
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[14px] font-medium text-ink truncate leading-snug">
+                                    {primaryTitle}
                                   </p>
-                                  {done && (
-                                    <p className="text-[11.5px] text-watched">Read</p>
+                                  {item.format === 'comic' ? (
+                                    <p className="text-[12px] text-ink-dim tabular-nums mt-0.5 truncate">
+                                      <span>{issueSub}</span>
+                                      {done && <span className="text-watched font-medium"> · Read</span>}
+                                    </p>
+                                  ) : (
+                                    done && <p className="text-[11.5px] text-watched">Read</p>
                                   )}
                                 </div>
+
                                 <span
                                   className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 transition-colors ${
                                     done
@@ -859,14 +954,65 @@ export function ReadDetailView({ readId }: { readId: string }) {
               </div>
 
               <div className="rounded-2xl bg-background/70 border border-white/[0.06] px-3 py-2.5 flex items-center justify-between gap-3 flex-wrap">
-                <div className="flex items-center gap-2.5">
-                  <span className="text-xs font-semibold text-ink tabular-nums">
-                    {item.unit === 'issues' ? `Issue #${safeSelectedUnit}` : `Chapter ${safeSelectedUnit}`}
-                  </span>
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {item.format === 'comic' && (() => {
+                    const selMeta = item.issueDetails?.[safeSelectedUnit];
+                    const selThumb = selMeta?.coverUrl || activeCover;
+                    const selTitle =
+                      selMeta?.title || selMeta?.issueLabel || `Issue #${safeSelectedUnit}`;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLightboxOverride({
+                            src: selThumb,
+                            title: selTitle,
+                            subtitle: [
+                              item.title,
+                              selMeta?.issueLabel || `Issue #${safeSelectedUnit}`,
+                              selMeta?.releaseDate,
+                            ]
+                              .filter(Boolean)
+                              .join(' · '),
+                          });
+                          setLightboxOpen(true);
+                        }}
+                        aria-label={`Zoom ${selTitle} cover`}
+                        className="w-9 h-[54px] rounded-md overflow-hidden border border-white/10 bg-surface shrink-0 cursor-zoom-in"
+                      >
+                        <MediaImage
+                          src={selThumb}
+                          fallbackSrc={activeCover}
+                          alt={selTitle}
+                          className="w-full h-full object-cover"
+                        />
+                      </button>
+                    );
+                  })()}
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-ink tabular-nums truncate">
+                      {item.format === 'comic'
+                        ? item.issueDetails?.[safeSelectedUnit]?.title ||
+                          item.issueDetails?.[safeSelectedUnit]?.issueLabel ||
+                          `Issue #${safeSelectedUnit}`
+                        : `Chapter ${safeSelectedUnit}`}
+                    </p>
+                    {item.format === 'comic' && (
+                      <p className="text-[11px] text-ink-dim truncate">
+                        {[
+                          item.issueDetails?.[safeSelectedUnit]?.issueLabel ||
+                            `Issue #${safeSelectedUnit}`,
+                          item.issueDetails?.[safeSelectedUnit]?.releaseDate,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </p>
+                    )}
+                  </div>
                   <button
                     type="button"
                     onClick={() => toggleReadUnit(item.id, safeSelectedUnit)}
-                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border shrink-0 transition-colors ${
                       completedSet.has(safeSelectedUnit)
                         ? 'border-watched/60 bg-watched/15 text-watched'
                         : 'border-white/15 bg-surface text-ink-dim hover:text-ink'
@@ -952,10 +1098,13 @@ export function ReadDetailView({ readId }: { readId: string }) {
 
       <CoverLightbox
         open={lightboxOpen}
-        src={activeCover}
-        title={item.title}
-        subtitle={editionLabel || `${item.creator} · ${item.year}`}
-        onClose={() => setLightboxOpen(false)}
+        src={lightboxOverride?.src || activeCover}
+        title={lightboxOverride?.title || item.title}
+        subtitle={lightboxOverride?.subtitle || editionLabel || `${item.creator} · ${item.year}`}
+        onClose={() => {
+          setLightboxOpen(false);
+          setLightboxOverride(null);
+        }}
       />
 
       {listPickerOpen && (

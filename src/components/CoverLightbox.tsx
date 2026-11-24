@@ -21,6 +21,8 @@ export function upgradeToHqCoverUrl(url: string): string {
       next = `${m[1]}/${m[2]}${m[3] || ''}`;
     }
   }
+  // Fandom / Wikia scaled thumbnail -> original full resolution
+  next = next.replace(/(\/revision\/latest)\/scale-to-width-down\/\d+/i, '$1');
   return next;
 }
 
@@ -82,6 +84,7 @@ export function CoverLightbox({ open, src, title, subtitle, onClose }: CoverLigh
         <img
           src={displaySrc}
           alt={title}
+          referrerPolicy="no-referrer"
           onError={() => {
             if (!fallbackToBase && hqSrc && hqSrc !== src) {
               setFallbackToBase(true);
