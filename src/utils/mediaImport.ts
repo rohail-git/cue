@@ -9,6 +9,7 @@ import { lookupKnownGameChapters } from './gameChapters';
 
 export type ImportSourceType =
   | 'imdb-ratings'
+  | 'imdb-account-export'
   | 'imdb-watchlist'
   | 'imdb-list'
   | 'letterboxd'
@@ -19,6 +20,16 @@ export type ImportSourceType =
 
 export type ImportConflictPolicy = 'skip_existing' | 'merge_missing';
 
+export interface ResolvedImdbTitle {
+  id: string;
+  title: string;
+  qid?: string;
+  q?: string;
+  year?: number;
+  posterUrl?: string;
+  cast?: string;
+}
+
 export interface ImportCandidate {
   tempId: string;
   kind: 'show' | 'movie' | 'read' | 'game';
@@ -28,6 +39,7 @@ export interface ImportCandidate {
   year: number;
   externalConst?: string;
   url?: string;
+  posterUrl?: string;
   genres: string[];
   creator?: string;
   runtime?: number;
@@ -38,6 +50,8 @@ export interface ImportCandidate {
   totalUnits?: number;
   dateStr?: string;
   overview?: string;
+  needsResolution?: boolean;
+  rowNumber?: number;
   existingId?: string;
   existingTitle?: string;
 }
@@ -53,6 +67,7 @@ export interface ParsedImportBatch {
   sourceLabel: string;
   candidates: ImportCandidate[];
   skipped: SkippedImportRow[];
+  needsIdResolution?: boolean;
   cueBackupState?: CueStoreState;
   error?: string;
 }
@@ -206,7 +221,7 @@ const KNOWN_ANIME_HINTS = [
   'dragon ball',
 ];
 
-function classifyImdbRow(
+export function classifyImdbRow(
   rawTitleType: string,
   title: string,
   genres: string[]
@@ -221,18 +236,180 @@ function classifyImdbRow(
   if (t === 'videogame' || t === 'game') {
     return { kind: 'game', mediaType: 'game' };
   }
-  if (t === 'tvseries' || t === 'tvminiseries' || t === 'miniseries' || t === 'tvshort') {
+  if (t === 'tvseries' || t === 'tvminiseries' || t === 'miniseries' || t === 'tvshort' || t === 'tvanimation') {
     const hay = `${title} ${genres.join(' ')}`.toLowerCase();
+    const hasAnim = genres.length === 0 || genres.some((g) => g.toLowerCase() === 'animation');
     const looksAnime =
       genres.some((g) => g.toLowerCase() === 'anime') ||
-      (genres.some((g) => g.toLowerCase() === 'animation') &&
-        KNOWN_ANIME_HINTS.some((kw) => hay.includes(kw)));
+      (hasAnim && KNOWN_ANIME_HINTS.some((kw) => hay.includes(kw)));
     return { kind: 'show', mediaType: looksAnime ? 'anime' : 'tv' };
   }
-  if (!t || t === 'movie' || t === 'tvmovie' || t === 'short' || t === 'video' || t === 'tvspecial') {
+  if (
+    !t ||
+    t === 'movie' ||
+    t === 'feature' ||
+    t === 'tvmovie' ||
+    t === 'short' ||
+    t === 'video' ||
+    t === 'tvspecial'
+  ) {
     return { kind: 'movie', mediaType: 'movie' };
   }
   return { skipReason: `Unsupported IMDb title type (${rawTitleType})` };
+}
+
+function parseImdbAccountExportCsv(
+  rows: string[][],
+  headers: Record<string, number>,
+  fileName = ''
+): ParsedImportBatch {
+  const skipped: SkippedImportRow[] = [];
+  const byId = new Map<string, ImportCandidate>();
+  const hasRatingCol = headers['rating'] !== undefined || headers['yourrating'] !== undefined;
+  const isWatchlist = fileName.toLowerCase().includes('watchlist');
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const rawId = cell(r, headers, 'Title ID', 'Const').toLowerCase();
+    if (!rawId) continue;
+
+    if (!/^tt\d{5,12}$/.test(rawId)) {
+      skipped.push({
+        rowNumber: i + 1,
+        title: rawId,
+        reason: 'Not a valid IMDb title ID (expected tt...)',
+      });
+      continue;
+    }
+
+    const ratingRaw = cell(r, headers, 'Rating', 'Your Rating');
+    const userRating = parseRatingTenToFive(ratingRaw);
+    const dateStr = cell(r, headers, 'Last Modified Date', 'Date Rated', 'Created') || undefined;
+
+    const existing = byId.get(rawId);
+    if (existing) {
+      const existingDate = existing.dateStr || '';
+      const nextDate = dateStr || '';
+      if (nextDate > existingDate || (!existing.userRating && userRating)) {
+        byId.set(rawId, {
+          ...existing,
+          userRating: userRating ?? existing.userRating,
+          dateStr: nextDate || existing.dateStr,
+        });
+      }
+      continue;
+    }
+
+    byId.set(rawId, {
+      tempId: `imdb-${rawId}`,
+      kind: 'movie',
+      domain: 'watch',
+      mediaType: 'movie',
+      title: rawId,
+      year: parseYear(dateStr || '', 2024),
+      externalConst: rawId,
+      url: `https://www.imdb.com/title/${rawId}/`,
+      genres: [],
+      userRating,
+      completed: isWatchlist ? false : Boolean(userRating || hasRatingCol),
+      dateStr,
+      needsResolution: true,
+      rowNumber: i + 1,
+    });
+  }
+
+  const candidates = Array.from(byId.values()).sort((a, b) =>
+    (b.dateStr || '').localeCompare(a.dateStr || '')
+  );
+
+  if (candidates.length === 0 && skipped.length === 0) {
+    return {
+      source: 'unknown',
+      sourceLabel: 'IMDb Account Export',
+      candidates: [],
+      skipped: [],
+      error: 'No IMDb Title IDs (tt...) found in this CSV.',
+    };
+  }
+
+  return {
+    source: 'imdb-account-export',
+    sourceLabel: 'IMDb Account Export (IDs)',
+    candidates,
+    skipped,
+    needsIdResolution: candidates.length > 0,
+  };
+}
+
+export function applyResolvedImdbBatch(
+  batch: ParsedImportBatch,
+  resolvedMap: Record<string, ResolvedImdbTitle | null>
+): ParsedImportBatch {
+  const nextCandidates: ImportCandidate[] = [];
+  const nextSkipped = [...batch.skipped];
+
+  for (const c of batch.candidates) {
+    if (!c.needsResolution || !c.externalConst) {
+      nextCandidates.push(c);
+      continue;
+    }
+
+    const id = c.externalConst.toLowerCase();
+    if (!Object.prototype.hasOwnProperty.call(resolvedMap, id)) {
+      nextCandidates.push(c);
+      continue;
+    }
+
+    const info = resolvedMap[id];
+    if (!info || !info.title) {
+      nextSkipped.push({
+        rowNumber: c.rowNumber || 0,
+        title: id,
+        reason: 'Title ID not found on IMDb',
+      });
+      continue;
+    }
+
+    const classified = classifyImdbRow(info.qid || info.q || '', info.title, []);
+    if ('skipReason' in classified) {
+      nextSkipped.push({
+        rowNumber: c.rowNumber || 0,
+        title: `${info.title} (${id})`,
+        reason: classified.skipReason,
+      });
+      continue;
+    }
+
+    nextCandidates.push({
+      ...c,
+      title: info.title,
+      year: info.year || c.year,
+      kind: classified.kind,
+      domain: classified.kind === 'game' ? 'play' : 'watch',
+      mediaType: classified.mediaType,
+      posterUrl: info.posterUrl || '',
+      creator: info.cast || c.creator,
+      genres: [
+        classified.mediaType === 'anime'
+          ? 'Anime'
+          : classified.kind === 'game'
+            ? 'Video Game'
+            : classified.kind === 'show'
+              ? 'Series'
+              : 'Feature Film',
+      ],
+      needsResolution: false,
+    });
+  }
+
+  const stillPending = nextCandidates.some((c) => Boolean(c.needsResolution));
+  return {
+    ...batch,
+    sourceLabel: stillPending ? 'IMDb Account Export (IDs)' : 'IMDb Account Export',
+    candidates: nextCandidates,
+    skipped: nextSkipped,
+    needsIdResolution: stillPending,
+  };
 }
 
 function parseImdbCsv(rows: string[][], headers: Record<string, number>, fileName = ''): ParsedImportBatch {
@@ -611,6 +788,20 @@ export function parseImportFile(rawText: string, fileName = ''): ParsedImportBat
     return parseImdbCsv(rows, headers, fileName);
   }
 
+  if (headers['titleid'] !== undefined) {
+    if (headers['prompttype'] !== undefined || headers['dismissaldate'] !== undefined) {
+      return {
+        source: 'unknown',
+        sourceLabel: 'IMDb Dismissals Log',
+        candidates: [],
+        skipped: [],
+        error:
+          'This looks like an IMDb recommendation dismissals log (IMDbPersonalization.Dismissals.csv). Upload IMDbRatings.UserRatings.csv or a Watchlist/List export instead.',
+      };
+    }
+    return parseImdbAccountExportCsv(rows, headers, fileName);
+  }
+
   if (
     headers['letterboxduri'] !== undefined ||
     (headers['name'] !== undefined && headers['year'] !== undefined)
@@ -640,52 +831,86 @@ export function annotateImportDuplicates(
   candidates: ImportCandidate[],
   state: CueStoreState
 ): ImportCandidate[] {
+  const showByTitle = new Map<string, { id: string; title: string }>();
+  const showByImdb = new Map<string, { id: string; title: string }>();
+  for (const id of state.showOrder) {
+    const s = state.shows[id];
+    if (!s) continue;
+    const norm = normalizeImportTitle(s.title);
+    if (norm && !showByTitle.has(norm)) showByTitle.set(norm, { id, title: s.title });
+    const tt = id.match(/(tt\d{5,12})/i)?.[1]?.toLowerCase();
+    if (tt) showByImdb.set(tt, { id, title: s.title });
+  }
+
+  const movieByTitle = new Map<string, Array<{ id: string; title: string; year: number }>>();
+  const movieByImdb = new Map<string, { id: string; title: string }>();
+  for (const id of state.movieOrder) {
+    const m = state.movies[id];
+    if (!m) continue;
+    const norm = normalizeImportTitle(m.title);
+    if (norm) {
+      const list = movieByTitle.get(norm) || [];
+      list.push({ id, title: m.title, year: m.year || 0 });
+      movieByTitle.set(norm, list);
+    }
+    const tt = id.match(/(tt\d{5,12})/i)?.[1]?.toLowerCase();
+    if (tt) movieByImdb.set(tt, { id, title: m.title });
+  }
+
+  const readByTitle = new Map<string, { id: string; title: string }>();
+  for (const id of state.readOrder) {
+    const r = state.readItems[id];
+    if (!r) continue;
+    const norm = normalizeImportTitle(r.title);
+    if (norm && !readByTitle.has(norm)) readByTitle.set(norm, { id, title: r.title });
+  }
+
+  const gameByTitle = new Map<string, { id: string; title: string }>();
+  const gameByImdb = new Map<string, { id: string; title: string }>();
+  for (const id of state.gameOrder) {
+    const g = state.games[id];
+    if (!g) continue;
+    const norm = normalizeImportTitle(g.title);
+    if (norm && !gameByTitle.has(norm)) gameByTitle.set(norm, { id, title: g.title });
+    const tt = id.match(/(tt\d{5,12})/i)?.[1]?.toLowerCase();
+    if (tt) gameByImdb.set(tt, { id, title: g.title });
+  }
+
   return candidates.map((c) => {
+    const ext = c.externalConst?.toLowerCase();
     const cNorm = normalizeImportTitle(c.title);
+
+    if (ext) {
+      const idMatch = showByImdb.get(ext) || movieByImdb.get(ext) || gameByImdb.get(ext);
+      if (idMatch) {
+        return { ...c, existingId: idMatch.id, existingTitle: idMatch.title };
+      }
+    }
+
+    if (c.needsResolution) return c;
+
     if (c.kind === 'show') {
-      const matchId = state.showOrder.find((id) => {
-        const s = state.shows[id];
-        return s && normalizeImportTitle(s.title) === cNorm;
-      });
-      return matchId
-        ? { ...c, existingId: matchId, existingTitle: state.shows[matchId]?.title }
-        : c;
+      const match = showByTitle.get(cNorm);
+      return match ? { ...c, existingId: match.id, existingTitle: match.title } : c;
     }
     if (c.kind === 'movie') {
-      const matchId = state.movieOrder.find((id) => {
-        const m = state.movies[id];
-        return (
-          m &&
-          normalizeImportTitle(m.title) === cNorm &&
-          Math.abs((m.year || c.year) - c.year) <= 2
-        );
-      });
-      return matchId
-        ? { ...c, existingId: matchId, existingTitle: state.movies[matchId]?.title }
-        : c;
+      const list = movieByTitle.get(cNorm) || [];
+      const match = list.find((m) => Math.abs((m.year || c.year) - c.year) <= 2);
+      return match ? { ...c, existingId: match.id, existingTitle: match.title } : c;
     }
     if (c.kind === 'read') {
-      const matchId = state.readOrder.find((id) => {
-        const r = state.readItems[id];
-        return r && normalizeImportTitle(r.title) === cNorm;
-      });
-      return matchId
-        ? { ...c, existingId: matchId, existingTitle: state.readItems[matchId]?.title }
-        : c;
+      const match = readByTitle.get(cNorm);
+      return match ? { ...c, existingId: match.id, existingTitle: match.title } : c;
     }
-    const matchId = state.gameOrder.find((id) => {
-      const g = state.games[id];
-      return g && normalizeImportTitle(g.title) === cNorm;
-    });
-    return matchId
-      ? { ...c, existingId: matchId, existingTitle: state.games[matchId]?.title }
-      : c;
+    const match = gameByTitle.get(cNorm);
+    return match ? { ...c, existingId: match.id, existingTitle: match.title } : c;
   });
 }
 
 export function buildFallbackShow(c: ImportCandidate): Show {
   const id = slugifyImportId('imp-show', c.title, c.externalConst);
   const runtime = c.runtime || 45;
+  const poster = c.posterUrl || '';
   return {
     id,
     title: c.title,
@@ -693,8 +918,8 @@ export function buildFallbackShow(c: ImportCandidate): Show {
     genres: c.genres.length > 0 ? c.genres : [c.mediaType === 'anime' ? 'Anime' : 'Drama'],
     rating: c.communityRating || 7.8,
     mediaType: c.mediaType === 'anime' ? 'anime' : 'tv',
-    posterUrl: '',
-    backdropUrl: '',
+    posterUrl: poster,
+    backdropUrl: poster,
     overview: c.overview || `${c.title} (${c.year}).`,
     runtimeAvg: runtime,
     network: 'Streaming',
@@ -710,7 +935,7 @@ export function buildFallbackShow(c: ImportCandidate): Show {
             title: 'Episode 1',
             airdate: `${c.year}-01-01`,
             runtime,
-            stillUrl: '',
+            stillUrl: poster,
             overview: '',
           },
         ],
@@ -722,6 +947,7 @@ export function buildFallbackShow(c: ImportCandidate): Show {
 
 export function buildFallbackMovie(c: ImportCandidate): Movie {
   const id = slugifyImportId('imp-movie', c.title, c.externalConst);
+  const poster = c.posterUrl || '';
   return {
     id,
     title: c.title,
@@ -730,8 +956,8 @@ export function buildFallbackMovie(c: ImportCandidate): Movie {
     rating: c.communityRating || 7.8,
     runtime: c.runtime || 120,
     director: c.creator || 'Feature Film',
-    posterUrl: '',
-    backdropUrl: '',
+    posterUrl: poster,
+    backdropUrl: poster,
     overview: c.overview || `${c.title} (${c.year}).`,
     releaseDate: `${c.year}-01-01`,
     cast: [],
@@ -742,6 +968,7 @@ export function buildFallbackReadItem(c: ImportCandidate): ReadItem {
   const id = slugifyImportId('imp-read', c.title, c.externalConst);
   const format = c.mediaType === 'manga' ? 'manga' : c.mediaType === 'comic' ? 'comic' : 'novel';
   const totalUnits = c.totalUnits || (format === 'comic' ? 12 : format === 'manga' ? 100 : 24);
+  const cover = c.posterUrl || '';
   return {
     id,
     format,
@@ -753,8 +980,8 @@ export function buildFallbackReadItem(c: ImportCandidate): ReadItem {
     baseTotalUnits: totalUnits,
     genres: c.genres.length > 0 ? c.genres : ['Fiction'],
     rating: c.communityRating ? Number((c.communityRating / 2).toFixed(1)) : 4.3,
-    coverUrl: '',
-    backdropUrl: '',
+    coverUrl: cover,
+    backdropUrl: cover,
     overview: c.overview || `${c.title} by ${c.creator || 'Author'}.`,
   };
 }
@@ -762,6 +989,7 @@ export function buildFallbackReadItem(c: ImportCandidate): ReadItem {
 export function buildFallbackGameItem(c: ImportCandidate): GameItem {
   const id = slugifyImportId('imp-game', c.title, c.externalConst);
   const known = lookupKnownGameChapters(c.title);
+  const cover = c.posterUrl || '';
   return {
     id,
     title: c.title,
@@ -770,8 +998,8 @@ export function buildFallbackGameItem(c: ImportCandidate): GameItem {
     genres: c.genres.length > 0 ? c.genres : ['Video Game'],
     rating: c.communityRating ? Number((c.communityRating / 2).toFixed(1)) : 4.5,
     platforms: ['PC', 'PS5'],
-    coverUrl: '',
-    backdropUrl: '',
+    coverUrl: cover,
+    backdropUrl: cover,
     overview: c.overview || `${c.title} (${c.year}).`,
     totalChapters: known?.totalChapters,
     chapterUnit: known?.unit,

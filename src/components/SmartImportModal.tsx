@@ -6,6 +6,7 @@ import {
   ChevronRight,
   FileSpreadsheet,
   Loader2,
+  Search,
   ShieldCheck,
   Sparkles,
   Star,
@@ -15,16 +16,20 @@ import {
 import {
   buildFallbackPreparedEntry,
   enrichImportCandidate,
+  resolveImdbIdsBatch,
 } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import {
   annotateImportDuplicates,
+  applyResolvedImdbBatch,
   type ImportCandidate,
   type ImportConflictPolicy,
   type ParsedImportBatch,
   parseImportFile,
   type PreparedImportEntry,
 } from '../utils/mediaImport';
+
+type PreviewTypeFilter = 'all' | 'movie' | 'show' | 'anime' | 'game';
 
 export function SmartImportModal() {
   const {
@@ -50,13 +55,27 @@ export function SmartImportModal() {
     total: 0,
   });
 
+  const [resolvingIds, setResolvingIds] = useState(false);
+  const [resolveProgress, setResolveProgress] = useState<{
+    done: number;
+    total: number;
+    skippedEpisodes: number;
+  }>({ done: 0, total: 0, skippedEpisodes: 0 });
+
+  const [previewQuery, setPreviewQuery] = useState('');
+  const [previewFilter, setPreviewFilter] = useState<PreviewTypeFilter>('all');
+  const [visibleCount, setVisibleCount] = useState(60);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cancelRef = useRef(false);
+  const resolveCancelRef = useRef(false);
 
   useEffect(() => {
     if (!importModalOpen) {
       cancelRef.current = true;
+      resolveCancelRef.current = true;
       setImporting(false);
+      setResolvingIds(false);
       setProgressCount({ done: 0, total: 0 });
     }
   }, [importModalOpen]);
@@ -66,25 +85,129 @@ export function SmartImportModal() {
     return annotateImportDuplicates(parsed.candidates, state);
   }, [parsed, state]);
 
+  const resolvedCandidates = useMemo(
+    () => annotatedCandidates.filter((c) => !c.needsResolution),
+    [annotatedCandidates]
+  );
+
+  const pendingCandidates = useMemo(
+    () => annotatedCandidates.filter((c) => Boolean(c.needsResolution)),
+    [annotatedCandidates]
+  );
+
+  const filteredPreviewCandidates = useMemo(() => {
+    const q = previewQuery.trim().toLowerCase();
+    return resolvedCandidates.filter((c) => {
+      if (previewFilter === 'movie' && c.mediaType !== 'movie') return false;
+      if (previewFilter === 'show' && c.mediaType !== 'tv') return false;
+      if (previewFilter === 'anime' && c.mediaType !== 'anime') return false;
+      if (previewFilter === 'game' && c.mediaType !== 'game') return false;
+      if (!q) return true;
+      return (
+        c.title.toLowerCase().includes(q) ||
+        (c.externalConst && c.externalConst.toLowerCase().includes(q)) ||
+        String(c.year).includes(q)
+      );
+    });
+  }, [resolvedCandidates, previewFilter, previewQuery]);
+
+  const resolvePendingImdbIds = async (targetBatch: ParsedImportBatch, limit?: number) => {
+    const pending = targetBatch.candidates.filter((c) => c.needsResolution && c.externalConst);
+    const slice = typeof limit === 'number' ? pending.slice(0, limit) : pending;
+    if (slice.length === 0) return;
+
+    resolveCancelRef.current = false;
+    setResolvingIds(true);
+    const initialSkippedCount = targetBatch.skipped.length;
+    setResolveProgress({ done: 0, total: slice.length, skippedEpisodes: 0 });
+
+    let working = targetBatch;
+    const chunkSize = 35;
+
+    try {
+      for (let i = 0; i < slice.length; i += chunkSize) {
+        if (resolveCancelRef.current) break;
+        const chunkIds = slice
+          .slice(i, i + chunkSize)
+          .map((c) => c.externalConst!)
+          .filter(Boolean);
+        const resolvedMap = await resolveImdbIdsBatch(chunkIds);
+        if (resolveCancelRef.current) break;
+
+        working = applyResolvedImdbBatch(working, resolvedMap);
+        const annotated = annotateImportDuplicates(working.candidates, state);
+        const resolvedChunkIds = new Set(chunkIds.map((id) => id.toLowerCase()));
+
+        setParsed(working);
+        setSelectedMap((prev) => {
+          const next = { ...prev };
+          for (const c of annotated) {
+            if (
+              !c.needsResolution &&
+              c.externalConst &&
+              resolvedChunkIds.has(c.externalConst.toLowerCase())
+            ) {
+              if (next[c.tempId] === undefined) {
+                next[c.tempId] = !c.existingId;
+              }
+            }
+          }
+          return next;
+        });
+
+        setResolveProgress({
+          done: Math.min(slice.length, i + chunkIds.length),
+          total: slice.length,
+          skippedEpisodes: working.skipped.length - initialSkippedCount,
+        });
+      }
+
+      const finalResolved = working.candidates.filter((c) => !c.needsResolution);
+      if (working.source === 'imdb-account-export' && finalResolved.length > 50) {
+        setEnrichArt(false);
+      }
+    } finally {
+      setResolvingIds(false);
+    }
+  };
+
+  const resetPreviewControls = () => {
+    resolveCancelRef.current = true;
+    setResolvingIds(false);
+    setShowSkipped(false);
+    setPreviewQuery('');
+    setPreviewFilter('all');
+    setVisibleCount(60);
+  };
+
   const runParse = (text: string, name = '') => {
     setRawInput(text);
     setFileName(name);
+    resetPreviewControls();
     const result = parseImportFile(text, name);
     setParsed(result);
     const annotated = annotateImportDuplicates(result.candidates, state);
     const initialSel: Record<string, boolean> = {};
     for (const c of annotated) {
-      initialSel[c.tempId] = !c.existingId;
+      if (!c.needsResolution) {
+        initialSel[c.tempId] = !c.existingId;
+      }
     }
     setSelectedMap(initialSel);
-    setShowSkipped(false);
+    setEnrichArt(true);
+
+    if (result.needsIdResolution && result.candidates.length > 0 && result.candidates.length <= 100) {
+      void resolvePendingImdbIds(result);
+    }
   };
 
   if (!importModalOpen) return null;
 
-  const newCount = annotatedCandidates.filter((c) => !c.existingId).length;
-  const dupCount = annotatedCandidates.filter((c) => Boolean(c.existingId)).length;
-  const selectedCandidates = annotatedCandidates.filter((c) => selectedMap[c.tempId]);
+  const newCount = resolvedCandidates.filter((c) => !c.existingId).length;
+  const dupCount = resolvedCandidates.filter((c) => Boolean(c.existingId)).length;
+  const selectedCandidates = resolvedCandidates.filter((c) => selectedMap[c.tempId]);
+  const visibleCandidates = filteredPreviewCandidates.slice(0, visibleCount);
+  const busy = importing || resolvingIds;
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -96,13 +219,13 @@ export function SmartImportModal() {
 
   const handleSelectAll = () => {
     const next: Record<string, boolean> = {};
-    for (const c of annotatedCandidates) next[c.tempId] = true;
+    for (const c of resolvedCandidates) next[c.tempId] = true;
     setSelectedMap(next);
   };
 
   const handleSelectNewOnly = () => {
     const next: Record<string, boolean> = {};
-    for (const c of annotatedCandidates) next[c.tempId] = !c.existingId;
+    for (const c of resolvedCandidates) next[c.tempId] = !c.existingId;
     setSelectedMap(next);
   };
 
@@ -220,6 +343,7 @@ export function SmartImportModal() {
             <div className="space-y-4">
               <div className="flex flex-wrap gap-1.5">
                 {[
+                  'IMDb Account Data CSV',
                   'IMDb Ratings CSV',
                   'IMDb Watchlist CSV',
                   'Letterboxd CSV',
@@ -246,7 +370,7 @@ export function SmartImportModal() {
                   Choose CSV or JSON export file
                 </p>
                 <p className="text-xs text-ink-dim mt-1">
-                  From IMDb (Your Ratings / Watchlist → ⋮ → Export), Letterboxd, Goodreads, or Cue
+                  From IMDb (Account Data or Your Ratings / Watchlist → ⋮ → Export), Letterboxd, Goodreads, or Cue
                 </p>
               </button>
               <input
@@ -363,7 +487,9 @@ export function SmartImportModal() {
                       {parsed.sourceLabel}
                     </span>
                     <span className="text-xs text-ink font-semibold tabular-nums">
-                      {newCount} new
+                      {resolvedCandidates.length > 0
+                        ? `${newCount} new`
+                        : `${pendingCandidates.length} IDs`}
                     </span>
                     {dupCount > 0 && (
                       <span className="text-xs text-ink-dim tabular-nums">
@@ -384,8 +510,11 @@ export function SmartImportModal() {
                   <button
                     type="button"
                     disabled={importing}
-                    onClick={() => setParsed(null)}
-                    className="text-xs text-ink-dim hover:text-ink"
+                    onClick={() => {
+                      resetPreviewControls();
+                      setParsed(null);
+                    }}
+                    className="text-xs text-ink-dim hover:text-ink disabled:opacity-40"
                   >
                     Change file
                   </button>
@@ -393,12 +522,17 @@ export function SmartImportModal() {
 
                 {showSkipped && parsed.skipped.length > 0 && (
                   <div className="rounded-xl bg-surface p-2.5 max-h-28 overflow-y-auto space-y-1 border border-white/6">
-                    {parsed.skipped.map((sk) => (
+                    {parsed.skipped.slice(0, 120).map((sk) => (
                       <p key={`${sk.rowNumber}-${sk.title}`} className="text-[11px] text-ink-dim">
-                        Row {sk.rowNumber} · <span className="text-ink">{sk.title}</span> —{' '}
-                        {sk.reason}
+                        {sk.rowNumber > 0 ? `Row ${sk.rowNumber} · ` : ''}
+                        <span className="text-ink">{sk.title}</span> — {sk.reason}
                       </p>
                     ))}
+                    {parsed.skipped.length > 120 && (
+                      <p className="text-[11px] text-ink-faint">
+                        …and {parsed.skipped.length - 120} more skipped rows.
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -407,7 +541,7 @@ export function SmartImportModal() {
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <button
                       type="button"
-                      disabled={importing}
+                      disabled={busy}
                       onClick={() => setPolicy('skip_existing')}
                       className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
                         policy === 'skip_existing'
@@ -419,7 +553,7 @@ export function SmartImportModal() {
                     </button>
                     <button
                       type="button"
-                      disabled={importing}
+                      disabled={busy}
                       onClick={() => setPolicy('merge_missing')}
                       className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
                         policy === 'merge_missing'
@@ -434,107 +568,263 @@ export function SmartImportModal() {
                   <label className="inline-flex items-center gap-1.5 text-[11px] text-ink-dim cursor-pointer select-none">
                     <input
                       type="checkbox"
-                      disabled={importing}
+                      disabled={busy}
                       checked={enrichArt}
                       onChange={(e) => setEnrichArt(e.target.checked)}
                       className="accent-[#6EC5D4] rounded"
                     />
                     <Sparkles className="w-3 h-3 text-watch" />
-                    <span>Fetch posters & episodes</span>
+                    <span>
+                      {parsed.source === 'imdb-account-export' && selectedCandidates.length > 50 && !enrichArt
+                        ? 'Posters fetched (fast import)'
+                        : 'Fetch posters & episodes'}
+                    </span>
                   </label>
                 </div>
               </div>
 
-              {/* Row selection controls */}
-              <div className="flex items-center justify-between gap-2 text-xs">
-                <span className="text-ink-dim tabular-nums">
-                  {selectedCandidates.length} of {annotatedCandidates.length} selected
-                </span>
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    disabled={importing}
-                    onClick={handleSelectNewOnly}
-                    className="text-ink-dim hover:text-ink font-medium"
-                  >
-                    New only ({newCount})
-                  </button>
-                  <button
-                    type="button"
-                    disabled={importing}
-                    onClick={handleSelectAll}
-                    className="text-ink-dim hover:text-ink font-medium"
-                  >
-                    Select all
-                  </button>
-                </div>
-              </div>
+              {/* IMDb Account Data ID Resolution Panel */}
+              {(pendingCandidates.length > 0 || resolvingIds) && (
+                <div className="rounded-2xl bg-background border border-watch/25 p-3.5 space-y-2.5">
+                  <div className="flex items-start justify-between gap-2.5 flex-wrap">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <p className="text-xs font-semibold text-ink">
+                        IMDb Account Export detected ({pendingCandidates.length} title IDs remaining)
+                      </p>
+                      <p className="text-[11px] text-ink-dim leading-relaxed">
+                        IMDb’s privacy CSV only contains <code className="text-ink">tt…</code> IDs. Cue looks up real titles &amp; posters and automatically skips individual TV episodes.
+                      </p>
+                      <p className="text-[10.5px] text-ink-faint">
+                        Tip: IMDb’s web export (Your Ratings → ⋮ → Export) includes titles and genres instantly.
+                      </p>
+                    </div>
+                  </div>
 
-              {/* Candidate List */}
-              <div className="max-h-64 overflow-y-auto space-y-2 pr-0.5">
-                {annotatedCandidates.map((c) => {
-                  const checked = Boolean(selectedMap[c.tempId]);
-                  return (
-                    <button
-                      key={c.tempId}
-                      type="button"
-                      disabled={importing}
-                      onClick={() =>
-                        setSelectedMap((prev) => ({ ...prev, [c.tempId]: !prev[c.tempId] }))
-                      }
-                      className={`w-full text-left rounded-2xl p-3 border flex items-center justify-between gap-3 transition-colors ${
-                        checked
-                          ? 'bg-background border-white/12'
-                          : 'bg-background/50 border-white/[0.04] opacity-65'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <span
-                          className={`h-5 w-5 rounded-md border flex items-center justify-center shrink-0 ${
-                            checked
-                              ? 'bg-watch border-watch text-[#0E1A1E]'
-                              : 'border-white/25 text-transparent'
-                          }`}
-                        >
-                          <Check className="w-3.5 h-3.5" strokeWidth={2.8} />
+                  {resolvingIds ? (
+                    <div className="space-y-2 pt-1">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <span className="inline-flex items-center gap-1.5 text-ink font-medium tabular-nums">
+                          <Loader2 className="w-3.5 h-3.5 text-watch animate-spin" />
+                          <span>
+                            Resolving IMDb IDs {resolveProgress.done} / {resolveProgress.total}…
+                            {resolveProgress.skippedEpisodes > 0
+                              ? ` (${resolveProgress.skippedEpisodes} skipped)`
+                              : ''}
+                          </span>
                         </span>
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-ink truncate">{c.title}</p>
-                          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-                            <span
-                              className={`text-[9.5px] font-semibold uppercase px-1.5 py-[1px] rounded ${domainBadgeClass(
-                                c
-                              )}`}
-                            >
-                              {typeLabel(c)}
-                            </span>
-                            <span className="text-[11px] text-ink-dim tabular-nums">{c.year}</span>
-                            <span className="text-[11px] text-ink-dim">
-                              · {c.completed ? (c.kind === 'read' ? 'Finished' : 'Watched') : 'Watchlist'}
-                            </span>
-                            {c.userRating && (
-                              <span className="inline-flex items-center gap-0.5 text-[11px] text-brand tabular-nums">
-                                <Star className="w-3 h-3 fill-brand" />
-                                {c.userRating}/5
-                              </span>
-                            )}
-                          </div>
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            resolveCancelRef.current = true;
+                          }}
+                          className="text-xs font-semibold text-brand hover:underline shrink-0"
+                        >
+                          Stop &amp; use resolved
+                        </button>
                       </div>
+                      <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                        <div
+                          className="h-full bg-watch transition-all duration-200"
+                          style={{
+                            width: `${
+                              resolveProgress.total > 0
+                                ? Math.round((resolveProgress.done / resolveProgress.total) * 100)
+                                : 0
+                            }%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 flex-wrap pt-0.5">
+                      <button
+                        type="button"
+                        disabled={importing}
+                        onClick={() =>
+                          void resolvePendingImdbIds(
+                            parsed,
+                            pendingCandidates.length > 100 ? 100 : undefined
+                          )
+                        }
+                        className="px-3.5 py-1.5 rounded-full bg-watch text-[#0E1A1E] text-xs font-semibold hover:opacity-95 disabled:opacity-40"
+                      >
+                        {pendingCandidates.length > 100
+                          ? 'Resolve latest 100'
+                          : `Resolve ${pendingCandidates.length} titles`}
+                      </button>
+                      {pendingCandidates.length > 100 && (
+                        <button
+                          type="button"
+                          disabled={importing}
+                          onClick={() => void resolvePendingImdbIds(parsed)}
+                          className="px-3.5 py-1.5 rounded-full bg-surface border border-white/15 text-xs font-semibold text-ink hover:border-white/30 disabled:opacity-40"
+                        >
+                          Resolve all {pendingCandidates.length}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
-                      <span
-                        className={`text-[10.5px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
-                          c.existingId
-                            ? 'bg-white/8 text-ink-dim'
-                            : 'bg-watch/15 text-watch'
+              {/* Search & Type Filter Bar for large resolved lists */}
+              {resolvedCandidates.length > 20 && (
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="relative flex-1 min-w-[160px]">
+                    <Search className="w-3.5 h-3.5 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={previewQuery}
+                      onChange={(e) => {
+                        setPreviewQuery(e.target.value);
+                        setVisibleCount(60);
+                      }}
+                      placeholder="Filter resolved titles…"
+                      className="w-full rounded-full bg-background border border-white/10 pl-8 pr-3 py-1.5 text-xs text-ink placeholder:text-ink-faint outline-none focus:border-watch"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {(
+                      [
+                        ['all', 'All'],
+                        ['movie', 'Movies'],
+                        ['show', 'Shows'],
+                        ['anime', 'Anime'],
+                        ['game', 'Games'],
+                      ] as const
+                    ).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => {
+                          setPreviewFilter(id);
+                          setVisibleCount(60);
+                        }}
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
+                          previewFilter === id
+                            ? 'border-white/30 bg-white/12 text-ink'
+                            : 'border-white/8 text-ink-dim hover:text-ink'
                         }`}
                       >
-                        {c.existingId ? 'In library' : 'New'}
-                      </span>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Row selection controls */}
+              {resolvedCandidates.length > 0 && (
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="text-ink-dim tabular-nums">
+                    {selectedCandidates.length} of {resolvedCandidates.length} resolved selected
+                  </span>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={handleSelectNewOnly}
+                      className="text-ink-dim hover:text-ink font-medium disabled:opacity-40"
+                    >
+                      New only ({newCount})
                     </button>
-                  );
-                })}
-              </div>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={handleSelectAll}
+                      className="text-ink-dim hover:text-ink font-medium disabled:opacity-40"
+                    >
+                      Select all
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Candidate List (paginated for large CSVs) */}
+              {resolvedCandidates.length > 0 && (
+                <div className="max-h-64 overflow-y-auto space-y-2 pr-0.5">
+                  {visibleCandidates.map((c) => {
+                    const checked = Boolean(selectedMap[c.tempId]);
+                    return (
+                      <button
+                        key={c.tempId}
+                        type="button"
+                        disabled={importing}
+                        onClick={() =>
+                          setSelectedMap((prev) => ({ ...prev, [c.tempId]: !prev[c.tempId] }))
+                        }
+                        className={`w-full text-left rounded-2xl p-3 border flex items-center justify-between gap-3 transition-colors ${
+                          checked
+                            ? 'bg-background border-white/12'
+                            : 'bg-background/50 border-white/[0.04] opacity-65'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span
+                            className={`h-5 w-5 rounded-md border flex items-center justify-center shrink-0 ${
+                              checked
+                                ? 'bg-watch border-watch text-[#0E1A1E]'
+                                : 'border-white/25 text-transparent'
+                            }`}
+                          >
+                            <Check className="w-3.5 h-3.5" strokeWidth={2.8} />
+                          </span>
+                          {c.posterUrl && (
+                            <img
+                              src={c.posterUrl}
+                              alt=""
+                              loading="lazy"
+                              className="w-8 h-11 rounded object-cover shrink-0 bg-surface"
+                            />
+                          )}
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-ink truncate">{c.title}</p>
+                            <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                              <span
+                                className={`text-[9.5px] font-semibold uppercase px-1.5 py-[1px] rounded ${domainBadgeClass(
+                                  c
+                                )}`}
+                              >
+                                {typeLabel(c)}
+                              </span>
+                              <span className="text-[11px] text-ink-dim tabular-nums">{c.year}</span>
+                              <span className="text-[11px] text-ink-dim">
+                                · {c.completed ? (c.kind === 'read' ? 'Finished' : 'Watched') : 'Watchlist'}
+                              </span>
+                              {c.userRating && (
+                                <span className="inline-flex items-center gap-0.5 text-[11px] text-brand tabular-nums">
+                                  <Star className="w-3 h-3 fill-brand" />
+                                  {c.userRating}/5
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <span
+                          className={`text-[10.5px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
+                            c.existingId
+                              ? 'bg-white/8 text-ink-dim'
+                              : 'bg-watch/15 text-watch'
+                          }`}
+                        >
+                          {c.existingId ? 'In library' : 'New'}
+                        </span>
+                      </button>
+                    );
+                  })}
+
+                  {filteredPreviewCandidates.length > visibleCandidates.length && (
+                    <button
+                      type="button"
+                      onClick={() => setVisibleCount((n) => n + 60)}
+                      className="w-full py-2 rounded-xl bg-background border border-white/10 text-xs font-semibold text-ink-dim hover:text-ink"
+                    >
+                      Show 60 more ({filteredPreviewCandidates.length - visibleCandidates.length} remaining)
+                    </button>
+                  )}
+                </div>
+              )}
 
               {/* Enrichment Progress */}
               {importing && (
@@ -578,7 +868,7 @@ export function SmartImportModal() {
                 </span>
                 <button
                   type="button"
-                  disabled={importing || selectedCandidates.length === 0}
+                  disabled={busy || selectedCandidates.length === 0}
                   onClick={handleConfirmImport}
                   className="px-5 py-2.5 rounded-full bg-watch text-[#0E1A1E] text-sm font-semibold disabled:opacity-40 hover:opacity-95 transition-opacity"
                 >

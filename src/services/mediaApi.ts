@@ -32,6 +32,7 @@ import {
   buildFallbackShow,
   type ImportCandidate,
   type PreparedImportEntry,
+  type ResolvedImdbTitle,
 } from '../utils/mediaImport';
 
 export type SearchMediaFilter =
@@ -2613,6 +2614,36 @@ export function hydrateLiveGameItem(item: LiveSearchResult): GameItem {
   };
 }
 
+/** Resolves up to 40 IMDb tt... IDs at a time via /api/imdb-resolve. */
+export async function resolveImdbIdsBatch(
+  ids: string[]
+): Promise<Record<string, ResolvedImdbTitle | null>> {
+  const clean = Array.from(
+    new Set(
+      ids
+        .map((id) => id.trim().toLowerCase())
+        .filter((id) => /^tt\d{5,12}$/.test(id))
+    )
+  ).slice(0, 40);
+  if (clean.length === 0) return {};
+
+  try {
+    const res = await fetch('/api/imdb-resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: clean }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return {};
+    const data = (await res.json()) as {
+      items?: Record<string, ResolvedImdbTitle | null>;
+    };
+    return data.items || {};
+  } catch {
+    return {};
+  }
+}
+
 /** Resolves an imported CSV/JSON row into a hydrated Show/Movie/ReadItem/GameItem, falling back safely offline or on mismatch. */
 export async function enrichImportCandidate(
   candidate: ImportCandidate,
@@ -2638,6 +2669,64 @@ export async function enrichImportCandidate(
 
   try {
     if (candidate.kind === 'show') {
+      if (
+        !tmdbApiKey &&
+        candidate.mediaType !== 'anime' &&
+        candidate.externalConst &&
+        /^tt\d{5,12}$/i.test(candidate.externalConst)
+      ) {
+        try {
+          const tvRes = await fetch(
+            `https://api.tvmaze.com/lookup/shows?imdb=${encodeURIComponent(
+              candidate.externalConst.toLowerCase()
+            )}`,
+            { signal: AbortSignal.timeout(5000) }
+          );
+          if (tvRes.ok) {
+            const tvData = (await tvRes.json()) as {
+              id?: number;
+              name?: string;
+              premiered?: string;
+              genres?: string[];
+              rating?: { average?: number };
+              image?: { medium?: string; original?: string };
+              summary?: string;
+            };
+            if (tvData.id) {
+              const show = await hydrateTvMazeShow({
+                domain: 'watch',
+                kind: 'show',
+                id: `tvmaze-${tvData.id}`,
+                source: 'tvmaze',
+                externalId: tvData.id,
+                title: tvData.name || candidate.title,
+                year: tvData.premiered ? Number(tvData.premiered.slice(0, 4)) : candidate.year,
+                mediaType: 'tv',
+                genres: tvData.genres?.length ? tvData.genres : candidate.genres,
+                rating: tvData.rating?.average || candidate.communityRating || 7.8,
+                posterUrl: tvData.image?.original || tvData.image?.medium || candidate.posterUrl || '',
+                backdropUrl:
+                  tvData.image?.original || tvData.image?.medium || candidate.posterUrl || '',
+                overview: stripHtml(tvData.summary) || candidate.overview || '',
+              });
+              return {
+                candidate: { ...candidate, mediaType: show.mediaType },
+                selected: !candidate.existingId,
+                show: {
+                  ...show,
+                  posterUrl: show.posterUrl || candidate.posterUrl || '',
+                  backdropUrl: show.backdropUrl || candidate.posterUrl || '',
+                  genres: show.genres.length > 0 ? show.genres : candidate.genres,
+                  rating: show.rating || candidate.communityRating || 7.8,
+                },
+              };
+            }
+          }
+        } catch {
+          // fall through to standard live search
+        }
+      }
+
       const isAnimationGenre = candidate.genres.some((g) => g.toLowerCase() === 'animation');
       let hits: LiveSearchResult[] = [];
       if (candidate.mediaType === 'anime') {
@@ -2659,6 +2748,8 @@ export async function enrichImportCandidate(
           selected: !candidate.existingId,
           show: {
             ...show,
+            posterUrl: show.posterUrl || candidate.posterUrl || '',
+            backdropUrl: show.backdropUrl || candidate.posterUrl || '',
             genres: show.genres.length > 0 ? show.genres : candidate.genres,
             rating: show.rating || candidate.communityRating || 7.8,
           },
@@ -2681,6 +2772,8 @@ export async function enrichImportCandidate(
           selected: !candidate.existingId,
           movie: {
             ...movie,
+            posterUrl: movie.posterUrl || candidate.posterUrl || '',
+            backdropUrl: movie.backdropUrl || candidate.posterUrl || '',
             director:
               candidate.creator && movie.director === 'Feature Film'
                 ? candidate.creator
@@ -2717,10 +2810,15 @@ export async function enrichImportCandidate(
     const hits = await searchLiveMedia(candidate.title, 'game', tmdbApiKey);
     const best = pickBestMatch(hits, 'game');
     if (best) {
+      const game = hydrateLiveGameItem(best);
       return {
         candidate,
         selected: !candidate.existingId,
-        game: hydrateLiveGameItem(best),
+        game: {
+          ...game,
+          coverUrl: game.coverUrl || candidate.posterUrl || '',
+          backdropUrl: game.backdropUrl || candidate.posterUrl || '',
+        },
       };
     }
   } catch {
