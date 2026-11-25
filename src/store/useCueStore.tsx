@@ -348,18 +348,59 @@ interface CueContextValue {
 
 const CueContext = createContext<CueContextValue | null>(null);
 
+interface CueHistoryState {
+  cueNav: true;
+  depth: number;
+  stack: RouteView[];
+  modal?: boolean;
+}
+
+function routesEqual(a?: RouteView, b?: RouteView): boolean {
+  if (!a || !b) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function getInitialHistoryState(): { stack: RouteView[]; depth: number } {
+  try {
+    const st = window.history.state as Partial<CueHistoryState> | null;
+    if (st?.cueNav && Array.isArray(st.stack) && st.stack.length > 0) {
+      return {
+        stack: st.stack,
+        depth: typeof st.depth === 'number' && st.depth >= 0 ? st.depth : 0,
+      };
+    }
+  } catch {
+    // ignore history access errors
+  }
+  return { stack: [{ view: 'queue' }], depth: 0 };
+}
+
 export function CueProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<CueStoreState>(loadInitialState);
-  const [routeStack, setRouteStack] = useState<RouteView[]>([{ view: 'queue' }]);
+  const initialHistoryRef = useRef<{ stack: RouteView[]; depth: number } | null>(null);
+  if (!initialHistoryRef.current) {
+    initialHistoryRef.current = getInitialHistoryState();
+  }
+  const [routeStack, setRouteStack] = useState<RouteView[]>(initialHistoryRef.current.stack);
   const [toast, setToast] = useState<ToastItem | null>(null);
   const [activeBanner, setActiveBanner] = useState<ReleaseBannerData | null>(null);
 
-  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [insightsOpen, setInsightsOpen] = useState(false);
-  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [filterSheetOpen, setFilterSheetOpenRaw] = useState(false);
+  const [notificationsOpen, setNotificationsOpenRaw] = useState(false);
+  const [settingsOpen, setSettingsOpenRaw] = useState(false);
+  const [insightsOpen, setInsightsOpenRaw] = useState(false);
+  const [importModalOpen, setImportModalOpenRaw] = useState(false);
   const lastPreImportStateRef = useRef<CueStoreState | null>(null);
+  const routeStackRef = useRef<RouteView[]>(routeStack);
+  routeStackRef.current = routeStack;
+  const historyDepthRef = useRef<number>(initialHistoryRef.current.depth);
+  const modalFlagsRef = useRef({
+    filter: false,
+    notifications: false,
+    settings: false,
+    insights: false,
+    import: false,
+  });
 
   const [syncCode, setSyncCode] = useState<string | null>(() => {
     try {
@@ -639,40 +680,217 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const dismissToast = useCallback(() => setToast(null), []);
   const dismissBanner = useCallback(() => setActiveBanner(null), []);
 
+  const closeAllModalsRaw = useCallback(() => {
+    modalFlagsRef.current = {
+      filter: false,
+      notifications: false,
+      settings: false,
+      insights: false,
+      import: false,
+    };
+    setFilterSheetOpenRaw(false);
+    setNotificationsOpenRaw(false);
+    setSettingsOpenRaw(false);
+    setInsightsOpenRaw(false);
+    setImportModalOpenRaw(false);
+  }, []);
+
+  const updateModalOpen = useCallback(
+    (
+      key: keyof typeof modalFlagsRef.current,
+      rawSetter: (open: boolean) => void,
+      open: boolean
+    ) => {
+      modalFlagsRef.current[key] = open;
+      rawSetter(open);
+      try {
+        const cur = window.history.state as Partial<CueHistoryState> | null;
+        if (open) {
+          if (!(cur?.cueNav && cur?.modal === true)) {
+            const nextDepth = historyDepthRef.current + 1;
+            historyDepthRef.current = nextDepth;
+            const entry: CueHistoryState = {
+              cueNav: true,
+              depth: nextDepth,
+              stack: routeStackRef.current,
+              modal: true,
+            };
+            window.history.pushState(entry, '');
+          }
+        } else {
+          queueMicrotask(() => {
+            const anyOpen = Object.values(modalFlagsRef.current).some(Boolean);
+            const latest = window.history.state as Partial<CueHistoryState> | null;
+            if (!anyOpen && latest?.cueNav && latest?.modal === true && historyDepthRef.current > 0) {
+              window.history.back();
+            }
+          });
+        }
+      } catch {
+        // ignore history access errors
+      }
+    },
+    []
+  );
+
+  const setFilterSheetOpen = useCallback(
+    (open: boolean) => updateModalOpen('filter', setFilterSheetOpenRaw, open),
+    [updateModalOpen]
+  );
+  const setNotificationsOpen = useCallback(
+    (open: boolean) => updateModalOpen('notifications', setNotificationsOpenRaw, open),
+    [updateModalOpen]
+  );
+  const setSettingsOpen = useCallback(
+    (open: boolean) => updateModalOpen('settings', setSettingsOpenRaw, open),
+    [updateModalOpen]
+  );
+  const setInsightsOpen = useCallback(
+    (open: boolean) => updateModalOpen('insights', setInsightsOpenRaw, open),
+    [updateModalOpen]
+  );
+  const setImportModalOpen = useCallback(
+    (open: boolean) => updateModalOpen('import', setImportModalOpenRaw, open),
+    [updateModalOpen]
+  );
+
+  useEffect(() => {
+    try {
+      const cur = window.history.state as Partial<CueHistoryState> | null;
+      if (!cur?.cueNav) {
+        const initialEntry: CueHistoryState = {
+          cueNav: true,
+          depth: historyDepthRef.current,
+          stack: routeStackRef.current,
+        };
+        window.history.replaceState(initialEntry, '');
+      }
+    } catch {
+      // ignore history errors
+    }
+
+    const onPopState = (event: PopStateEvent) => {
+      const hadModal = Object.values(modalFlagsRef.current).some(Boolean);
+      closeAllModalsRaw();
+
+      const st = event.state as Partial<CueHistoryState> | null;
+      if (st?.cueNav && Array.isArray(st.stack) && st.stack.length > 0) {
+        const nextStack = st.stack;
+        const prevTop = routeStackRef.current[routeStackRef.current.length - 1];
+        const nextTop = nextStack[nextStack.length - 1];
+        historyDepthRef.current =
+          typeof st.depth === 'number' && st.depth >= 0
+            ? st.depth
+            : Math.max(0, historyDepthRef.current - 1);
+        routeStackRef.current = nextStack;
+        setRouteStack(nextStack);
+        if (!hadModal || !routesEqual(prevTop, nextTop)) {
+          window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+        }
+      }
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [closeAllModalsRaw]);
+
+  const commitNavigation = useCallback(
+    (nextStack: RouteView[], mode: 'push' | 'replace' = 'push') => {
+      closeAllModalsRaw();
+      try {
+        const cur = window.history.state as Partial<CueHistoryState> | null;
+        if (mode === 'push' && cur?.cueNav && cur?.modal === true) {
+          const entry: CueHistoryState = {
+            cueNav: true,
+            depth: historyDepthRef.current,
+            stack: nextStack,
+          };
+          window.history.replaceState(entry, '');
+        } else if (mode === 'push') {
+          const nextDepth = historyDepthRef.current + 1;
+          historyDepthRef.current = nextDepth;
+          const entry: CueHistoryState = {
+            cueNav: true,
+            depth: nextDepth,
+            stack: nextStack,
+          };
+          window.history.pushState(entry, '');
+        } else {
+          const entry: CueHistoryState = {
+            cueNav: true,
+            depth: historyDepthRef.current,
+            stack: nextStack,
+          };
+          window.history.replaceState(entry, '');
+        }
+      } catch {
+        // ignore history errors
+      }
+      routeStackRef.current = nextStack;
+      setRouteStack(nextStack);
+    },
+    [closeAllModalsRaw]
+  );
+
   const switchTab = useCallback(
     (
       tab: 'queue' | 'watch' | 'read' | 'play' | 'journal' | 'search',
       calendarMode = false
     ) => {
-      if (tab === 'watch' || tab === 'read' || tab === 'play') {
-        setRouteStack([{ view: tab, calendarMode }]);
+      const nextRoute: RouteView =
+        tab === 'watch' || tab === 'read' || tab === 'play'
+          ? { view: tab, calendarMode }
+          : { view: tab };
+      const curStack = routeStackRef.current;
+      const anyModalOpen = Object.values(modalFlagsRef.current).some(Boolean);
+      if (curStack.length === 1 && routesEqual(curStack[0], nextRoute) && !anyModalOpen) {
         return;
       }
-      setRouteStack([{ view: tab }]);
-      window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+      commitNavigation([nextRoute], 'push');
+      if (tab !== 'watch' && tab !== 'read' && tab !== 'play') {
+        window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+      }
     },
-    []
+    [commitNavigation]
   );
 
-  const pushRoute = useCallback((next: RouteView) => {
-    setRouteStack((prev) => [...prev, next]);
-    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
-  }, []);
+  const pushRoute = useCallback(
+    (next: RouteView) => {
+      commitNavigation([...routeStackRef.current, next], 'push');
+      window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+    },
+    [commitNavigation]
+  );
 
   const goBack = useCallback(() => {
-    setRouteStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev));
+    if (routeStackRef.current.length <= 1) return;
+    if (historyDepthRef.current > 0) {
+      try {
+        window.history.back();
+        return;
+      } catch {
+        // fall through to local stack pop
+      }
+    }
+    const popped = routeStackRef.current.slice(0, -1);
+    commitNavigation(popped, 'replace');
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
-  }, []);
+  }, [commitNavigation]);
 
   const toggleCalendarMode = useCallback(() => {
-    setRouteStack((prev) => {
-      const top = prev[prev.length - 1];
-      if (top.view === 'watch' || top.view === 'read' || top.view === 'play') {
-        return [...prev.slice(0, -1), { ...top, calendarMode: !top.calendarMode }];
-      }
-      return [{ view: 'watch', calendarMode: true }];
-    });
-  }, []);
+    const curStack = routeStackRef.current;
+    const top = curStack[curStack.length - 1];
+    if (top.view === 'watch' || top.view === 'read' || top.view === 'play') {
+      const entering = !top.calendarMode;
+      const nextStack: RouteView[] = [
+        ...curStack.slice(0, -1),
+        { ...top, calendarMode: entering },
+      ];
+      commitNavigation(nextStack, entering ? 'push' : 'replace');
+      return;
+    }
+    commitNavigation([{ view: 'watch', calendarMode: true }], 'push');
+  }, [commitNavigation]);
 
   const triggerSampleReleaseAlert = useCallback(() => {
     const firstShowId = stateRef.current.showOrder[0];
