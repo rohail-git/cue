@@ -68,7 +68,20 @@ export interface LiveSearchResult {
   editionVariants?: Partial<Record<GeneralizedComicEditionId, string[]>>;
   steamAppId?: number;
   popularity?: number;
+  popularityScore?: number;
+  anilistFormat?: string;
   anilistEpisodes?: number;
+}
+
+/** Normalizes heterogeneous provider popularity metrics onto a 0..100 audience scale. */
+export function computePopularityScore(item: LiveSearchResult): number {
+  if (typeof item.popularityScore === 'number' && Number.isFinite(item.popularityScore)) {
+    return Math.max(0, Math.min(100, item.popularityScore));
+  }
+  if (typeof item.popularity === 'number' && item.popularity > 0) {
+    return Math.min(100, Math.round(Math.log10(Math.max(1, item.popularity)) * 16.5));
+  }
+  return 35;
 }
 
 const stripHtml = (html?: string | null): string =>
@@ -226,32 +239,56 @@ function scoreResult(item: LiveSearchResult, query: string): number {
   const tNorm = normalizeTitleKey(item.title);
   const qWords = qNorm.split(' ').filter(Boolean);
   const queryIsLatin = !hasNonLatinScript(query);
+  const escapedQ = qNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const hasWholePhraseMatch =
+    Boolean(escapedQ) && new RegExp(`(?:^|\\s)${escapedQ}(?:$|\\s)`).test(tNorm);
 
-  let score = 0;
-
-  if (tNorm === qNorm) score += 130;
-  else if (tNorm.startsWith(qNorm)) score += 90;
-  else if (tNorm.includes(qNorm)) score += 65;
-
-  if (qWords.length > 0) {
+  let relScore = 0;
+  if (qNorm && tNorm === qNorm) {
+    relScore = 52;
+  } else if (qNorm && tNorm.startsWith(qNorm)) {
+    relScore = 42;
+  } else if (hasWholePhraseMatch) {
+    relScore = 39;
+  } else if (qNorm && tNorm.includes(qNorm)) {
+    relScore = 34;
+  } else if (qWords.length > 0) {
     const matchedWords = qWords.filter((w) => tNorm.includes(w)).length;
-    score += Math.round((matchedWords / qWords.length) * 40);
+    relScore =
+      matchedWords === qWords.length
+        ? 32
+        : Math.round((matchedWords / qWords.length) * 26);
   }
+
+  let score = relScore + computePopularityScore(item) * 1.15;
 
   if (queryIsLatin) {
-    if (hasNonLatinScript(item.title)) score -= 85;
-    else score += 30;
+    if (hasNonLatinScript(item.title)) score -= 80;
+    else score += 15;
   }
 
-  if (item.posterUrl) score += 12;
-  if (item.popularity && item.popularity > 20000) score += 18;
+  if (item.posterUrl) score += 8;
+
+  if (item.anilistFormat) {
+    if (item.anilistFormat === 'TV' || item.anilistFormat === 'MOVIE') {
+      score += 8;
+    } else if (
+      item.anilistFormat === 'SPECIAL' ||
+      item.anilistFormat === 'TV_SHORT' ||
+      item.anilistFormat === 'MUSIC'
+    ) {
+      score -= 14;
+    }
+  }
+
   if (
-    item.source === 'anilist' ||
-    item.source === 'tvmaze' ||
-    item.source === 'tmdb' ||
-    item.source === 'wikipedia'
+    item.source === 'openlibrary' &&
+    /\b(official guide|companion|trivia|encyclopedia|handbook|visual dictionary)\b/i.test(
+      `${item.title} ${item.overview || ''}`
+    ) &&
+    !/\b(guide|companion|trivia|encyclopedia|handbook|dictionary)\b/i.test(query)
   ) {
-    score += 8;
+    score -= 28;
   }
 
   return score;
@@ -265,9 +302,7 @@ function rankAndDedupeLiveResults(results: LiveSearchResult[], query: string): L
     .map((item) => ({ item, score: scoreResult(item, query) }))
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
-      const typeWeight = (t: LiveSearchResult['mediaType']) =>
-        t === 'comic' || t === 'manga' ? 1 : 0;
-      return typeWeight(b.item.mediaType) - typeWeight(a.item.mediaType);
+      return computePopularityScore(b.item) - computePopularityScore(a.item);
     });
 
   const topScore = scored[0]?.score || 0;
@@ -276,12 +311,12 @@ function rankAndDedupeLiveResults(results: LiveSearchResult[], query: string): L
 
   for (const entry of scored) {
     const { item, score } = entry;
-    // Filter out weak Open Library noise when strong exact/primary matches exist
+    // Filter out weak Open Library noise when strong primary matches exist
     if (item.source === 'openlibrary' && topScore >= 120 && qWords.length >= 2) {
       const hay = normalizeTitleKey(`${item.title} ${item.subtitle || ''}`);
       const matched = qWords.filter((w) => hay.includes(w)).length;
       if (matched < Math.ceil(qWords.length * 0.6)) continue;
-      if (score < 120) continue;
+      if (score < 95) continue;
     }
 
     const workKey =
@@ -375,6 +410,7 @@ async function searchTvMaze(query: string): Promise<LiveSearchResult[]> {
       genres?: string[];
       type?: string;
       language?: string;
+      weight?: number;
       rating?: { average?: number };
       image?: { original?: string; medium?: string };
       summary?: string;
@@ -382,12 +418,17 @@ async function searchTvMaze(query: string): Promise<LiveSearchResult[]> {
     };
   }>;
 
-  return data.slice(0, 8).map((item) => {
+  return data.slice(0, 10).map((item) => {
     const s = item.show;
     const isAnime =
       s.genres?.includes('Anime') || (s.type === 'Animation' && s.language === 'Japanese');
     const mediaType: 'tv' | 'anime' = isAnime ? 'anime' : 'tv';
     const poster = s.image?.medium || s.image?.original || '';
+    const weight = typeof s.weight === 'number' ? s.weight : 25;
+    const popularityScore = Math.min(
+      96,
+      Math.round(weight * 0.88 + (s.rating?.average && s.rating.average >= 8 ? 6 : 0))
+    );
     return {
       domain: 'watch',
       kind: 'show',
@@ -403,13 +444,15 @@ async function searchTvMaze(query: string): Promise<LiveSearchResult[]> {
       backdropUrl: s.image?.original || poster,
       overview: stripHtml(s.summary) || `${s.name} series.`,
       runtime: s.averageRuntime || 45,
+      popularity: weight * 800,
+      popularityScore,
     };
   });
 }
 
 async function searchAniListAnime(query: string): Promise<LiveSearchResult[]> {
   try {
-    const gql = `query($s:String){Page(perPage:6){media(search:$s,type:ANIME,sort:[SEARCH_MATCH,POPULARITY_DESC]){id title{english romaji} coverImage{extraLarge large} bannerImage episodes startDate{year} genres averageScore popularity description(asHtml:false)}}}`;
+    const gql = `query($s:String){Page(perPage:15){media(search:$s,type:ANIME,sort:[POPULARITY_DESC]){id format title{english romaji} coverImage{extraLarge large} bannerImage episodes startDate{year} genres averageScore popularity description(asHtml:false)}}}`;
     const res = await fetch('https://graphql.anilist.co', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -421,6 +464,7 @@ async function searchAniListAnime(query: string): Promise<LiveSearchResult[]> {
         Page?: {
           media?: Array<{
             id: number;
+            format?: string;
             title?: { english?: string; romaji?: string };
             coverImage?: { extraLarge?: string; large?: string };
             bannerImage?: string;
@@ -436,10 +480,14 @@ async function searchAniListAnime(query: string): Promise<LiveSearchResult[]> {
     };
 
     const queryIsLatin = !hasNonLatinScript(query);
+    const wantsMusic = /\b(music|mv|pv)\b/i.test(query);
     return (json.data?.Page?.media || [])
+      .filter((a) => wantsMusic || a.format !== 'MUSIC')
       .map((a) => {
         const title = a.title?.english || a.title?.romaji || '';
         const cover = a.coverImage?.extraLarge || a.coverImage?.large || '';
+        const popRaw = a.popularity || 0;
+        const popularityScore = Math.min(100, Math.round(Math.log10(Math.max(1, popRaw)) * 17));
         return {
           domain: 'watch' as const,
           kind: 'show' as const,
@@ -455,7 +503,9 @@ async function searchAniListAnime(query: string): Promise<LiveSearchResult[]> {
           posterUrl: cover,
           backdropUrl: a.bannerImage || cover,
           overview: stripHtml(a.description) || `${title} anime series.`,
-          popularity: a.popularity || 0,
+          popularity: popRaw,
+          popularityScore,
+          anilistFormat: a.format,
           anilistEpisodes: a.episodes || 12,
         };
       })
@@ -467,6 +517,7 @@ async function searchAniListAnime(query: string): Promise<LiveSearchResult[]> {
 
 async function searchItunesMovies(query: string): Promise<LiveSearchResult[]> {
   const qLower = query.trim().toLowerCase();
+  const qWords = qLower.split(/\s+/).filter((w) => w.length >= 2);
   const itunesResults: LiveSearchResult[] = [];
   try {
     const res = await fetch(
@@ -489,10 +540,17 @@ async function searchItunesMovies(query: string): Promise<LiveSearchResult[]> {
       };
 
       const matched = (data.results || [])
-        .filter((r) => r.kind === 'feature-movie' && r.trackName?.toLowerCase().includes(qLower))
-        .slice(0, 6);
+        .filter((r) => {
+          if (r.kind !== 'feature-movie' || !r.trackName) return false;
+          const trackLower = r.trackName.toLowerCase();
+          return (
+            trackLower.includes(qLower) ||
+            (qWords.length >= 2 && qWords.every((w) => trackLower.includes(w)))
+          );
+        })
+        .slice(0, 8);
 
-      for (const m of matched) {
+      matched.forEach((m, idx) => {
         const poster = m.artworkUrl100 ? m.artworkUrl100.replace('100x100bb', '600x900bb') : '';
         itunesResults.push({
           domain: 'watch',
@@ -514,8 +572,9 @@ async function searchItunesMovies(query: string): Promise<LiveSearchResult[]> {
             `${m.trackName}, directed by ${m.artistName || 'Unknown'}.`,
           director: m.artistName || 'Unknown',
           runtime: m.trackTimeMillis ? Math.round(m.trackTimeMillis / 60000) : 120,
+          popularityScore: Math.max(48, 78 - idx * 4),
         });
-      }
+      });
     }
   } catch {
     // ignore
@@ -538,6 +597,8 @@ interface OpenLibraryDoc {
   number_of_pages_median?: number;
   subject?: string[];
   edition_count?: number;
+  readinglog_count?: number;
+  ratings_count?: number;
   isbn?: string[];
   publisher?: string[];
 }
@@ -679,7 +740,7 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
   const queryIsLatin = !hasNonLatinScript(query);
   try {
     const res = await fetch(
-      `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&language=eng&limit=18&fields=key,title,subtitle,author_name,first_publish_year,cover_i,number_of_pages_median,subject,edition_count`
+      `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&language=eng&limit=20&fields=key,title,subtitle,author_name,first_publish_year,cover_i,number_of_pages_median,subject,edition_count,readinglog_count,ratings_count`
     );
     if (!res.ok) return [];
     const data = (await res.json()) as {
@@ -804,6 +865,13 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
         Math.min(80, Math.round((primary.number_of_pages_median || 320) / 14))
       );
       const totalEditions = docs.reduce((acc, d) => acc + (d.edition_count || 1), 0);
+      const totalReadingLog = docs.reduce((acc, d) => acc + (d.readinglog_count || 0), 0);
+      const totalRatings = docs.reduce((acc, d) => acc + (d.ratings_count || 0), 0);
+      const realReaders = totalReadingLog + totalRatings * 3 + Math.min(25, totalEditions);
+      const popularityScore = Math.min(
+        94,
+        Math.round(Math.log10(Math.max(1, realReaders)) * 20)
+      );
 
       collapsed.push({
         domain: 'read' as const,
@@ -827,11 +895,14 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
         editionCovers,
         editionIssueCounts,
         editionVariants,
-        popularity: Math.max(totalEditions, docs.length * 3) * 5000,
+        popularity: realReaders,
+        popularityScore,
       });
     }
 
-    return collapsed.slice(0, 6);
+    return collapsed
+      .sort((a, b) => (b.popularityScore || 0) - (a.popularityScore || 0))
+      .slice(0, 8);
   } catch {
     return [];
   }
@@ -1314,7 +1385,7 @@ export async function fetchComicEditionsCatalog(
 async function searchAniListManga(query: string): Promise<LiveSearchResult[]> {
   const queryIsLatin = !hasNonLatinScript(query);
   try {
-    const gql = `query($s:String){Page(perPage:8){media(search:$s,type:MANGA,sort:[SEARCH_MATCH,POPULARITY_DESC]){id format title{english romaji} coverImage{extraLarge large} bannerImage chapters startDate{year} genres averageScore popularity description(asHtml:false) staff(perPage:1){nodes{name{full}}}}}}`;
+    const gql = `query($s:String){Page(perPage:12){media(search:$s,type:MANGA,sort:[POPULARITY_DESC]){id format title{english romaji} coverImage{extraLarge large} bannerImage chapters startDate{year} genres averageScore popularity description(asHtml:false) staff(perPage:1){nodes{name{full}}}}}}`;
     const res = await fetch('https://graphql.anilist.co', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1348,6 +1419,8 @@ async function searchAniListManga(query: string): Promise<LiveSearchResult[]> {
         const cover = m.coverImage?.extraLarge || m.coverImage?.large || '';
         const author = m.staff?.nodes?.[0]?.name?.full || 'Author';
         const isNovel = m.format === 'NOVEL';
+        const popRaw = m.popularity || 0;
+        const popularityScore = Math.min(100, Math.round(Math.log10(Math.max(1, popRaw)) * 17));
         return {
           domain: 'read' as const,
           kind: 'read' as const,
@@ -1365,7 +1438,8 @@ async function searchAniListManga(query: string): Promise<LiveSearchResult[]> {
           overview: stripHtml(m.description) || `${title} series.`,
           director: author,
           totalUnits: m.chapters || (isNovel ? 18 : 100),
-          popularity: m.popularity || 0,
+          popularity: popRaw,
+          popularityScore,
         };
       })
       .filter((m) => m.title && (!queryIsLatin || !hasNonLatinScript(m.title)));
@@ -1396,6 +1470,11 @@ async function searchGames(query: string): Promise<LiveSearchResult[]> {
         const appId = Number(g.steamAppID);
         const cover = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900_2x.jpg`;
         const header = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg`;
+        const idx = out.length;
+        const popularityScore = Math.max(
+          46,
+          68 - idx * 4 + (lookupKnownGameChapters(g.external) ? 10 : 0)
+        );
         out.push({
           domain: 'play',
           kind: 'game',
@@ -1412,6 +1491,7 @@ async function searchGames(query: string): Promise<LiveSearchResult[]> {
           posterUrl: cover,
           backdropUrl: header,
           overview: `${g.external} — tracked in your Play log.`,
+          popularityScore,
         });
         if (out.length >= 6) break;
       }
@@ -1499,11 +1579,14 @@ async function searchWikipediaSummary(
       if (target === 'game' && !desc.includes('video game') && !desc.includes('game')) continue;
 
       const yearMatch = (data.description || data.extract || '').match(/\b(19\d\d|20\d\d)\b/);
+      const parsedYear = yearMatch ? Number(yearMatch[1]) : 2023;
       const poster = data.originalimage?.source || data.thumbnail?.source || '';
       if (!poster) continue;
 
       if (target === 'game') {
         const cleanGameTitle = (data.title || query).replace(/\s*\([^)]*video game\)$/i, '');
+        const isExactGame = normalizeTitleKey(cleanGameTitle) === normalizeTitleKey(query);
+        const isRecentOrExact = parsedYear >= 2005 || isExactGame;
         return {
           domain: 'play',
           kind: 'game',
@@ -1512,7 +1595,7 @@ async function searchWikipediaSummary(
           externalId: data.pageid || Date.now(),
           title: cleanGameTitle,
           subtitle: data.description || 'Video Game',
-          year: yearMatch ? Number(yearMatch[1]) : 2023,
+          year: parsedYear,
           mediaType: 'game',
           genres: ['Video Game'],
           rating: 4.6,
@@ -1520,17 +1603,20 @@ async function searchWikipediaSummary(
           backdropUrl: poster,
           overview: data.extract || data.description || '',
           popularity: 30000,
+          popularityScore: isRecentOrExact ? 72 : 54,
         };
       }
 
+      const cleanFilmTitle = (data.title || query).replace(/\s*\([^)]*film\)$/i, '');
+      const isExactFilm = normalizeTitleKey(cleanFilmTitle) === normalizeTitleKey(query);
       return {
         domain: 'watch',
         kind: 'movie',
         id: `wiki-${data.pageid || slug}`,
         source: 'itunes',
         externalId: data.pageid || Date.now(),
-        title: (data.title || query).replace(/\s*\([^)]*film\)$/i, ''),
-        year: yearMatch ? Number(yearMatch[1]) : 2024,
+        title: cleanFilmTitle,
+        year: yearMatch ? parsedYear : 2024,
         mediaType: 'movie',
         genres: ['Feature Film'],
         rating: 8.2,
@@ -1540,6 +1626,7 @@ async function searchWikipediaSummary(
         director: data.description || 'Feature Film',
         runtime: 135,
         popularity: 30000,
+        popularityScore: isExactFilm ? 82 : 70,
       };
     } catch {
       // try next
@@ -1636,6 +1723,7 @@ async function searchTmdbMulti(query: string, apiKey: string): Promise<LiveSearc
       backdrop_path?: string;
       overview?: string;
       vote_average?: number;
+      vote_count?: number;
       original_language?: string;
       genre_ids?: number[];
       popularity?: number;
@@ -1653,6 +1741,11 @@ async function searchTmdbMulti(query: string, apiKey: string): Promise<LiveSearc
         ? `https://image.tmdb.org/t/p/w1280${r.backdrop_path}`
         : poster;
       const dateStr = r.release_date || r.first_air_date || '';
+      const tmdbSignal = (r.vote_count || 0) * 15 + (r.popularity || 0) * 80;
+      const popularityScore = Math.min(
+        98,
+        Math.round(Math.log10(Math.max(1, tmdbSignal)) * 18)
+      );
       return {
         domain: 'watch' as const,
         kind: isMovie ? ('movie' as const) : ('show' as const),
@@ -1668,6 +1761,7 @@ async function searchTmdbMulti(query: string, apiKey: string): Promise<LiveSearc
         backdropUrl: backdrop,
         overview: r.overview || '',
         popularity: r.popularity ? r.popularity * 1000 : 25000,
+        popularityScore,
       };
     });
 }
