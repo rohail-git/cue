@@ -6,6 +6,7 @@ import type {
   ComicIssueMeta,
   Episode,
   GameItem,
+  GamePlatform,
   GeneralizedComicEditionId,
   Movie,
   ReadItem,
@@ -67,6 +68,7 @@ export interface LiveSearchResult {
   editionIssueCounts?: Partial<Record<ComicEditionId, number>>;
   editionVariants?: Partial<Record<GeneralizedComicEditionId, string[]>>;
   steamAppId?: number;
+  platforms?: string[];
   popularity?: number;
   popularityScore?: number;
   anilistFormat?: string;
@@ -1096,34 +1098,39 @@ async function fetchTrendingGames(limit: number): Promise<LiveSearchResult[]> {
     if (!res.ok) return [];
     const data = (await res.json()) as {
       items?: Array<{
-        appId: number;
+        id?: string;
+        appId?: number;
         title: string;
         year: number;
         rating: number;
         posterUrl: string;
         backdropUrl: string;
         overview: string;
+        platforms?: string[];
+        genres?: string[];
+        subtitle?: string;
       }>;
     };
     return (data.items || [])
-      .filter((g) => g.appId && g.title && g.posterUrl)
+      .filter((g) => g.title && g.posterUrl && (g.id || g.appId))
       .slice(0, limit)
       .map((g) => ({
         domain: 'play',
         kind: 'game',
-        id: `steam-${g.appId}`,
-        source: 'cheapshark',
-        externalId: g.appId,
+        id: g.id || `steam-${g.appId}`,
+        source: g.appId ? 'cheapshark' : 'wikipedia',
+        externalId: g.appId || g.id || g.title,
         steamAppId: g.appId,
         title: g.title,
-        subtitle: 'PC · Steam',
+        subtitle: g.subtitle || (g.platforms?.slice(0, 2).join(' · ') || 'Video Game'),
         year: g.year,
         mediaType: 'game',
-        genres: ['Video Game'],
+        genres: g.genres?.length ? g.genres : ['Video Game'],
         rating: g.rating,
         posterUrl: g.posterUrl,
-        backdropUrl: g.backdropUrl,
+        backdropUrl: g.backdropUrl || g.posterUrl,
         overview: g.overview,
+        platforms: g.platforms,
       }));
   } catch {
     return [];
@@ -3485,8 +3492,30 @@ export function hydrateLiveReadItem(item: LiveSearchResult): ReadItem {
   };
 }
 
+function toGamePlatforms(raw?: string[]): GamePlatform[] {
+  const out: GamePlatform[] = [];
+  const pushUnique = (p: GamePlatform) => {
+    if (!out.includes(p)) out.push(p);
+  };
+  for (const label of raw || []) {
+    const low = label.toLowerCase();
+    if (low.includes('steam deck')) pushUnique('Steam Deck');
+    else if (low === 'pc') pushUnique('PC');
+    else if (low.includes('ps5') || low.includes('playstation')) pushUnique('PS5');
+    else if (low.includes('xbox')) pushUnique('Xbox');
+    else if (low.includes('switch') || low.includes('nintendo')) pushUnique('Switch');
+  }
+  return out;
+}
+
 export function hydrateLiveGameItem(item: LiveSearchResult): GameItem {
   const known = lookupKnownGameChapters(item.title);
+  const mappedPlatforms = toGamePlatforms(item.platforms);
+  const platforms: GamePlatform[] = mappedPlatforms.length
+    ? mappedPlatforms
+    : item.steamAppId
+      ? ['PC', 'Steam Deck']
+      : ['PS5', 'Xbox', 'PC'];
   return {
     id: item.id,
     steamAppId: item.steamAppId,
@@ -3495,7 +3524,7 @@ export function hydrateLiveGameItem(item: LiveSearchResult): GameItem {
     year: item.year,
     genres: item.genres,
     rating: item.rating,
-    platforms: item.steamAppId ? ['PC', 'Steam Deck'] : ['Switch', 'PS5', 'PC'],
+    platforms,
     coverUrl: item.posterUrl,
     backdropUrl: item.backdropUrl || item.posterUrl,
     overview: item.overview,
