@@ -399,6 +399,682 @@ export async function searchLiveMedia(
   return rankAndDedupeLiveResults(combined, trimmed);
 }
 
+export interface TrendingByDomain {
+  watch: LiveSearchResult[];
+  read: LiveSearchResult[];
+  play: LiveSearchResult[];
+}
+
+const trendingCache = new Map<string, { ts: number; data: TrendingByDomain }>();
+const TRENDING_TTL_MS = 10 * 60 * 1000;
+
+const CURATED_TRENDING_COMICS: Array<{
+  title: string;
+  creator: string;
+  year: number;
+  overview: string;
+  defaultIssues: number;
+}> = [
+  {
+    title: 'All-Star Superman',
+    creator: 'Grant Morrison',
+    year: 2005,
+    overview: 'Twelve iconic labors of the Man of Steel across DC Comics.',
+    defaultIssues: 12,
+  },
+  {
+    title: 'Watchmen',
+    creator: 'Alan Moore',
+    year: 1986,
+    overview: 'Conspiracy, alternate history, and the twilight of masked vigilantes.',
+    defaultIssues: 12,
+  },
+  {
+    title: 'Batman: Hush',
+    creator: 'Jeph Loeb',
+    year: 2002,
+    overview: 'A mysterious bandaged mastermind orchestrates Gotham’s rogues against Batman.',
+    defaultIssues: 12,
+  },
+  {
+    title: 'The Flash: Rebirth',
+    creator: 'Geoff Johns',
+    year: 2009,
+    overview: 'Barry Allen returns from the Speed Force into a changed DC Universe.',
+    defaultIssues: 6,
+  },
+  {
+    title: 'Superman/Batman',
+    creator: 'Jeph Loeb',
+    year: 2003,
+    overview: 'World’s Finest team up across Lex Luthor’s presidency and Kryptonian arrivals.',
+    defaultIssues: 13,
+  },
+  {
+    title: 'Kingdom Come',
+    creator: 'Mark Waid',
+    year: 1996,
+    overview: 'A painted Elseworlds epic of classic heroes confronting a reckless new generation.',
+    defaultIssues: 4,
+  },
+];
+
+const CURATED_TRENDING_GAMES: Array<{
+  appId: number;
+  title: string;
+  year: number;
+  rating: number;
+  overview: string;
+}> = [
+  {
+    appId: 1245620,
+    title: 'ELDEN RING',
+    year: 2022,
+    rating: 4.9,
+    overview: 'Journey through the Lands Between in FromSoftware’s acclaimed action RPG.',
+  },
+  {
+    appId: 1086940,
+    title: "Baldur's Gate 3",
+    year: 2023,
+    rating: 4.9,
+    overview: 'Gather your party across the Forgotten Realms in Larian’s sweeping RPG.',
+  },
+  {
+    appId: 1145350,
+    title: 'Hades II',
+    year: 2024,
+    rating: 4.8,
+    overview: 'Battle beyond the Underworld using dark sorcery against the Titan of Time.',
+  },
+  {
+    appId: 1091500,
+    title: 'Cyberpunk 2077',
+    year: 2020,
+    rating: 4.6,
+    overview: 'Open-world action-adventure RPG set in the neon megalopolis of Night City.',
+  },
+  {
+    appId: 1687950,
+    title: 'Persona 5 Royal',
+    year: 2022,
+    rating: 4.9,
+    overview: 'Lead the Phantom Thieves of Hearts across Tokyo’s Palaces and social links.',
+  },
+  {
+    appId: 1174180,
+    title: 'Red Dead Redemption 2',
+    year: 2019,
+    rating: 4.9,
+    overview: 'Arthur Morgan and the Van der Linde gang outrun the end of the Wild West.',
+  },
+  {
+    appId: 2215430,
+    title: "Ghost of Tsushima DIRECTOR'S CUT",
+    year: 2024,
+    rating: 4.8,
+    overview: 'Forge a new path as the Ghost to liberate Tsushima from the Mongol invasion.',
+  },
+  {
+    appId: 2909400,
+    title: 'FINAL FANTASY VII REBIRTH',
+    year: 2025,
+    rating: 4.8,
+    overview: 'Cloud and allies venture beyond Midgar across an expansive new journey.',
+  },
+  {
+    appId: 2050650,
+    title: 'Resident Evil 4',
+    year: 2023,
+    rating: 4.8,
+    overview: 'Survival horror reimagined as Leon S. Kennedy rescues the president’s daughter.',
+  },
+  {
+    appId: 367520,
+    title: 'Hollow Knight',
+    year: 2017,
+    rating: 4.8,
+    overview: 'Explore a vast ruined kingdom of insects and heroes beneath Dirtmouth.',
+  },
+  {
+    appId: 632470,
+    title: 'Disco Elysium - The Final Cut',
+    year: 2019,
+    rating: 4.9,
+    overview: 'A groundbreaking narrative RPG set in the rain-soaked streets of Revachol.',
+  },
+  {
+    appId: 1593500,
+    title: 'God of War',
+    year: 2022,
+    rating: 4.8,
+    overview: 'Kratos and Atreus journey across the Norse realms to fulfill a final promise.',
+  },
+];
+
+function interleaveGroups<T>(groups: T[][], limit: number, keyFn: (item: T) => string): T[] {
+  const out: T[] = [];
+  const seen = new Set<string>();
+  const cursors = groups.map(() => 0);
+
+  while (out.length < limit) {
+    let advanced = false;
+    for (let gIdx = 0; gIdx < groups.length && out.length < limit; gIdx++) {
+      const list = groups[gIdx];
+      while (cursors[gIdx] < list.length) {
+        const candidate = list[cursors[gIdx]];
+        cursors[gIdx] += 1;
+        const k = keyFn(candidate);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(candidate);
+        advanced = true;
+        break;
+      }
+    }
+    if (!advanced) break;
+  }
+  return out;
+}
+
+/** Fetches trending posters & covers for the 3-column Search discovery grid (Watch, Read, Play). */
+export async function fetchTrendingByDomain(tmdbApiKey?: string): Promise<TrendingByDomain> {
+  const key = tmdbApiKey?.trim() ? 'tmdb' : 'public';
+  const cached = trendingCache.get(key);
+  if (cached && Date.now() - cached.ts < TRENDING_TTL_MS) {
+    return cached.data;
+  }
+
+  const hasTmdb = Boolean(tmdbApiKey && tmdbApiKey.trim().length > 8);
+
+  const fetchTrendingTmdb = async (): Promise<{
+    movies: LiveSearchResult[];
+    shows: LiveSearchResult[];
+  }> => {
+    const movies: LiveSearchResult[] = [];
+    const shows: LiveSearchResult[] = [];
+    try {
+      const res = await fetch(
+        `https://api.themoviedb.org/3/trending/all/week?api_key=${encodeURIComponent(
+          tmdbApiKey!.trim()
+        )}`
+      );
+      if (!res.ok) return { movies, shows };
+      const data = (await res.json()) as {
+        results?: Array<{
+          id: number;
+          media_type: string;
+          title?: string;
+          name?: string;
+          release_date?: string;
+          first_air_date?: string;
+          poster_path?: string;
+          backdrop_path?: string;
+          overview?: string;
+          vote_average?: number;
+          original_language?: string;
+          genre_ids?: number[];
+          popularity?: number;
+        }>;
+      };
+      for (const r of data.results || []) {
+        if (r.media_type !== 'movie' && r.media_type !== 'tv') continue;
+        if (!r.poster_path) continue;
+        const isMovie = r.media_type === 'movie';
+        const isAnime = !isMovie && r.genre_ids?.includes(16) && r.original_language === 'ja';
+        const poster = `https://image.tmdb.org/t/p/w500${r.poster_path}`;
+        const backdrop = r.backdrop_path ? `https://image.tmdb.org/t/p/w1280${r.backdrop_path}` : poster;
+        const dateStr = r.release_date || r.first_air_date || '';
+        const item: LiveSearchResult = {
+          domain: 'watch',
+          kind: isMovie ? 'movie' : 'show',
+          id: `tmdb-${r.media_type}-${r.id}`,
+          source: 'tmdb',
+          externalId: r.id,
+          title: r.title || r.name || 'Untitled',
+          year: dateStr ? Number(dateStr.slice(0, 4)) : 2026,
+          mediaType: isMovie ? 'movie' : isAnime ? 'anime' : 'tv',
+          genres: isAnime ? ['Anime'] : isMovie ? ['Feature Film'] : ['Series'],
+          rating: r.vote_average ? Number(r.vote_average.toFixed(1)) : 7.8,
+          posterUrl: poster,
+          backdropUrl: backdrop,
+          overview: r.overview || '',
+          popularity: r.popularity ? r.popularity * 1000 : 30000,
+        };
+        if (isMovie && movies.length < 8) movies.push(item);
+        else if (!isMovie && !isAnime && shows.length < 6) shows.push(item);
+      }
+    } catch {
+      // fallback below
+    }
+    return { movies, shows };
+  };
+
+  const fetchTrendingMoviesRss = async (): Promise<LiveSearchResult[]> => {
+    try {
+      const res = await fetch('https://itunes.apple.com/us/rss/topmovies/limit=10/json');
+      if (!res.ok) return [];
+      const data = (await res.json()) as {
+        feed?: {
+          entry?: Array<{
+            id?: { attributes?: { 'im:id'?: string } };
+            'im:name'?: { label?: string };
+            'im:artist'?: { label?: string };
+            'im:image'?: Array<{ label?: string }>;
+            'im:releaseDate'?: { label?: string };
+            category?: { attributes?: { label?: string } };
+            summary?: { label?: string };
+          }>;
+        };
+      };
+      return (data.feed?.entry || [])
+        .map((e) => {
+          const id = e.id?.attributes?.['im:id'] || '';
+          const rawTitle = e['im:name']?.label || '';
+          const cleanTitle = rawTitle.replace(/\s*\((?:19|20)\d{2}\)\s*$/, '').trim() || rawTitle;
+          const rawImg = e['im:image']?.[e['im:image'].length - 1]?.label || '';
+          const poster = rawImg
+            ? rawImg.replace(/\/\d+x\d+bb\.(?:png|jpg|webp)$/i, '/600x900bb.jpg')
+            : '';
+          const yearStr = e['im:releaseDate']?.label?.slice(0, 4);
+          if (!id || !cleanTitle || !poster) return null;
+          return {
+            domain: 'watch' as const,
+            kind: 'movie' as const,
+            id: `itunes-${id}`,
+            source: 'itunes' as const,
+            externalId: Number(id) || id,
+            title: cleanTitle,
+            subtitle: e['im:artist']?.label || 'Feature Film',
+            year: yearStr ? Number(yearStr) : 2026,
+            mediaType: 'movie' as const,
+            genres: [e.category?.attributes?.label || 'Feature Film'],
+            rating: 8.0,
+            posterUrl: poster,
+            backdropUrl: poster,
+            overview: e.summary?.label || `${cleanTitle} — trending movie.`,
+            director: e['im:artist']?.label || 'Feature Film',
+            runtime: 125,
+          } satisfies LiveSearchResult;
+        })
+        .filter((x): x is NonNullable<typeof x> => Boolean(x))
+        .slice(0, 6);
+    } catch {
+      return [];
+    }
+  };
+
+  const fetchTrendingTvMaze = async (): Promise<LiveSearchResult[]> => {
+    try {
+      const res = await fetch('https://api.tvmaze.com/schedule/web');
+      if (!res.ok) return [];
+      const data = (await res.json()) as Array<{
+        _embedded?: {
+          show?: {
+            id: number;
+            name?: string;
+            language?: string;
+            type?: string;
+            genres?: string[];
+            premiered?: string;
+            weight?: number;
+            rating?: { average?: number };
+            image?: { medium?: string; original?: string };
+            summary?: string;
+            averageRuntime?: number;
+          };
+        };
+      }>;
+      const byId = new Map<number, LiveSearchResult>();
+      for (const ep of data) {
+        const s = ep._embedded?.show;
+        if (!s || !s.id || !s.name || byId.has(s.id)) continue;
+        if (hasNonLatinScript(s.name)) continue;
+        if (s.language && s.language !== 'English' && !s.genres?.includes('Anime')) continue;
+        const poster = s.image?.medium || s.image?.original || '';
+        if (!poster) continue;
+        const isAnime = s.genres?.includes('Anime') || s.type === 'Animation' && s.language === 'Japanese';
+        if (isAnime) continue;
+        byId.set(s.id, {
+          domain: 'watch',
+          kind: 'show',
+          id: `tvmaze-${s.id}`,
+          source: 'tvmaze',
+          externalId: s.id,
+          title: s.name,
+          year: s.premiered ? Number(s.premiered.slice(0, 4)) : 2026,
+          mediaType: 'tv',
+          genres: s.genres?.length ? s.genres.slice(0, 2) : ['Series'],
+          rating: s.rating?.average || 7.9,
+          posterUrl: poster,
+          backdropUrl: s.image?.original || poster,
+          overview: stripHtml(s.summary) || `${s.name} streaming series.`,
+          runtime: s.averageRuntime || 45,
+          popularityScore: Math.min(96, Math.round((s.weight || 40) * 0.9)),
+        });
+      }
+      return Array.from(byId.values())
+        .sort((a, b) => (b.popularityScore || 0) - (a.popularityScore || 0))
+        .slice(0, 6);
+    } catch {
+      return [];
+    }
+  };
+
+  const fetchTrendingAnime = async (): Promise<LiveSearchResult[]> => {
+    try {
+      const gql = `query{Page(perPage:12){media(type:ANIME,status:RELEASING,sort:[POPULARITY_DESC,TRENDING_DESC]){id format title{english romaji} coverImage{extraLarge large} bannerImage episodes startDate{year} genres averageScore popularity description(asHtml:false)}}}`;
+      const res = await fetch('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: gql }),
+      });
+      if (!res.ok) return [];
+      const json = (await res.json()) as {
+        data?: {
+          Page?: {
+            media?: Array<{
+              id: number;
+              format?: string;
+              title?: { english?: string; romaji?: string };
+              coverImage?: { extraLarge?: string; large?: string };
+              bannerImage?: string;
+              episodes?: number;
+              startDate?: { year?: number };
+              genres?: string[];
+              averageScore?: number;
+              popularity?: number;
+              description?: string;
+            }>;
+          };
+        };
+      };
+      return (json.data?.Page?.media || [])
+        .map((a) => {
+          const title = a.title?.english || a.title?.romaji || '';
+          const cover = a.coverImage?.extraLarge || a.coverImage?.large || '';
+          if (!title || !cover || hasNonLatinScript(title)) return null;
+          return {
+            domain: 'watch' as const,
+            kind: 'show' as const,
+            id: `al-anime-${a.id}`,
+            source: 'anilist' as const,
+            externalId: a.id,
+            title,
+            subtitle: a.episodes ? `${a.episodes} episodes` : 'Anime series',
+            year: a.startDate?.year || 2026,
+            mediaType: 'anime' as const,
+            genres: a.genres?.length ? a.genres.slice(0, 3) : ['Anime'],
+            rating: a.averageScore ? Number((a.averageScore / 10).toFixed(1)) : 8.4,
+            posterUrl: cover,
+            backdropUrl: a.bannerImage || cover,
+            overview: stripHtml(a.description) || `${title} anime series.`,
+            popularity: a.popularity || 0,
+            anilistFormat: a.format,
+            anilistEpisodes: a.episodes || 12,
+          } satisfies LiveSearchResult;
+        })
+        .filter((x): x is NonNullable<typeof x> => Boolean(x))
+        .slice(0, 6);
+    } catch {
+      return [];
+    }
+  };
+
+  const fetchTrendingManga = async (): Promise<LiveSearchResult[]> => {
+    try {
+      const gql = `query{Page(perPage:12){media(type:MANGA,sort:[TRENDING_DESC]){id format title{english romaji} coverImage{extraLarge large} bannerImage chapters startDate{year} genres averageScore popularity description(asHtml:false) staff(perPage:1){nodes{name{full}}}}}}`;
+      const res = await fetch('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: gql }),
+      });
+      if (!res.ok) return [];
+      const json = (await res.json()) as {
+        data?: {
+          Page?: {
+            media?: Array<{
+              id: number;
+              format?: string;
+              title?: { english?: string; romaji?: string };
+              coverImage?: { extraLarge?: string; large?: string };
+              bannerImage?: string;
+              chapters?: number;
+              startDate?: { year?: number };
+              genres?: string[];
+              averageScore?: number;
+              popularity?: number;
+              description?: string;
+              staff?: { nodes?: Array<{ name?: { full?: string } }> };
+            }>;
+          };
+        };
+      };
+      return (json.data?.Page?.media || [])
+        .map((m) => {
+          const title = m.title?.english || m.title?.romaji || '';
+          const cover = m.coverImage?.extraLarge || m.coverImage?.large || '';
+          if (!title || !cover || hasNonLatinScript(title)) return null;
+          if ((m.popularity || 0) < 3000) return null;
+          const author = m.staff?.nodes?.[0]?.name?.full || 'Mangaka';
+          return {
+            domain: 'read' as const,
+            kind: 'read' as const,
+            id: `al-manga-${m.id}`,
+            source: 'anilist' as const,
+            externalId: m.id,
+            title,
+            subtitle: author,
+            year: m.startDate?.year || 2024,
+            mediaType: 'manga' as const,
+            genres: m.genres?.length ? m.genres.slice(0, 2) : ['Manga'],
+            rating: m.averageScore ? Number((m.averageScore / 20).toFixed(1)) : 4.6,
+            posterUrl: cover,
+            backdropUrl: m.bannerImage || cover,
+            overview: stripHtml(m.description) || `${title} manga series.`,
+            director: author,
+            totalUnits: m.chapters || 100,
+            popularity: m.popularity || 0,
+          } satisfies LiveSearchResult;
+        })
+        .filter((x): x is NonNullable<typeof x> => Boolean(x))
+        .slice(0, 6);
+    } catch {
+      return [];
+    }
+  };
+
+  const fetchTrendingNovels = async (): Promise<LiveSearchResult[]> => {
+    try {
+      const res = await fetch('https://openlibrary.org/trending/weekly.json?limit=16');
+      if (!res.ok) return [];
+      const json = (await res.json()) as {
+        works?: Array<{
+          key?: string;
+          title?: string;
+          author_name?: string[];
+          cover_i?: number;
+          first_publish_year?: number;
+          edition_count?: number;
+        }>;
+      };
+      const out: LiveSearchResult[] = [];
+      for (const w of json.works || []) {
+        if (!w.key || !w.title || !w.cover_i || w.cover_i <= 0) continue;
+        if (hasNonLatinScript(w.title)) continue;
+        if (/\b(coloring book|activity book|study guide)\b/i.test(w.title)) continue;
+        const cleanKey = w.key.replace('/works/', '');
+        const cover = `https://covers.openlibrary.org/b/id/${w.cover_i}-L.jpg`;
+        const author = w.author_name?.[0] || 'Author';
+        out.push({
+          domain: 'read',
+          kind: 'read',
+          id: `ol-${cleanKey}`,
+          source: 'openlibrary',
+          externalId: cleanKey,
+          title: w.title,
+          subtitle: author,
+          year: w.first_publish_year || 2022,
+          mediaType: 'novel',
+          genres: ['Popular Book'],
+          rating: 4.5,
+          posterUrl: cover,
+          backdropUrl: cover,
+          overview: `${w.title} by ${author}.`,
+          director: author,
+          totalUnits: 24,
+        });
+        if (out.length >= 6) break;
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  };
+
+  const buildTrendingComics = (): LiveSearchResult[] =>
+    CURATED_TRENDING_COMICS.map((c): LiveSearchResult => {
+      const spec = getKnownComicEditionSpec(c.title);
+      const cover =
+        spec?.covers?.compact || spec?.covers?.tpb || spec?.covers?.hardcover || '';
+      const cleanId = `ol-trending-${normalizeTitleKey(c.title).replace(/\s+/g, '-')}`;
+      return {
+        domain: 'read',
+        kind: 'read',
+        id: cleanId,
+        source: 'openlibrary',
+        externalId: cleanId,
+        title: c.title,
+        subtitle: c.creator,
+        year: c.year,
+        mediaType: 'comic',
+        genres: ['Comics'],
+        rating: 4.8,
+        posterUrl: cover,
+        backdropUrl: cover,
+        overview: c.overview,
+        director: c.creator,
+        totalUnits: spec?.counts.digital ?? c.defaultIssues,
+        editionCovers: spec?.covers,
+        editionIssueCounts: spec?.counts,
+      };
+    }).filter((c) => Boolean(c.posterUrl));
+
+  const fetchTrendingGames = async (): Promise<LiveSearchResult[]> => {
+    const out: LiveSearchResult[] = [];
+    const seenIds = new Set<number>();
+    const seenKeys = new Set<string>();
+    const pushGame = (
+      appId: number,
+      title: string,
+      year: number,
+      rating: number,
+      overview: string
+    ) => {
+      const key = normalizeTitleKey(title);
+      if (seenIds.has(appId) || seenKeys.has(key)) return;
+      seenIds.add(appId);
+      seenKeys.add(key);
+      out.push({
+        domain: 'play',
+        kind: 'game',
+        id: `steam-${appId}`,
+        source: 'cheapshark',
+        externalId: appId,
+        steamAppId: appId,
+        title,
+        subtitle: 'PC · Steam',
+        year,
+        mediaType: 'game',
+        genres: ['Video Game'],
+        rating,
+        posterUrl: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900_2x.jpg`,
+        backdropUrl: `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg`,
+        overview,
+      });
+    };
+
+    try {
+      const res = await fetch(
+        'https://www.cheapshark.com/api/1.0/deals?storeID=1&sortBy=Metacritic&pageSize=25&AAA=1'
+      );
+      if (res.ok) {
+        const deals = (await res.json()) as Array<{
+          title?: string;
+          steamAppID?: string | null;
+          metacriticScore?: string;
+          releaseDate?: number;
+        }>;
+        for (const d of deals) {
+          const appId = Number(d.steamAppID);
+          if (!appId || !d.title) continue;
+          const mc = Number(d.metacriticScore);
+          const rating = mc > 0 ? Number((mc / 20).toFixed(1)) : 4.7;
+          const yr =
+            d.releaseDate && d.releaseDate > 0
+              ? new Date(d.releaseDate * 1000).getUTCFullYear()
+              : 2024;
+          pushGame(appId, d.title, yr, rating, `${d.title} — top-rated PC game.`);
+          if (out.length >= 12) break;
+        }
+      }
+    } catch {
+      // supplement cleanly from curated trending Steam titles below
+    }
+
+    for (const g of CURATED_TRENDING_GAMES) {
+      if (out.length >= 12) break;
+      pushGame(g.appId, g.title, g.year, g.rating, g.overview);
+    }
+
+    return out.slice(0, 12);
+  };
+
+  const [tmdbRes, rssRes, tvMazeRes, animeRes, mangaRes, novelRes, gameRes] =
+    await Promise.allSettled([
+      hasTmdb ? fetchTrendingTmdb() : Promise.resolve({ movies: [], shows: [] }),
+      hasTmdb ? Promise.resolve([]) : fetchTrendingMoviesRss(),
+      hasTmdb ? Promise.resolve([]) : fetchTrendingTvMaze(),
+      fetchTrendingAnime(),
+      fetchTrendingManga(),
+      fetchTrendingNovels(),
+      fetchTrendingGames(),
+    ]);
+
+  const tmdbData =
+    tmdbRes.status === 'fulfilled' ? tmdbRes.value : { movies: [], shows: [] };
+  const movies = hasTmdb
+    ? tmdbData.movies
+    : rssRes.status === 'fulfilled'
+      ? rssRes.value
+      : [];
+  const shows = hasTmdb
+    ? tmdbData.shows
+    : tvMazeRes.status === 'fulfilled'
+      ? tvMazeRes.value
+      : [];
+  const anime = animeRes.status === 'fulfilled' ? animeRes.value : [];
+  const manga = mangaRes.status === 'fulfilled' ? mangaRes.value : [];
+  const novels = novelRes.status === 'fulfilled' ? novelRes.value : [];
+  const comics = buildTrendingComics();
+  const play = gameRes.status === 'fulfilled' ? gameRes.value : [];
+
+  const watch = interleaveGroups(
+    [movies, anime, shows],
+    12,
+    (x) => normalizeTitleKey(x.title)
+  );
+  const read = interleaveGroups(
+    [comics, manga, novels],
+    12,
+    (x) => canonicalReadWorkKey(x.title)
+  );
+
+  const result: TrendingByDomain = { watch, read, play };
+  trendingCache.set(key, { ts: Date.now(), data: result });
+  return result;
+}
+
 async function searchTvMaze(query: string): Promise<LiveSearchResult[]> {
   const res = await fetch(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(query)}`);
   if (!res.ok) return [];

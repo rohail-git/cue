@@ -1,8 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Flame, Globe2, Loader2, Plus, Search, Sparkles, Star, X } from 'lucide-react';
+import {
+  BookOpen,
+  Check,
+  Flame,
+  Gamepad2,
+  Globe2,
+  Loader2,
+  Plus,
+  Search,
+  Star,
+  Tv,
+  X,
+} from 'lucide-react';
 import { MediaImage } from '../components/MediaImage';
 import {
   canonicalReadWorkKey,
+  fetchTrendingByDomain,
   hydrateLiveGameItem,
   hydrateLiveMovie,
   hydrateLiveReadItem,
@@ -11,10 +24,10 @@ import {
   searchLiveMedia,
   type LiveSearchResult,
   type SearchMediaFilter,
+  type TrendingByDomain,
 } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import { resolveComicEditionCover } from '../utils/editions';
-import { computeAllMediaStats } from '../utils/stats';
 
 interface FilterPillConfig {
   id: SearchMediaFilter;
@@ -94,6 +107,26 @@ export function SearchView() {
   const [liveResults, setLiveResults] = useState<LiveSearchResult[]>([]);
   const [loadingLive, setLoadingLive] = useState(false);
   const [hydratingId, setHydratingId] = useState<string | null>(null);
+  const [trending, setTrending] = useState<TrendingByDomain | null>(null);
+  const [loadingTrending, setLoadingTrending] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingTrending(true);
+    fetchTrendingByDomain(state.settings.tmdbApiKey)
+      .then((res) => {
+        if (!cancelled) setTrending(res);
+      })
+      .catch(() => {
+        if (!cancelled) setTrending({ watch: [], read: [], play: [] });
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingTrending(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state.settings.tmdbApiKey]);
 
   useEffect(() => {
     const q = query.trim();
@@ -121,12 +154,6 @@ export function SearchView() {
       clearTimeout(timer);
     };
   }, [query, filter, state.settings.tmdbApiKey]);
-
-  const analytics = useMemo(() => computeAllMediaStats(state), [state]);
-  const topGenreNames = useMemo(
-    () => new Set(analytics.topGenres.slice(0, 3).map((g) => g.genre)),
-    [analytics.topGenres]
-  );
 
   const localMatches = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -284,88 +311,105 @@ export function SearchView() {
     return filtered;
   }, [liveResults, localMatches, filter]);
 
-  const featuredAllMedia = useMemo(() => {
-    const picks: Array<{
-      kind: 'show' | 'movie' | 'read' | 'game';
-      id: string;
-      title: string;
-      subtitle: string;
-      poster: string;
-    }> = [];
-    for (const id of state.showOrder.slice(0, 3)) {
-      const s = state.shows[id];
-      if (s) {
-        picks.push({
-          kind: 'show',
-          id: s.id,
-          title: s.title,
-          subtitle: s.mediaType === 'anime' ? 'Anime' : 'Show',
-          poster: s.posterUrl,
-        });
-      }
-    }
-    for (const id of state.readOrder.slice(0, 3)) {
-      const r = state.readItems[id];
-      if (r) {
-        picks.push({
-          kind: 'read',
-          id: r.id,
-          title: r.title,
-          subtitle: r.format === 'manga' ? 'Manga' : r.format === 'comic' ? 'Comic' : 'Novel',
-          poster: resolveComicEditionCover(
-            r,
-            state.readProgress[r.id]?.edition,
-            state.readProgress[r.id]
-          ),
-        });
-      }
-    }
-    for (const id of state.gameOrder.slice(0, 3)) {
-      const g = state.games[id];
-      if (g) {
-        picks.push({ kind: 'game', id: g.id, title: g.title, subtitle: 'Game', poster: g.coverUrl });
-      }
-    }
-    for (const id of state.movieOrder.slice(0, 2)) {
-      const m = state.movies[id];
-      if (m) {
-        picks.push({ kind: 'movie', id: m.id, title: m.title, subtitle: 'Movie', poster: m.posterUrl });
-      }
-    }
-    return picks;
-  }, [state]);
+  const trendingForActiveFilter = useMemo(() => {
+    if (!trending || filter === 'all') return [];
+    const pool = [...trending.watch, ...trending.read, ...trending.play];
+    return pool.filter((item) => item.mediaType === filter);
+  }, [trending, filter]);
 
-  const queueSuggestions = useMemo(() => {
-    const picks: Array<{
-      kind: 'show' | 'movie' | 'read' | 'game';
-      id: string;
-      title: string;
-      genres: string[];
-      poster: string;
-    }> = [];
-    for (const id of state.readOrder) {
-      const r = state.readItems[id];
-      const p = state.readProgress[id];
-      if (r && p?.status === 'want_to_read' && r.genres.some((g) => topGenreNames.has(g))) {
-        picks.push({ kind: 'read', id: r.id, title: r.title, genres: r.genres, poster: r.coverUrl });
-      }
-    }
-    for (const id of state.gameOrder) {
-      const g = state.games[id];
-      const p = state.gameProgress[id];
-      if (g && p?.status === 'backlog') {
-        picks.push({ kind: 'game', id: g.id, title: g.title, genres: g.genres, poster: g.coverUrl });
-      }
-    }
-    for (const id of state.showOrder) {
-      const s = state.shows[id];
-      const p = state.showProgress[id];
-      if (s && p?.status === 'not_started') {
-        picks.push({ kind: 'show', id: s.id, title: s.title, genres: s.genres, poster: s.posterUrl });
-      }
-    }
-    return picks.slice(0, 8);
-  }, [state, topGenreNames]);
+  const isLiveItemInStore = (item: LiveSearchResult): boolean =>
+    Boolean(
+      state.shows[item.id] ||
+        state.movies[item.id] ||
+        state.readItems[item.id] ||
+        state.games[item.id]
+    );
+
+  const renderTrendingPosterCard = (item: LiveSearchResult) => {
+    const inStore = isLiveItemInStore(item);
+    const isHydrating = hydratingId === item.id;
+    const badgeLabel =
+      item.mediaType === 'tv'
+        ? 'SHOW'
+        : item.mediaType === 'movie'
+          ? 'MOVIE'
+          : item.mediaType === 'anime'
+            ? 'ANIME'
+            : item.mediaType === 'manga'
+              ? 'MANGA'
+              : item.mediaType === 'comic'
+                ? 'COMIC'
+                : item.mediaType === 'novel'
+                  ? 'NOVEL'
+                  : 'GAME';
+    const badgeTint =
+      item.domain === 'watch'
+        ? 'text-watch'
+        : item.domain === 'read'
+          ? 'text-read'
+          : 'text-play';
+    const addActiveClass =
+      item.domain === 'watch'
+        ? 'border-watch/70 bg-watch/20 text-watch'
+        : item.domain === 'read'
+          ? 'border-read/70 bg-read/20 text-read'
+          : 'border-play/70 bg-play/20 text-play';
+
+    return (
+      <div
+        key={item.id}
+        role="button"
+        tabIndex={0}
+        onClick={() => handleOpenLiveResult(item, false)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleOpenLiveResult(item, false);
+          }
+        }}
+        className="group text-left cursor-pointer"
+      >
+        <div className="relative aspect-[2/3] rounded-[14px] sm:rounded-[18px] overflow-hidden bg-surface border border-white/8">
+          <MediaImage
+            src={item.posterUrl}
+            fallbackSrc={item.backdropUrl}
+            alt={item.title}
+            className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+          />
+          <span
+            className={`absolute top-1.5 left-1.5 px-1.5 py-[2px] rounded bg-[#0F1318]/85 border border-white/10 text-[9px] font-semibold uppercase tracking-wide leading-none ${badgeTint}`}
+          >
+            {badgeLabel}
+          </span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleOpenLiveResult(item, true);
+            }}
+            aria-label={inStore ? `${item.title} in library` : `Add ${item.title}`}
+            className={`absolute top-1.5 right-1.5 h-7 w-7 rounded-full bg-[#0F1318]/85 border flex items-center justify-center transition-colors ${
+              inStore
+                ? addActiveClass
+                : 'border-white/20 text-ink hover:border-brand hover:text-brand'
+            }`}
+          >
+            {isHydrating ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : inStore ? (
+              <Check className="w-3.5 h-3.5" />
+            ) : (
+              <Plus className="w-3.5 h-3.5" />
+            )}
+          </button>
+        </div>
+        <p className="mt-1.5 text-xs sm:text-[13px] font-semibold text-ink line-clamp-2 leading-snug">
+          {item.title}
+        </p>
+        <p className="text-[10.5px] sm:text-[11px] text-ink-dim tabular-nums">{item.year}</p>
+      </div>
+    );
+  };
 
   const handleOpenLiveResult = async (item: LiveSearchResult, andAdd = false) => {
     if (item.kind === 'movie') {
@@ -663,103 +707,99 @@ export function SearchView() {
             </section>
           )}
 
-          {query.trim().length < 2 && localMatches.length === 0 && (
-            <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center">
-              <Search className="w-7 h-7 text-brand mx-auto mb-2.5 opacity-85" />
-              <p className="font-display font-bold text-lg text-ink">Search to add titles</p>
-              <p className="text-xs text-ink-dim mt-1 max-w-sm mx-auto">
-                Type at least 2 characters above to search TV, movies, anime, manga, comics, novels,
-                or games.
-              </p>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="space-y-8 animate-fade-in">
-          {featuredAllMedia.length === 0 && queueSuggestions.length === 0 && (
-            <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center my-2">
-              <Search className="w-8 h-8 text-brand mx-auto mb-3 opacity-85" />
-              <h2 className="font-display font-bold text-[20px] text-ink">
-                Start building your library
-              </h2>
-              <p className="text-sm text-ink-dim mt-1 max-w-md mx-auto">
-                Search any TV show, movie, anime, manga, comic edition, novel, or game above using the
-                color-coded category pills.
-              </p>
-            </div>
-          )}
-
-          {/* Library Highlights Across Watch, Read & Play */}
-          {featuredAllMedia.length > 0 && (
+          {query.trim().length < 2 && trendingForActiveFilter.length > 0 && (
             <section>
               <div className="flex items-center gap-2 mb-3">
                 <Flame className="w-5 h-5 text-brand" />
-                <h2 className="font-display font-bold text-[20px] text-ink">
-                  In your library across Watch, Read & Play
+                <h2 className="font-display font-bold text-lg text-ink">
+                  Trending{' '}
+                  {SEARCH_FILTER_PILLS.find((p) => p.id === filter)?.label || filter}
                 </h2>
               </div>
-              <div className="flex gap-3.5 overflow-x-auto no-scrollbar pb-1">
-                {featuredAllMedia.map((entry) => (
-                  <button
-                    key={`${entry.kind}-${entry.id}`}
-                    type="button"
-                    onClick={() => {
-                      if (entry.kind === 'show') pushRoute({ view: 'show-detail', showId: entry.id });
-                      else if (entry.kind === 'movie') pushRoute({ view: 'movie-detail', movieId: entry.id });
-                      else if (entry.kind === 'read') pushRoute({ view: 'read-detail', readId: entry.id });
-                      else pushRoute({ view: 'game-detail', gameId: entry.id });
-                    }}
-                    className="w-[126px] sm:w-[144px] shrink-0 text-left group"
-                  >
-                    <div className="aspect-[2/3] rounded-[18px] overflow-hidden bg-surface border border-white/8">
-                      <MediaImage
-                        src={entry.poster}
-                        alt={entry.title}
-                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                      />
-                    </div>
-                    <p className="mt-2 text-sm font-semibold text-ink truncate">{entry.title}</p>
-                    <p className="text-xs text-ink-dim">{entry.subtitle}</p>
-                  </button>
-                ))}
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2.5 sm:gap-4">
+                {trendingForActiveFilter.map(renderTrendingPosterCard)}
               </div>
             </section>
           )}
 
-          {/* Up Next in Your Personal Queue */}
-          {queueSuggestions.length > 0 && (
-            <section>
-              <div className="flex items-center gap-2 mb-3">
-                <Sparkles className="w-5 h-5 text-brand" />
-                <h2 className="font-display font-bold text-[20px] text-ink">Up next in your cue</h2>
+          {query.trim().length < 2 &&
+            localMatches.length === 0 &&
+            trendingForActiveFilter.length === 0 && (
+              <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center">
+                <Search className="w-7 h-7 text-brand mx-auto mb-2.5 opacity-85" />
+                <p className="font-display font-bold text-lg text-ink">Search to add titles</p>
+                <p className="text-xs text-ink-dim mt-1 max-w-sm mx-auto">
+                  Type at least 2 characters above to search TV, movies, anime, manga, comics,
+                  novels, or games.
+                </p>
               </div>
-              <div className="flex gap-3.5 overflow-x-auto no-scrollbar pb-1">
-                {queueSuggestions.map((entry) => (
-                  <button
-                    key={`${entry.kind}-${entry.id}`}
-                    type="button"
-                    onClick={() => {
-                      if (entry.kind === 'show') pushRoute({ view: 'show-detail', showId: entry.id });
-                      else if (entry.kind === 'movie') pushRoute({ view: 'movie-detail', movieId: entry.id });
-                      else if (entry.kind === 'read') pushRoute({ view: 'read-detail', readId: entry.id });
-                      else pushRoute({ view: 'game-detail', gameId: entry.id });
-                    }}
-                    className="w-[126px] sm:w-[144px] shrink-0 text-left group"
-                  >
-                    <div className="aspect-[2/3] rounded-[18px] overflow-hidden bg-surface border border-white/8">
-                      <MediaImage
-                        src={entry.poster}
-                        alt={entry.title}
-                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                      />
-                    </div>
-                    <p className="mt-2 text-sm font-semibold text-ink truncate">{entry.title}</p>
-                    <p className="text-xs text-ink-dim truncate">{entry.genres.slice(0, 2).join(' · ')}</p>
-                  </button>
-                ))}
+            )}
+        </div>
+      ) : (
+        <div className="space-y-6 animate-fade-in">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Flame className="w-5 h-5 text-brand" />
+              <h2 className="font-display font-bold text-[20px] text-ink">Trending now</h2>
+            </div>
+            <span className="text-xs text-ink-dim">Watch · Read · Play</span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2.5 sm:gap-4 items-start">
+            {/* Column 1: Watch */}
+            <section aria-label="Trending to Watch" className="min-w-0">
+              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-watch border-b border-watch/25 pb-1.5 mb-2.5">
+                <Tv className="w-3.5 h-3.5 shrink-0" />
+                <span>Watch</span>
+              </div>
+              <div className="space-y-3 sm:space-y-4">
+                {loadingTrending && !trending
+                  ? Array.from({ length: 4 }).map((_, i) => (
+                      <div key={`w-skel-${i}`} className="animate-pulse">
+                        <div className="aspect-[2/3] rounded-[14px] sm:rounded-[18px] bg-surface border border-white/6" />
+                        <div className="h-3 w-3/4 rounded bg-surface mt-2" />
+                      </div>
+                    ))
+                  : (trending?.watch || []).map(renderTrendingPosterCard)}
               </div>
             </section>
-          )}
+
+            {/* Column 2: Read */}
+            <section aria-label="Trending to Read" className="min-w-0">
+              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-read border-b border-read/25 pb-1.5 mb-2.5">
+                <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                <span>Read</span>
+              </div>
+              <div className="space-y-3 sm:space-y-4">
+                {loadingTrending && !trending
+                  ? Array.from({ length: 4 }).map((_, i) => (
+                      <div key={`r-skel-${i}`} className="animate-pulse">
+                        <div className="aspect-[2/3] rounded-[14px] sm:rounded-[18px] bg-surface border border-white/6" />
+                        <div className="h-3 w-3/4 rounded bg-surface mt-2" />
+                      </div>
+                    ))
+                  : (trending?.read || []).map(renderTrendingPosterCard)}
+              </div>
+            </section>
+
+            {/* Column 3: Play */}
+            <section aria-label="Trending to Play" className="min-w-0">
+              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-play border-b border-play/25 pb-1.5 mb-2.5">
+                <Gamepad2 className="w-3.5 h-3.5 shrink-0" />
+                <span>Play</span>
+              </div>
+              <div className="space-y-3 sm:space-y-4">
+                {loadingTrending && !trending
+                  ? Array.from({ length: 4 }).map((_, i) => (
+                      <div key={`p-skel-${i}`} className="animate-pulse">
+                        <div className="aspect-[2/3] rounded-[14px] sm:rounded-[18px] bg-surface border border-white/6" />
+                        <div className="h-3 w-3/4 rounded bg-surface mt-2" />
+                      </div>
+                    ))
+                  : (trending?.play || []).map(renderTrendingPosterCard)}
+              </div>
+            </section>
+          </div>
         </div>
       )}
     </div>
