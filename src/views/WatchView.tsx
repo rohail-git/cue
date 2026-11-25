@@ -20,7 +20,6 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
     updateSettings,
     watchNextEpisode,
     toggleMovieWatched,
-    showToast,
   } = useCueStore();
 
   const [justChecked, setJustChecked] = useState<Record<string, boolean>>({});
@@ -359,7 +358,6 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
             ? () =>
                 triggerFlash(entry.id, () => {
                   watchNextEpisode(entry.mediaId);
-                  showToast(`Checked off ${entry.title} ${entry.subtitle}`);
                 })
             : undefined
         }

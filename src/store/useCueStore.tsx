@@ -142,7 +142,14 @@ function loadInitialState(): CueStoreState {
   }
 }
 
-export interface ToastItem {
+export interface ToastOptions {
+  domain?: MediaDomain | 'neutral';
+  subtitle?: string;
+  posterUrl?: string;
+  tone?: 'success' | 'info' | 'undo';
+}
+
+export interface ToastItem extends ToastOptions {
   id: string;
   message: string;
   actionLabel?: string;
@@ -172,7 +179,12 @@ interface CueContextValue {
 
   toast: ToastItem | null;
   dismissToast: () => void;
-  showToast: (message: string, actionLabel?: string, onAction?: () => void) => void;
+  showToast: (
+    message: string,
+    actionLabel?: string,
+    onAction?: () => void,
+    options?: ToastOptions
+  ) => void;
 
   activeBanner: ReleaseBannerData | null;
   dismissBanner: () => void;
@@ -389,9 +401,23 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const route = routeStack[routeStack.length - 1];
   const canGoBack = routeStack.length > 1;
 
-  const showToast = useCallback((message: string, actionLabel?: string, onAction?: () => void) => {
-    setToast({ id: String(Date.now()), message, actionLabel, onAction });
-  }, []);
+  const showToast = useCallback(
+    (
+      message: string,
+      actionLabel?: string,
+      onAction?: () => void,
+      options?: ToastOptions
+    ) => {
+      setToast({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        message,
+        actionLabel,
+        onAction,
+        ...options,
+      });
+    },
+    []
+  );
 
   const commitState = useCallback(
     (updater: (prev: CueStoreState) => CueStoreState): CueStoreState => {
@@ -609,12 +635,6 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [pullIfCloudNewer]);
 
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 4200);
-    return () => clearTimeout(t);
-  }, [toast]);
-
   const dismissToast = useCallback(() => setToast(null), []);
   const dismissBanner = useCallback(() => setActiveBanner(null), []);
 
@@ -747,10 +767,13 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const watchNextEpisode = useCallback(
     (showId: string) => {
       let toastMsg = '';
+      let toastSub: string | undefined;
+      let showPoster = '';
       let toastAction: string | undefined = 'Log note';
       commitState((prev) => {
         const show = prev.shows[showId];
         if (!show) return prev;
+        showPoster = show.posterUrl;
         const prog = prev.showProgress[showId];
         const stats = getShowStats(show, prog);
         const targetEp = stats.nextEpisode;
@@ -766,9 +789,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const seasonNudge = buildShowSeasonToast(show, targetEp.season, prog, updatedProg);
         if (seasonNudge) {
           toastMsg = seasonNudge.msg;
+          toastSub = undefined;
           toastAction = seasonNudge.actionLabel || 'Log note';
         } else {
-          toastMsg = `Watched ${show.title} · ${watchedLabel}`;
+          toastMsg = show.title;
+          toastSub = `Watched · ${watchedLabel}`;
           toastAction = 'Log note';
         }
         const historyEntry: HistoryEntry = {
@@ -796,7 +821,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (toastMsg) {
-        showToast(toastMsg, toastAction, () => pushRoute({ view: 'show-detail', showId }));
+        showToast(toastMsg, toastAction, () => pushRoute({ view: 'show-detail', showId }), {
+          domain: 'watch',
+          subtitle: toastSub,
+          posterUrl: showPoster,
+        });
       }
     },
     [pushRoute, showToast]
@@ -805,9 +834,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const toggleEpisodeWatched = useCallback(
     (showId: string, season: number, number: number) => {
       let seasonToast: { msg: string; actionLabel?: string } | null = null;
+      let showPoster = '';
       commitState((prev) => {
         const show = prev.shows[showId];
         if (!show) return prev;
+        showPoster = show.posterUrl;
         const prog = prev.showProgress[showId];
         const epKey = getEpisodeKey(season, number);
         const current = prog?.episodeCounts?.[epKey] || 0;
@@ -829,7 +860,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       });
       if (seasonToast) {
         const { msg, actionLabel } = seasonToast;
-        showToast(msg, actionLabel);
+        showToast(msg, actionLabel, undefined, {
+          domain: 'watch',
+          posterUrl: showPoster,
+        });
       }
     },
     [showToast]
@@ -1167,9 +1201,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     (movieId: string) => {
       let msg = '';
       let actionLabel: string | undefined;
+      let moviePoster = '';
       commitState((prev) => {
         const movie = prev.movies[movieId];
         if (!movie) return prev;
+        moviePoster = movie.posterUrl;
         const existing = prev.movieProgress[movieId];
         const isWatched = (existing?.watchCount || 0) > 0;
         const nowWatched = !isWatched;
@@ -1227,7 +1263,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         return nextState;
       });
       if (msg) {
-        showToast(msg, actionLabel, () => pushRoute({ view: 'movie-detail', movieId }));
+        showToast(msg, actionLabel, () => pushRoute({ view: 'movie-detail', movieId }), {
+          domain: 'watch',
+          posterUrl: moviePoster,
+        });
       }
     },
     [pushRoute, showToast]
@@ -1431,10 +1470,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     (readId: string, delta?: number) => {
       let msg = '';
       let actionLabel: string | undefined = 'Log note';
+      let coverUrl = '';
       commitState((prev) => {
         const item = prev.readItems[readId];
         if (!item) return prev;
         const prog = prev.readProgress[readId];
+        coverUrl = resolveComicEditionCover(item, prog?.edition, prog);
         const step = delta ?? 1;
         const prevUnits = getCompletedReadUnits(item, prog);
         const existingHigh = (prog?.completedUnits || []).filter((n) => n > item.totalUnits);
@@ -1470,6 +1511,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             ? `Issue #${step > 0 ? touchedUnit : updated.currentUnit}`
             : `Ch. ${step > 0 ? touchedUnit : updated.currentUnit}`;
         const activeCover = resolveComicEditionCover(item, updated.edition, updated);
+        coverUrl = activeCover;
         const nextHistory =
           step > 0 && touchedUnit > 0
             ? appendHistory(prev.history || [], {
@@ -1495,7 +1537,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         return nextState;
       });
       if (msg) {
-        showToast(msg, actionLabel, () => pushRoute({ view: 'read-detail', readId }));
+        showToast(msg, actionLabel, () => pushRoute({ view: 'read-detail', readId }), {
+          domain: 'read',
+          posterUrl: coverUrl,
+        });
       }
     },
     [pushRoute, showToast]
@@ -1520,6 +1565,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     (readId: string, unitNumber: number) => {
       let msg = '';
       let actionLabel: string | undefined;
+      let coverUrl = '';
       commitState((prev) => {
         const item = prev.readItems[readId];
         if (!item || unitNumber < 1 || unitNumber > item.totalUnits) return prev;
@@ -1534,6 +1580,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const updated = normalizeReadProgress(item, nextActive.length, prog, combined);
         const unitLabel = item.unit === 'issues' ? `Issue #${unitNumber}` : `Ch. ${unitNumber}`;
         const activeCover = resolveComicEditionCover(item, updated.edition, updated);
+        coverUrl = activeCover;
+        coverUrl = activeCover;
         const nextHistory = !hadUnit
           ? appendHistory(prev.history || [], {
               id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1559,7 +1607,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         }
         return nextState;
       });
-      if (msg) showToast(msg, actionLabel, () => pushRoute({ view: 'read-detail', readId }));
+      if (msg) {
+        showToast(msg, actionLabel, () => pushRoute({ view: 'read-detail', readId }), {
+          domain: 'read',
+          posterUrl: coverUrl,
+        });
+      }
     },
     [pushRoute, showToast]
   );
@@ -1596,6 +1649,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     (readId: string) => {
       let msg = '';
       let actionLabel: string | undefined;
+      let coverUrl = '';
       commitState((prev) => {
         const item = prev.readItems[readId];
         if (!item) return prev;
@@ -1617,6 +1671,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           lastReadAt: new Date().toISOString(),
         };
         const activeCover = resolveComicEditionCover(item, updated.edition, updated);
+        coverUrl = activeCover;
         const editionLabel =
           item.format === 'comic' && updated.edition
             ? getComicEditionLabel(updated.edition, item, updated)
@@ -1645,7 +1700,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         actionLabel = nudge.actionLabel;
         return nextState;
       });
-      if (msg) showToast(msg, actionLabel, () => pushRoute({ view: 'read-detail', readId }));
+      if (msg) {
+        showToast(msg, actionLabel, () => pushRoute({ view: 'read-detail', readId }), {
+          domain: 'read',
+          posterUrl: coverUrl,
+        });
+      }
     },
     [pushRoute, showToast]
   );
@@ -2160,9 +2220,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const advanceGameChapter = useCallback(
     (gameId: string, delta = 1) => {
       let toastMsg = '';
+      let gameCover = '';
       commitState((prev) => {
         const game = prev.games[gameId];
         if (!game) return prev;
+        gameCover = game.coverUrl;
         const prog = prev.gameProgress[gameId];
         const nextVal = (prog?.currentChapter || 0) + delta;
         const updated = applyGameChapter(game, prog, nextVal);
@@ -2211,7 +2273,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         }
         return nextState;
       });
-      if (toastMsg) showToast(toastMsg, 'Log note', () => pushRoute({ view: 'game-detail', gameId }));
+      if (toastMsg) {
+        showToast(toastMsg, 'Log note', () => pushRoute({ view: 'game-detail', gameId }), {
+          domain: 'play',
+          posterUrl: gameCover,
+        });
+      }
     },
     [pushRoute, showToast]
   );
@@ -2273,9 +2340,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const logGameSession = useCallback(
     (gameId: string, hoursDelta: number) => {
       let label = '';
+      let gameCover = '';
       commitState((prev) => {
         const game = prev.games[gameId];
         if (!game) return prev;
+        gameCover = game.coverUrl;
         const prog = prev.gameProgress[gameId];
         const nextHours = Math.max(0, Math.round(((prog?.hoursPlayed || 0) + hoursDelta) * 10) / 10);
         const nextPct =
@@ -2317,7 +2386,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           history: nextHistory,
         };
       });
-      if (label) showToast(label, 'Log note', () => pushRoute({ view: 'game-detail', gameId }));
+      if (label) {
+        showToast(label, 'Log note', () => pushRoute({ view: 'game-detail', gameId }), {
+          domain: 'play',
+          posterUrl: gameCover,
+        });
+      }
     },
     [pushRoute, showToast]
   );
@@ -2632,7 +2706,13 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             : prev.showProgress,
         };
       });
-      if (andBookmark) showToast(`Added ${show.title} to Watch`);
+      if (andBookmark) {
+        showToast(show.title, undefined, undefined, {
+          domain: 'watch',
+          subtitle: 'Added to Watch',
+          posterUrl: show.posterUrl,
+        });
+      }
     },
     [showToast]
   );
@@ -2655,7 +2735,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           },
         };
       });
-      showToast(`Added ${movie.title} to Watch`);
+      showToast(movie.title, undefined, undefined, {
+        domain: 'watch',
+        subtitle: 'Added to Watch',
+        posterUrl: movie.posterUrl,
+      });
     },
     [showToast]
   );
@@ -2679,7 +2763,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           },
         };
       });
-      showToast(`Added ${item.title} to Read`);
+      showToast(item.title, undefined, undefined, {
+        domain: 'read',
+        subtitle: 'Added to Read',
+        posterUrl: item.coverUrl,
+      });
     },
     [showToast]
   );
@@ -2717,7 +2805,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           },
         };
       });
-      showToast(`Added ${enrichedGame.title} to Play`);
+      showToast(enrichedGame.title, undefined, undefined, {
+        domain: 'play',
+        subtitle: 'Added to Play',
+        posterUrl: enrichedGame.coverUrl,
+      });
     },
     [showToast]
   );
@@ -2850,7 +2942,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       lastPreImportStateRef.current = stateRef.current;
       stateRef.current = backupState;
       setState(backupState);
-      showToast('Restored cue library backup', 'Undo', undoLastImport);
+      showToast('Restored cue library backup', 'Undo', undoLastImport, { tone: 'undo' });
     },
     [showToast, undoLastImport]
   );
@@ -3159,7 +3251,9 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       if (added > 0) summaryParts.push(`Added ${added}`);
       if (updated > 0) summaryParts.push(`Updated ${updated}`);
       if (skipped > 0) summaryParts.push(`${skipped} skipped`);
-      showToast(summaryParts.join(' · ') || 'Nothing changed', 'Undo', undoLastImport);
+      showToast(summaryParts.join(' · ') || 'Nothing changed', 'Undo', undoLastImport, {
+        tone: 'undo',
+      });
 
       return { added, updated, skipped };
     },
@@ -3211,7 +3305,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     const parts: string[] = [];
     if (comics > 0) parts.push(`${comics} ${comics === 1 ? 'comic' : 'comics'}`);
     if (manga > 0) parts.push(`${manga} manga`);
-    showToast(`Moved ${parts.join(' & ')} out of Novels`, 'Undo', undoLastImport);
+    showToast(`Moved ${parts.join(' & ')} out of Novels`, 'Undo', undoLastImport, {
+      domain: 'read',
+      tone: 'undo',
+    });
     return { comics, manga };
   }, [showToast, undoLastImport]);
 

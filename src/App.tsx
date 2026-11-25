@@ -1,9 +1,9 @@
-import { X } from 'lucide-react';
 import { MediaInsightsModal } from './components/MediaInsightsModal';
 import { NavChrome } from './components/NavChrome';
 import { NotificationsSheet } from './components/NotificationsSheet';
 import { SettingsModal } from './components/SettingsModal';
 import { SmartImportModal } from './components/SmartImportModal';
+import { ToastBanner } from './components/ToastBanner';
 import { CueProvider, useCueStore } from './store/useCueStore';
 import { GameDetailView } from './views/GameDetailView';
 import { JournalView } from './views/JournalView';
@@ -76,38 +76,7 @@ function CueShell() {
       <NavChrome />
       <main>{renderView()}</main>
 
-      {toast && (
-        <div className="fixed bottom-24 md:bottom-7 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-md animate-sheet-up">
-          <div className="glass-banner rounded-2xl px-4 py-2.5 flex items-center justify-between gap-3">
-            <span className="text-[13px] font-medium text-ink leading-snug line-clamp-2">
-              {toast.message}
-            </span>
-            <div className="flex items-center gap-2 shrink-0">
-              {toast.actionLabel && toast.onAction && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const action = toast.onAction;
-                    dismissToast();
-                    action?.();
-                  }}
-                  className="px-3 py-1 rounded-full bg-brand text-brand-ink text-xs font-semibold hover:opacity-90"
-                >
-                  {toast.actionLabel}
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={dismissToast}
-                aria-label="Close toast"
-                className="p-1 text-ink-dim hover:text-ink"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {toast && <ToastBanner key={toast.id} toast={toast} onDismiss={dismissToast} />}
 
       <NotificationsSheet />
       <SettingsModal />
