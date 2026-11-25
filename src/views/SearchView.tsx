@@ -15,6 +15,7 @@ import {
 import { MediaImage } from '../components/MediaImage';
 import {
   canonicalReadWorkKey,
+  fetchTrendingByCategory,
   fetchTrendingByDomain,
   hydrateLiveGameItem,
   hydrateLiveMovie,
@@ -109,6 +110,12 @@ export function SearchView() {
   const [hydratingId, setHydratingId] = useState<string | null>(null);
   const [trending, setTrending] = useState<TrendingByDomain | null>(null);
   const [loadingTrending, setLoadingTrending] = useState(true);
+  const [categoryTrending, setCategoryTrending] = useState<
+    Partial<Record<SearchMediaFilter, LiveSearchResult[]>>
+  >({});
+  const [loadingCategory, setLoadingCategory] = useState(false);
+  const [allColumnLimit, setAllColumnLimit] = useState(9);
+  const [categoryLimit, setCategoryLimit] = useState(12);
 
   useEffect(() => {
     let cancelled = false;
@@ -127,6 +134,38 @@ export function SearchView() {
       cancelled = true;
     };
   }, [state.settings.tmdbApiKey]);
+
+  useEffect(() => {
+    setCategoryLimit(12);
+    if (filter === 'all' || query.trim().length >= 2) {
+      setLoadingCategory(false);
+      return;
+    }
+    if (categoryTrending[filter]) {
+      setLoadingCategory(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingCategory(true);
+    fetchTrendingByCategory(filter, state.settings.tmdbApiKey)
+      .then((items) => {
+        if (!cancelled) {
+          setCategoryTrending((prev) => ({ ...prev, [filter]: items }));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCategoryTrending((prev) => ({ ...prev, [filter]: [] }));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingCategory(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filter, query, categoryTrending, state.settings.tmdbApiKey]);
 
   useEffect(() => {
     const q = query.trim();
@@ -312,10 +351,18 @@ export function SearchView() {
   }, [liveResults, localMatches, filter]);
 
   const trendingForActiveFilter = useMemo(() => {
-    if (!trending || filter === 'all') return [];
+    if (filter === 'all') return [];
+    const dedicated = categoryTrending[filter];
+    if (dedicated) return dedicated;
+    if (!trending) return [];
     const pool = [...trending.watch, ...trending.read, ...trending.play];
     return pool.filter((item) => item.mediaType === filter);
-  }, [trending, filter]);
+  }, [categoryTrending, trending, filter]);
+
+  const visibleCategoryTrending = useMemo(
+    () => trendingForActiveFilter.slice(0, categoryLimit),
+    [trendingForActiveFilter, categoryLimit]
+  );
 
   const isLiveItemInStore = (item: LiveSearchResult): boolean =>
     Boolean(
@@ -707,22 +754,62 @@ export function SearchView() {
             </section>
           )}
 
-          {query.trim().length < 2 && trendingForActiveFilter.length > 0 && (
+          {query.trim().length < 2 && filter !== 'all' && loadingCategory && visibleCategoryTrending.length === 0 && (
             <section>
-              <div className="flex items-center gap-2 mb-3">
-                <Flame className="w-5 h-5 text-brand" />
-                <h2 className="font-display font-bold text-lg text-ink">
-                  Trending{' '}
-                  {SEARCH_FILTER_PILLS.find((p) => p.id === filter)?.label || filter}
-                </h2>
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <div className="flex items-center gap-2">
+                  <Flame className="w-5 h-5 text-brand" />
+                  <h2 className="font-display font-bold text-lg text-ink">
+                    Trending{' '}
+                    {SEARCH_FILTER_PILLS.find((p) => p.id === filter)?.label || filter}
+                  </h2>
+                </div>
+                <span className="text-xs text-ink-dim">Last 6 months</span>
               </div>
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2.5 sm:gap-4">
-                {trendingForActiveFilter.map(renderTrendingPosterCard)}
+                {Array.from({ length: 12 }).map((_, idx) => (
+                  <div key={`cat-skel-${idx}`} className="animate-pulse">
+                    <div className="aspect-[2/3] rounded-[14px] sm:rounded-[18px] bg-surface border border-white/6" />
+                    <div className="h-3 w-3/4 rounded bg-surface mt-2" />
+                  </div>
+                ))}
               </div>
             </section>
           )}
 
+          {query.trim().length < 2 && visibleCategoryTrending.length > 0 && (
+            <section className="space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Flame className="w-5 h-5 text-brand" />
+                  <h2 className="font-display font-bold text-lg text-ink">
+                    Trending{' '}
+                    {SEARCH_FILTER_PILLS.find((p) => p.id === filter)?.label || filter} (
+                    {trendingForActiveFilter.length})
+                  </h2>
+                </div>
+                <span className="text-xs text-ink-dim">Last 6 months</span>
+              </div>
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2.5 sm:gap-4">
+                {visibleCategoryTrending.map(renderTrendingPosterCard)}
+              </div>
+              {trendingForActiveFilter.length > visibleCategoryTrending.length && (
+                <div className="flex justify-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setCategoryLimit((n) => n + 12)}
+                    className="px-5 py-2 rounded-full bg-surface border border-white/12 text-xs font-semibold text-ink hover:border-white/25 transition-colors"
+                  >
+                    Load more ({trendingForActiveFilter.length - visibleCategoryTrending.length}{' '}
+                    remaining)
+                  </button>
+                </div>
+              )}
+            </section>
+          )}
+
           {query.trim().length < 2 &&
+            !loadingCategory &&
             localMatches.length === 0 &&
             trendingForActiveFilter.length === 0 && (
               <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center">
@@ -742,7 +829,7 @@ export function SearchView() {
               <Flame className="w-5 h-5 text-brand" />
               <h2 className="font-display font-bold text-[20px] text-ink">Trending now</h2>
             </div>
-            <span className="text-xs text-ink-dim">Watch · Read · Play</span>
+            <span className="text-xs text-ink-dim">Last 6 months · Watch · Read · Play</span>
           </div>
 
           <div className="grid grid-cols-3 gap-2.5 sm:gap-4 items-start">
@@ -760,7 +847,7 @@ export function SearchView() {
                         <div className="h-3 w-3/4 rounded bg-surface mt-2" />
                       </div>
                     ))
-                  : (trending?.watch || []).map(renderTrendingPosterCard)}
+                  : (trending?.watch || []).slice(0, allColumnLimit).map(renderTrendingPosterCard)}
               </div>
             </section>
 
@@ -778,7 +865,7 @@ export function SearchView() {
                         <div className="h-3 w-3/4 rounded bg-surface mt-2" />
                       </div>
                     ))
-                  : (trending?.read || []).map(renderTrendingPosterCard)}
+                  : (trending?.read || []).slice(0, allColumnLimit).map(renderTrendingPosterCard)}
               </div>
             </section>
 
@@ -796,10 +883,25 @@ export function SearchView() {
                         <div className="h-3 w-3/4 rounded bg-surface mt-2" />
                       </div>
                     ))
-                  : (trending?.play || []).map(renderTrendingPosterCard)}
+                  : (trending?.play || []).slice(0, allColumnLimit).map(renderTrendingPosterCard)}
               </div>
             </section>
           </div>
+
+          {trending &&
+            (trending.watch.length > allColumnLimit ||
+              trending.read.length > allColumnLimit ||
+              trending.play.length > allColumnLimit) && (
+              <div className="flex justify-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => setAllColumnLimit((n) => n + 6)}
+                  className="px-5 py-2 rounded-full bg-surface border border-white/12 text-xs font-semibold text-ink hover:border-white/25 transition-colors"
+                >
+                  Load more trending
+                </button>
+              </div>
+            )}
         </div>
       )}
     </div>

@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { fetchTrendingGamesPayload } from './api/trending-games.ts'
 
 function imdbResolveDevPlugin(): Plugin {
   return {
@@ -113,6 +114,39 @@ function imdbResolveDevPlugin(): Plugin {
   };
 }
 
+function trendingGamesDevPlugin(): Plugin {
+  return {
+    name: 'cue-trending-games-dev',
+    configureServer(server) {
+      server.middlewares.use('/api/trending-games', async (req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== 'GET') {
+          next();
+          return;
+        }
+        try {
+          const url = new URL(req.url || '/', 'http://localhost');
+          const limitParam = Number(url.searchParams.get('limit') || '24');
+          const payload = await fetchTrendingGamesPayload(
+            Number.isFinite(limitParam) ? limitParam : 24
+          );
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 200;
+          res.end(JSON.stringify(payload));
+        } catch {
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 200;
+          res.end(JSON.stringify({ items: [] }));
+        }
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss(), imdbResolveDevPlugin()],
+  plugins: [react(), tailwindcss(), imdbResolveDevPlugin(), trendingGamesDevPlugin()],
 })
