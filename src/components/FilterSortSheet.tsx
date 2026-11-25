@@ -53,6 +53,7 @@ export function FilterSortSheet({ domain }: { domain: MediaDomain }) {
     { value: 'playing', label: 'Playing' },
     { value: 'backlog', label: 'Backlog' },
     { value: 'completed', label: 'Completed' },
+    { value: 'dropped', label: 'Dropped' },
   ];
 
   const titleLabel =

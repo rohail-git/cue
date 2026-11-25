@@ -30,6 +30,7 @@ import {
   getShowCalculatedAverage,
 } from '../utils/ratings';
 import {
+  cleanDisplayGenres,
   formatAirDate,
   formatEpisodeCode,
   getEpisodeKey,
@@ -601,9 +602,9 @@ export function ShowDetailView({ showId }: { showId: string }) {
                   </div>
                 )}
 
-                {show.genres.length > 0 && (
+                {cleanDisplayGenres(show.genres).length > 0 && (
                   <p className="text-[12.5px] text-ink-faint mt-1.5">
-                    {show.genres.slice(0, 3).join(' · ')}
+                    {cleanDisplayGenres(show.genres).slice(0, 3).join(' · ')}
                   </p>
                 )}
 
@@ -808,8 +809,12 @@ export function ShowDetailView({ showId }: { showId: string }) {
                     <h2 className="font-semibold text-[16px] text-ink">Show info</h2>
                     <p className="text-[13.5px] text-ink-dim mt-0.5 flex items-center gap-1.5 flex-wrap">
                       <span>{show.year}</span>
-                      <span>·</span>
-                      <span>{show.genres.slice(0, 2).join(', ')}</span>
+                      {cleanDisplayGenres(show.genres).length > 0 && (
+                        <>
+                          <span>·</span>
+                          <span>{cleanDisplayGenres(show.genres).slice(0, 2).join(', ')}</span>
+                        </>
+                      )}
                       <span>·</span>
                       <span className="tabular-nums">
                         {stats.watchedUnique}/{stats.totalEpisodes} ep
@@ -944,7 +949,11 @@ export function ShowDetailView({ showId }: { showId: string }) {
         open={lightboxOpen}
         src={show.posterUrl}
         title={show.title}
-        subtitle={`${show.year} · ${show.genres.slice(0, 2).join(', ')}`}
+        subtitle={
+          cleanDisplayGenres(show.genres).length > 0
+            ? `${show.year} · ${cleanDisplayGenres(show.genres).slice(0, 2).join(', ')}`
+            : String(show.year)
+        }
         onClose={() => setLightboxOpen(false)}
       />
 

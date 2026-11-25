@@ -41,7 +41,7 @@ export type GamePlatform = 'PC' | 'PS5' | 'Switch' | 'Xbox' | 'Steam Deck';
 export type ShowWatchStatus = 'watching' | 'not_started' | 'finished';
 export type MovieWatchStatus = 'watchlist' | 'watched' | 'coming_soon';
 export type ReadWatchStatus = 'reading' | 'want_to_read' | 'finished';
-export type GameWatchStatus = 'playing' | 'backlog' | 'completed';
+export type GameWatchStatus = 'playing' | 'backlog' | 'completed' | 'dropped';
 
 export type PersonalMood = 'loved' | 'mindblown' | 'emotional' | 'funny' | 'intense' | 'cozy';
 
@@ -281,7 +281,7 @@ export type LayoutMode = 'cards' | 'posters';
 export type SortMode = 'recent' | 'alpha' | 'progress' | 'rating';
 export type WatchFilter = 'all' | 'tv' | 'movie' | 'anime';
 export type ReadFilter = 'all' | 'novel' | 'manga' | 'comic';
-export type PlayFilter = 'all' | 'playing' | 'backlog' | 'completed';
+export type PlayFilter = 'all' | 'playing' | 'backlog' | 'completed' | 'dropped';
 
 export type DetailCardMode = 'simple' | 'advanced';
 

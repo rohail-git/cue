@@ -62,6 +62,7 @@ import {
 import { getSeasonEpisodeAverage } from '../utils/ratings';
 import {
   formatEpisodeCode,
+  formatGameMeta,
   getAllEpisodes,
   getCompletedReadUnits,
   getEpisodeKey,
@@ -792,8 +793,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           toastSub = undefined;
           toastAction = seasonNudge.actionLabel || 'Log note';
         } else {
+          const nextStats = getShowStats(show, updatedProg);
           toastMsg = show.title;
-          toastSub = `Watched · ${watchedLabel}`;
+          toastSub = nextStats.nextEpisode
+            ? `Watched ${watchedLabel} · Next: ${formatEpisodeCode(
+                nextStats.nextEpisode.season,
+                nextStats.nextEpisode.number
+              )}`
+            : `Watched ${watchedLabel}`;
           toastAction = 'Log note';
         }
         const historyEntry: HistoryEntry = {
@@ -2241,7 +2248,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 title: game.title,
                 posterUrl: game.coverUrl,
                 codeLabel,
-                subtitle: `${activePlatform} · ${game.developer}`,
+                subtitle: formatGameMeta(
+                  game,
+                  { platform: activePlatform, hoursPlayed: 0 },
+                  { includeHours: false }
+                ),
                 loggedAt: new Date().toISOString(),
               })
             : prev.history;
@@ -2363,7 +2374,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 title: game.title,
                 posterUrl: game.coverUrl,
                 codeLabel: `+${hoursDelta}h · ${nextHours}h`,
-                subtitle: `${activePlatform} · ${game.developer}`,
+                subtitle: formatGameMeta(
+                  game,
+                  { platform: activePlatform, hoursPlayed: 0 },
+                  { includeHours: false }
+                ),
                 loggedAt: new Date().toISOString(),
               })
             : prev.history;
@@ -2406,6 +2421,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         platform: GamePlatform;
       }>
     ) => {
+      let statusToast: { title: string; subtitle: string; coverUrl: string } | null = null;
       commitState((prev) => {
         const game = prev.games[gameId];
         if (!game) return prev;
@@ -2416,6 +2432,19 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           nextStatus === 'completed'
             ? Math.max(1, existing?.playthroughCount || 0)
             : existing?.playthroughCount || 0;
+        if (patch.status && patch.status !== existing?.status) {
+          const labelMap: Record<GameWatchStatus, string> = {
+            playing: 'Moved to Playing',
+            backlog: 'Moved to Backlog',
+            completed: 'Marked Completed',
+            dropped: 'Moved to Dropped',
+          };
+          statusToast = {
+            title: game.title,
+            subtitle: labelMap[patch.status],
+            coverUrl: game.coverUrl,
+          };
+        }
         return {
           ...prev,
           gameProgress: {
@@ -2434,8 +2463,20 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           },
         };
       });
+      if (statusToast) {
+        const { title, subtitle, coverUrl } = statusToast as {
+          title: string;
+          subtitle: string;
+          coverUrl: string;
+        };
+        showToast(title, undefined, undefined, {
+          domain: 'play',
+          subtitle,
+          posterUrl: coverUrl,
+        });
+      }
     },
-    []
+    [showToast]
   );
 
   const toggleGameCompleted = useCallback(

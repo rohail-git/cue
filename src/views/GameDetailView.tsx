@@ -27,6 +27,7 @@ import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode, GameChapterUnit, GamePlatform } from '../types';
 import { lookupKnownGameChapters } from '../utils/gameChapters';
 import { formatRating } from '../utils/ratings';
+import { cleanDisplayGenres, formatGameMeta } from '../utils/stats';
 
 const PLATFORMS: GamePlatform[] = ['PC', 'PS5', 'Switch', 'Xbox', 'Steam Deck'];
 const CHAPTER_UNITS: GameChapterUnit[] = ['chapters', 'acts', 'missions', 'milestones'];
@@ -158,7 +159,10 @@ export function GameDetailView({ gameId }: { gameId: string }) {
   const isCompleted = progress?.status === 'completed';
   const hours = progress?.hoursPlayed || 0;
   const pct = progress?.completionPct || 0;
+  const currentStatus = progress?.status || 'backlog';
   const platform = progress?.platform || game.platforms[0] || 'PC';
+  const displayGenres = cleanDisplayGenres(game.genres);
+  const gameMetaSummary = formatGameMeta(game, progress, { includeHours: false });
   const totalChapters = game.totalChapters || 0;
   const chapterUnit: GameChapterUnit = game.chapterUnit || 'chapters';
   const chapterSingle = unitSingular(chapterUnit);
@@ -407,6 +411,34 @@ export function GameDetailView({ gameId }: { gameId: string }) {
 
         <DetailModeToggle mode={detailMode} onChange={handleDetailModeChange} />
 
+        {/* Quick 4-Status Selector */}
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-3">
+          {(
+            [
+              { id: 'playing', label: 'Playing' },
+              { id: 'backlog', label: 'Backlog' },
+              { id: 'completed', label: 'Completed' },
+              { id: 'dropped', label: 'Dropped' },
+            ] as const
+          ).map((opt) => {
+            const active = currentStatus === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => updateGameProgress(game.id, { status: opt.id })}
+                className={`px-3 py-1 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
+                  active
+                    ? 'bg-play/20 border-play text-play'
+                    : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                }`}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+
         <div key={detailMode} data-detail-mode={detailMode} className="animate-detail-flip">
           {detailMode === 'simple' ? (
             <>
@@ -415,8 +447,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                 <p className="text-[13px] text-ink-dim tabular-nums">
                   {[
                     game.year,
-                    game.developer,
-                    platform,
+                    gameMetaSummary,
                     totalChapters > 0 ? `${totalChapters} ${chapterUnit}` : null,
                     hours > 0 ? `${hours}h` : null,
                   ]
@@ -443,9 +474,9 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                   </div>
                 )}
 
-                {game.genres.length > 0 && (
+                {displayGenres.length > 0 && (
                   <p className="text-[12.5px] text-ink-faint mt-1.5">
-                    {game.genres.slice(0, 3).join(' · ')}
+                    {displayGenres.slice(0, 3).join(' · ')}
                   </p>
                 )}
 
@@ -459,9 +490,11 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                       ? `${currentChapter}/${totalChapters} ${chapterUnit}`
                       : `${pct}% complete`}
                   </span>
-                  <span className="bg-surface border border-white/[0.08] rounded-full px-3 py-1 text-xs font-medium text-ink-dim tabular-nums">
-                    {hours}h played
-                  </span>
+                  {hours > 0 && (
+                    <span className="bg-surface border border-white/[0.08] rounded-full px-3 py-1 text-xs font-medium text-ink-dim tabular-nums">
+                      {hours}h played
+                    </span>
+                  )}
                   {progress?.platinum && (
                     <span className="bg-surface border border-brand/35 rounded-full px-3 py-1 text-xs font-semibold text-brand inline-flex items-center gap-1">
                       <Trophy className="w-3 h-3" />
@@ -943,7 +976,9 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <h2 className="font-semibold text-[16px] text-ink">Game info</h2>
-                    <p className="text-[13.5px] text-ink-dim mt-0.5">{game.genres.join(' · ')}</p>
+                    {displayGenres.length > 0 && (
+                      <p className="text-[13.5px] text-ink-dim mt-0.5">{displayGenres.join(' · ')}</p>
+                    )}
                   </div>
                   <RatingControl
                     value={progress?.rating}

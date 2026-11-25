@@ -40,7 +40,7 @@ import {
   resolveComicEditionCover,
 } from '../utils/editions';
 import { formatRating, getReadUnitsAverage } from '../utils/ratings';
-import { getCompletedReadUnits, getReadStats } from '../utils/stats';
+import { cleanDisplayGenres, getCompletedReadUnits, getReadStats } from '../utils/stats';
 
 const sessionDetailModeByReadId = new Map<string, DetailCardMode>();
 
@@ -440,9 +440,9 @@ export function ReadDetailView({ readId }: { readId: string }) {
                   </div>
                 )}
 
-                {item.genres.length > 0 && (
+                {cleanDisplayGenres(item.genres).length > 0 && (
                   <p className="text-[12.5px] text-ink-faint mt-1.5">
-                    {item.genres.slice(0, 3).join(' · ')}
+                    {cleanDisplayGenres(item.genres).slice(0, 3).join(' · ')}
                   </p>
                 )}
 
@@ -1050,7 +1050,12 @@ export function ReadDetailView({ readId }: { readId: string }) {
                 <div>
                   <h2 className="font-semibold text-[16px] text-ink">About</h2>
                   <p className="text-[13.5px] text-ink-dim mt-0.5">
-                    {item.genres.join(' · ')} · {item.totalUnits} {stats.unitLabel}
+                    {[
+                      cleanDisplayGenres(item.genres).join(' · '),
+                      `${item.totalUnits} ${stats.unitLabel}`,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
                   </p>
                 </div>
                 <RatingControl

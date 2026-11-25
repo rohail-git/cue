@@ -15,6 +15,7 @@ export interface BingersMediaRowProps {
   isHistory?: boolean;
   isFlashing?: boolean;
   flashLabel?: string;
+  secondaryAction?: React.ReactNode;
   actionContent?: React.ReactNode;
   actionAriaLabel?: string;
   actionDisabled?: boolean;
@@ -37,6 +38,7 @@ export function BingersMediaRow({
   isHistory = false,
   isFlashing = false,
   flashLabel = 'Done',
+  secondaryAction,
   actionContent,
   actionAriaLabel,
   actionDisabled = false,
@@ -135,7 +137,12 @@ export function BingersMediaRow({
         </div>
 
         {/* Right action area */}
-        <div className="shrink-0 flex items-center gap-2">
+        <div className="shrink-0 flex items-center gap-1.5">
+          {secondaryAction && !isHistory && (
+            <div onClick={(e) => e.stopPropagation()} className="flex items-center">
+              {secondaryAction}
+            </div>
+          )}
           {isHistory ? (
             <Check className="w-[18px] h-[18px] text-brand opacity-90" strokeWidth={2.5} />
           ) : actionContent ? (

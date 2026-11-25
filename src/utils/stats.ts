@@ -1,6 +1,8 @@
 import type {
   CueStoreState,
   Episode,
+  GameItem,
+  GameProgress,
   MediaDomain,
   ReadItem,
   ReadProgress,
@@ -191,6 +193,135 @@ export function formatWatchTime(totalMinutes: number): string {
   return totalHours > 0 ? `${totalHours}h ${remMins}m` : `${remMins}m`;
 }
 
+export function formatReadStatSummary(
+  readChaptersCount: number,
+  readIssuesCount: number,
+  readFinishedCount: number
+): { primary: string; secondary: string } {
+  if (readChaptersCount === 0 && readIssuesCount > 0) {
+    return {
+      primary: `${readIssuesCount.toLocaleString()} ${readIssuesCount === 1 ? 'issue' : 'issues'}`,
+      secondary: `${readFinishedCount} finished`,
+    };
+  }
+  if (readIssuesCount === 0 && readChaptersCount > 0) {
+    return {
+      primary: `${readChaptersCount.toLocaleString()} ${readChaptersCount === 1 ? 'chapter' : 'chapters'}`,
+      secondary: `${readFinishedCount} finished`,
+    };
+  }
+  if (readChaptersCount > 0 && readIssuesCount > 0) {
+    return {
+      primary: `${readChaptersCount.toLocaleString()} chapters`,
+      secondary: `${readIssuesCount.toLocaleString()} issues · ${readFinishedCount} finished`,
+    };
+  }
+  return {
+    primary: '0 chapters',
+    secondary: `${readFinishedCount} finished`,
+  };
+}
+
+export function formatGameMeta(
+  game: Pick<GameItem, 'developer' | 'platforms'>,
+  progress?: Pick<GameProgress, 'platform' | 'hoursPlayed'>,
+  opts?: { includeHours?: boolean; includeDeveloper?: boolean }
+): string {
+  const platform = progress?.platform || game.platforms[0] || 'PC';
+  const hours = progress?.hoursPlayed || 0;
+  const dev = (game.developer || '').trim();
+
+  let base: string = platform;
+  if (/^pc\s*[·|/-]\s*steam$/i.test(dev) && platform === 'PC') {
+    base = 'PC (Steam)';
+  } else if (dev && dev.toLowerCase().includes(platform.toLowerCase())) {
+    base = dev;
+  } else if (
+    dev &&
+    dev !== 'Studio' &&
+    dev !== 'Video Game' &&
+    opts?.includeDeveloper !== false
+  ) {
+    base = `${platform} · ${dev}`;
+  }
+
+  if (opts?.includeHours !== false && hours > 0) {
+    return `${base} · ${hours}h`;
+  }
+  return base;
+}
+
+const RAW_GENRE_BLOCKLIST = new Set([
+  'video game',
+  'video games',
+  'feature film',
+  'series',
+  'tv',
+  'movie',
+  'anime',
+  'manga',
+  'comics',
+  'comic',
+  'novel',
+  'light novel',
+  'fiction',
+  'graphic novels',
+  'graphic novel',
+  'comic books, strips',
+  'comic books, strips, etc.',
+  'cartoons and comics',
+  'books',
+  'studio',
+  'general',
+]);
+
+const RAW_GENRE_ALIAS_MAP: Record<string, string> = {
+  'science fiction': 'Sci-Fi',
+  'science-fiction': 'Sci-Fi',
+  'sci-fi & fantasy': 'Sci-Fi',
+  scifi: 'Sci-Fi',
+  'open-world action': 'Action',
+  'action & adventure': 'Action',
+  'action-adventure': 'Action',
+  superheroes: 'Superhero',
+  superhero: 'Superhero',
+  'role-playing': 'RPG',
+  'role playing': 'RPG',
+  rpg: 'RPG',
+  'mystery & thriller': 'Thriller',
+  'comedy-drama': 'Comedy',
+};
+
+export function normalizeGenreLabel(raw: string): string | null {
+  const trimmed = (raw || '').replace(/\s+/g, ' ').trim();
+  if (!trimmed || trimmed.length > 28) return null;
+  if (trimmed.split(',').length >= 3) return null;
+  const lower = trimmed.toLowerCase();
+  if (RAW_GENRE_BLOCKLIST.has(lower)) return null;
+  if (
+    /fictitious character|comic strip|comic books|graphic novel|juvenile|translations|pictorial works|open library|history and criticism|\(.*character\)/i.test(
+      trimmed
+    )
+  ) {
+    return null;
+  }
+  return RAW_GENRE_ALIAS_MAP[lower] || trimmed;
+}
+
+export function cleanDisplayGenres(genres: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const g of genres || []) {
+    const normalized = normalizeGenreLabel(g);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+  }
+  return out;
+}
+
 export interface AllMediaAnalytics {
   watchTimeLabel: string;
   watchMinutes: number;
@@ -231,7 +362,7 @@ export function computeAllMediaStats(state: CueStoreState): AllMediaAnalytics {
 
   const genreMap = new Map<string, { score: number; count: number }>();
   const bumpGenre = (genres: string[], weight: number) => {
-    for (const g of genres) {
+    for (const g of cleanDisplayGenres(genres)) {
       const prev = genreMap.get(g) || { score: 0, count: 0 };
       genreMap.set(g, { score: prev.score + weight, count: prev.count + 1 });
     }

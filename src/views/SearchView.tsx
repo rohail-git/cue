@@ -29,6 +29,23 @@ import {
 } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import { resolveComicEditionCover } from '../utils/editions';
+import { cleanDisplayGenres } from '../utils/stats';
+
+type TrendingSortMode = 'hot' | 'rating' | 'newest';
+
+function sortTrendingItems(items: LiveSearchResult[], sortMode: TrendingSortMode): LiveSearchResult[] {
+  if (sortMode === 'hot') return items;
+  return [...items].sort((a, b) => {
+    if (sortMode === 'rating') {
+      const ra = a.domain === 'watch' ? a.rating : a.rating * 2;
+      const rb = b.domain === 'watch' ? b.rating : b.rating * 2;
+      if (rb !== ra) return rb - ra;
+      return b.year - a.year;
+    }
+    if (b.year !== a.year) return b.year - a.year;
+    return b.rating - a.rating;
+  });
+}
 
 interface FilterPillConfig {
   id: SearchMediaFilter;
@@ -115,7 +132,11 @@ export function SearchView() {
   >({});
   const [loadingCategory, setLoadingCategory] = useState(false);
   const [allColumnLimit, setAllColumnLimit] = useState(9);
-  const [categoryLimit, setCategoryLimit] = useState(12);
+  const [categoryLimits, setCategoryLimits] = useState<Partial<Record<SearchMediaFilter, number>>>(
+    {}
+  );
+  const [trendingSort, setTrendingSort] = useState<TrendingSortMode>('hot');
+  const activeCategoryLimit = categoryLimits[filter] ?? 12;
 
   useEffect(() => {
     let cancelled = false;
@@ -136,7 +157,6 @@ export function SearchView() {
   }, [state.settings.tmdbApiKey]);
 
   useEffect(() => {
-    setCategoryLimit(12);
     if (filter === 'all' || query.trim().length >= 2) {
       setLoadingCategory(false);
       return;
@@ -353,15 +373,51 @@ export function SearchView() {
   const trendingForActiveFilter = useMemo(() => {
     if (filter === 'all') return [];
     const dedicated = categoryTrending[filter];
-    if (dedicated) return dedicated;
-    if (!trending) return [];
-    const pool = [...trending.watch, ...trending.read, ...trending.play];
-    return pool.filter((item) => item.mediaType === filter);
-  }, [categoryTrending, trending, filter]);
+    const base = dedicated
+      ? dedicated
+      : trending
+        ? [...trending.watch, ...trending.read, ...trending.play].filter(
+            (item) => item.mediaType === filter
+          )
+        : [];
+    return sortTrendingItems(base, trendingSort);
+  }, [categoryTrending, trending, filter, trendingSort]);
+
+  const sortedAllTrending = useMemo(() => {
+    if (!trending) return null;
+    return {
+      watch: sortTrendingItems(trending.watch, trendingSort),
+      read: sortTrendingItems(trending.read, trendingSort),
+      play: sortTrendingItems(trending.play, trendingSort),
+    };
+  }, [trending, trendingSort]);
 
   const visibleCategoryTrending = useMemo(
-    () => trendingForActiveFilter.slice(0, categoryLimit),
-    [trendingForActiveFilter, categoryLimit]
+    () => trendingForActiveFilter.slice(0, activeCategoryLimit),
+    [trendingForActiveFilter, activeCategoryLimit]
+  );
+
+  const renderTrendingSortPills = () => (
+    <div className="flex items-center gap-1 rounded-full bg-surface border border-white/10 p-0.5 shrink-0">
+      {(
+        [
+          { id: 'hot', label: 'Hot' },
+          { id: 'rating', label: 'Top rated' },
+          { id: 'newest', label: 'Newest' },
+        ] as const
+      ).map((opt) => (
+        <button
+          key={opt.id}
+          type="button"
+          onClick={() => setTrendingSort(opt.id)}
+          className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold transition-colors ${
+            trendingSort === opt.id ? 'bg-white/14 text-ink' : 'text-ink-dim hover:text-ink'
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
   );
 
   const isLiveItemInStore = (item: LiveSearchResult): boolean =>
@@ -450,7 +506,7 @@ export function SearchView() {
             )}
           </button>
         </div>
-        <p className="mt-1.5 text-xs sm:text-[13px] font-semibold text-ink line-clamp-2 leading-snug">
+        <p className="mt-1 text-xs sm:text-[13px] font-semibold text-ink line-clamp-2 leading-tight">
           {item.title}
         </p>
         <p className="text-[10.5px] sm:text-[11px] text-ink-dim tabular-nums">{item.year}</p>
@@ -511,7 +567,7 @@ export function SearchView() {
             inputMode="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search TV, movies, anime, manga, comics, novels, or games…"
+            placeholder="Search titles, shows, games…"
             aria-label="Search all media"
             className="w-full h-12 rounded-2xl bg-surface border border-white/10 pl-11 pr-20 text-[15px] text-ink placeholder:text-ink-faint outline-none focus:border-brand transition-colors"
           />
@@ -614,9 +670,16 @@ export function SearchView() {
                           </span>
                         </p>
                       </div>
-                      {item.genres.length > 0 && (
-                        <p className="text-xs text-ink-faint truncate mt-1">{item.genres.join(' · ')}</p>
-                      )}
+                      {(() => {
+                        const cleanG = cleanDisplayGenres(item.genres);
+                        return (
+                          cleanG.length > 0 && (
+                            <p className="text-xs text-ink-faint truncate mt-1">
+                              {cleanG.slice(0, 3).join(' · ')}
+                            </p>
+                          )
+                        );
+                      })()}
                     </div>
                     <div className="pr-3 shrink-0 flex items-center">
                       <button
@@ -704,7 +767,10 @@ export function SearchView() {
                             {item.mediaType === 'tv' ? 'Show' : item.mediaType}
                           </span>
                           <p className="text-xs text-ink-dim truncate">
-                            {item.year} · {item.subtitle || item.genres.slice(0, 2).join(' · ')}
+                            {item.year} ·{' '}
+                            {item.subtitle ||
+                              cleanDisplayGenres(item.genres).slice(0, 2).join(' · ') ||
+                              item.mediaType}
                           </p>
                         </div>
                         {item.overview && (
@@ -778,8 +844,8 @@ export function SearchView() {
           )}
 
           {query.trim().length < 2 && visibleCategoryTrending.length > 0 && (
-            <section className="space-y-4">
-              <div className="flex items-center justify-between gap-2">
+            <section className="space-y-3.5">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2">
                   <Flame className="w-5 h-5 text-brand" />
                   <h2 className="font-display font-bold text-lg text-ink">
@@ -788,16 +854,21 @@ export function SearchView() {
                     {trendingForActiveFilter.length})
                   </h2>
                 </div>
-                <span className="text-xs text-ink-dim">Last 6 months</span>
+                {renderTrendingSortPills()}
               </div>
-              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2.5 sm:gap-4">
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 sm:gap-3.5">
                 {visibleCategoryTrending.map(renderTrendingPosterCard)}
               </div>
               {trendingForActiveFilter.length > visibleCategoryTrending.length && (
                 <div className="flex justify-center pt-1">
                   <button
                     type="button"
-                    onClick={() => setCategoryLimit((n) => n + 12)}
+                    onClick={() =>
+                      setCategoryLimits((prev) => ({
+                        ...prev,
+                        [filter]: (prev[filter] ?? 12) + 12,
+                      }))
+                    }
                     className="px-5 py-2 rounded-full bg-surface border border-white/12 text-xs font-semibold text-ink hover:border-white/25 transition-colors"
                   >
                     Load more ({trendingForActiveFilter.length - visibleCategoryTrending.length}{' '}
@@ -823,23 +894,25 @@ export function SearchView() {
             )}
         </div>
       ) : (
-        <div className="space-y-6 animate-fade-in">
-          <div className="flex items-center justify-between gap-2">
+        <div className="space-y-4 animate-fade-in">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2">
               <Flame className="w-5 h-5 text-brand" />
-              <h2 className="font-display font-bold text-[20px] text-ink">Trending now</h2>
+              <h2 className="font-display font-bold text-[19px] sm:text-[20px] text-ink">
+                Trending now
+              </h2>
             </div>
-            <span className="text-xs text-ink-dim">Last 6 months · Watch · Read · Play</span>
+            {renderTrendingSortPills()}
           </div>
 
-          <div className="grid grid-cols-3 gap-2.5 sm:gap-4 items-start">
+          <div className="grid grid-cols-3 gap-2 sm:gap-3.5 items-start">
             {/* Column 1: Watch */}
             <section aria-label="Trending to Watch" className="min-w-0">
-              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-watch border-b border-watch/25 pb-1.5 mb-2.5">
+              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-watch border-b border-watch/25 pb-1.5 mb-2">
                 <Tv className="w-3.5 h-3.5 shrink-0" />
                 <span>Watch</span>
               </div>
-              <div className="space-y-3 sm:space-y-4">
+              <div className="space-y-2.5 sm:space-y-3.5">
                 {loadingTrending && !trending
                   ? Array.from({ length: 4 }).map((_, i) => (
                       <div key={`w-skel-${i}`} className="animate-pulse">
@@ -847,17 +920,19 @@ export function SearchView() {
                         <div className="h-3 w-3/4 rounded bg-surface mt-2" />
                       </div>
                     ))
-                  : (trending?.watch || []).slice(0, allColumnLimit).map(renderTrendingPosterCard)}
+                  : (sortedAllTrending?.watch || [])
+                      .slice(0, allColumnLimit)
+                      .map(renderTrendingPosterCard)}
               </div>
             </section>
 
             {/* Column 2: Read */}
             <section aria-label="Trending to Read" className="min-w-0">
-              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-read border-b border-read/25 pb-1.5 mb-2.5">
+              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-read border-b border-read/25 pb-1.5 mb-2">
                 <BookOpen className="w-3.5 h-3.5 shrink-0" />
                 <span>Read</span>
               </div>
-              <div className="space-y-3 sm:space-y-4">
+              <div className="space-y-2.5 sm:space-y-3.5">
                 {loadingTrending && !trending
                   ? Array.from({ length: 4 }).map((_, i) => (
                       <div key={`r-skel-${i}`} className="animate-pulse">
@@ -865,17 +940,19 @@ export function SearchView() {
                         <div className="h-3 w-3/4 rounded bg-surface mt-2" />
                       </div>
                     ))
-                  : (trending?.read || []).slice(0, allColumnLimit).map(renderTrendingPosterCard)}
+                  : (sortedAllTrending?.read || [])
+                      .slice(0, allColumnLimit)
+                      .map(renderTrendingPosterCard)}
               </div>
             </section>
 
             {/* Column 3: Play */}
             <section aria-label="Trending to Play" className="min-w-0">
-              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-play border-b border-play/25 pb-1.5 mb-2.5">
+              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-play border-b border-play/25 pb-1.5 mb-2">
                 <Gamepad2 className="w-3.5 h-3.5 shrink-0" />
                 <span>Play</span>
               </div>
-              <div className="space-y-3 sm:space-y-4">
+              <div className="space-y-2.5 sm:space-y-3.5">
                 {loadingTrending && !trending
                   ? Array.from({ length: 4 }).map((_, i) => (
                       <div key={`p-skel-${i}`} className="animate-pulse">
@@ -883,7 +960,9 @@ export function SearchView() {
                         <div className="h-3 w-3/4 rounded bg-surface mt-2" />
                       </div>
                     ))
-                  : (trending?.play || []).slice(0, allColumnLimit).map(renderTrendingPosterCard)}
+                  : (sortedAllTrending?.play || [])
+                      .slice(0, allColumnLimit)
+                      .map(renderTrendingPosterCard)}
               </div>
             </section>
           </div>

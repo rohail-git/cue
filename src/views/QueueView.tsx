@@ -19,7 +19,7 @@ import {
   findMovieCollection,
 } from '../utils/containers';
 import { getComicEditionLabel, resolveComicEditionCover } from '../utils/editions';
-import { getReadStats, getShowStats, pad2 } from '../utils/stats';
+import { formatGameMeta, getReadStats, getShowStats, pad2 } from '../utils/stats';
 
 interface UnifiedQueueRow {
   rowKey: string;
@@ -207,7 +207,7 @@ export function QueueView() {
       for (const id of state.gameOrder) {
         const game = state.games[id];
         const prog = state.gameProgress[id];
-        if (!game || !prog?.bookmarked || prog.status === 'completed') continue;
+        if (!game || !prog?.bookmarked || prog.status === 'completed' || prog.status === 'dropped') continue;
         const totalChapters = game.totalChapters || 0;
         const hasChapters = totalChapters > 0;
         const unit = game.chapterUnit || 'chapters';
@@ -226,10 +226,12 @@ export function QueueView() {
           posterUrl: game.coverUrl,
           primaryLine: hasChapters
             ? `${unitCode} · ${currentChap}/${totalChapters} ${unit}`
-            : `${prog.hoursPlayed || 0}h played · ${prog.completionPct || 0}%`,
-          secondaryLine: hasChapters
-            ? `${prog.platform || game.platforms[0]} · ${prog.hoursPlayed || 0}h · ${game.developer}`
-            : `${prog.platform || game.platforms[0]} · ${game.developer}`,
+            : (prog.hoursPlayed || 0) > 0
+              ? `${prog.hoursPlayed}h played · ${prog.completionPct || 0}%`
+              : (prog.completionPct || 0) > 0
+                ? `${prog.completionPct}% complete`
+                : 'Queued · Not started',
+          secondaryLine: formatGameMeta(game, prog, { includeHours: hasChapters }),
           progressRatio: hasChapters
             ? Math.min(1, currentChap / totalChapters)
             : (prog.completionPct || 0) / 100,

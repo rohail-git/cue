@@ -1,12 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Gamepad2, Plus, Search, Trophy, Upload } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Gamepad2,
+  MoreHorizontal,
+  Plus,
+  Search,
+  Trophy,
+  Upload,
+  X,
+} from 'lucide-react';
 import { BingersMediaRow } from '../components/BingersMediaRow';
 import { FilterSortSheet } from '../components/FilterSortSheet';
 import { MediaImage } from '../components/MediaImage';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
 import { useCueStore } from '../store/useCueStore';
-import type { GameChapterUnit, GameItem, PlayFilter } from '../types';
-import { pad2 } from '../utils/stats';
+import type { GameChapterUnit, GameItem, GameWatchStatus, PlayFilter } from '../types';
+import { formatGameMeta, pad2 } from '../utils/stats';
 
 function formatGameUnitShort(chapter: number, unit: GameChapterUnit = 'chapters'): string {
   if (unit === 'acts') return `Act ${chapter}`;
@@ -24,12 +35,15 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
     setFilterSheetOpen,
     setImportModalOpen,
     updateSettings,
+    updateGameProgress,
     advanceGameChapter,
     logGameSession,
   } = useCueStore();
 
   const [justLogged, setJustLogged] = useState<Record<string, boolean>>({});
   const [showCompleted, setShowCompleted] = useState(false);
+  const [showDropped, setShowDropped] = useState(false);
+  const [statusSheetGameId, setStatusSheetGameId] = useState<string | null>(null);
   const timersRef = useRef<number[]>([]);
 
   useEffect(() => {
@@ -64,7 +78,7 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
     [state.history]
   );
 
-  const { playingList, backlogList, completedList } = useMemo(() => {
+  const { playingList, backlogList, completedList, droppedList } = useMemo(() => {
     const sortMode = state.settings.sortBy;
     const all = state.gameOrder
       .map((id) => state.games[id])
@@ -98,6 +112,7 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
       playingList: sortGames(all.filter((g) => state.gameProgress[g.id]?.status === 'playing')),
       backlogList: sortGames(all.filter((g) => state.gameProgress[g.id]?.status === 'backlog')),
       completedList: sortGames(all.filter((g) => state.gameProgress[g.id]?.status === 'completed')),
+      droppedList: sortGames(all.filter((g) => state.gameProgress[g.id]?.status === 'dropped')),
     };
   }, [state.gameOrder, state.games, state.gameProgress, state.settings.sortBy, filter]);
 
@@ -163,10 +178,10 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
             )}
           </div>
           <p className="mt-2 text-sm font-semibold text-ink truncate">{game.title}</p>
-          <p className="text-xs text-ink-dim tabular-nums">
+          <p className="text-xs text-ink-dim truncate tabular-nums">
             {hasChapters
               ? `${unitCode} · ${currentChap}/${totalChapters} ${unit}`
-              : `${prog?.hoursPlayed || 0}h · ${prog?.platform || game.platforms[0]}`}
+              : formatGameMeta(game, prog, { includeDeveloper: false })}
           </p>
         </div>
       );
@@ -182,15 +197,17 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
         primaryLine={
           hasChapters
             ? isCompleted
-              ? `${totalChapters}/${totalChapters} ${unit} · ${prog?.hoursPlayed || 0}h`
+              ? (prog?.hoursPlayed || 0) > 0
+                ? `${totalChapters}/${totalChapters} ${unit} · ${prog?.hoursPlayed}h`
+                : `${totalChapters}/${totalChapters} ${unit}`
               : `${unitCode} · ${currentChap}/${totalChapters} ${unit}`
-            : `${prog?.hoursPlayed || 0}h played · ${prog?.completionPct || 0}%`
+            : (prog?.hoursPlayed || 0) > 0
+              ? `${prog?.hoursPlayed}h played · ${prog?.completionPct || 0}%`
+              : (prog?.completionPct || 0) > 0
+                ? `${prog?.completionPct}% complete`
+                : 'Backlog · Not started'
         }
-        secondaryLine={
-          hasChapters
-            ? `${prog?.platform || game.platforms[0]} · ${prog?.hoursPlayed || 0}h · ${game.developer}`
-            : `${prog?.platform || game.platforms[0]} · ${game.developer}`
-        }
+        secondaryLine={formatGameMeta(game, prog, { includeHours: hasChapters })}
         progressRatio={
           hasChapters ? Math.min(1, currentChap / totalChapters) : (prog?.completionPct || 0) / 100
         }
@@ -200,6 +217,16 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
         }
         isFlashing={flash}
         flashLabel={hasChapters ? unitCode : 'Logged +1h'}
+        secondaryAction={
+          <button
+            type="button"
+            onClick={() => setStatusSheetGameId(game.id)}
+            aria-label={`Change status for ${game.title}`}
+            className="h-[34px] w-[34px] rounded-full border border-white/10 bg-white/[0.02] flex items-center justify-center text-ink-faint hover:text-ink hover:border-white/25 transition-colors"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
+        }
         actionContent={
           isCompleted ? (
             (prog?.playthroughCount || 1) > 1 ? (
@@ -236,7 +263,13 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
     { id: 'playing', label: 'Playing' },
     { id: 'backlog', label: 'Backlog' },
     { id: 'completed', label: 'Completed' },
+    { id: 'dropped', label: 'Dropped' },
   ];
+
+  const statusSheetGame = statusSheetGameId ? state.games[statusSheetGameId] : undefined;
+  const statusSheetCurrent = statusSheetGameId
+    ? state.gameProgress[statusSheetGameId]?.status || 'backlog'
+    : 'backlog';
 
   const listClass = isPosterLayout
     ? 'grid grid-cols-3 sm:grid-cols-4 gap-3.5'
@@ -327,7 +360,8 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
           <div className="animate-fade-in">
             {playingList.length === 0 &&
               backlogList.length === 0 &&
-              completedList.length === 0 && (
+              completedList.length === 0 &&
+              droppedList.length === 0 && (
                 <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center my-4">
                   <Gamepad2 className="w-8 h-8 text-play mx-auto mb-3 opacity-85" />
                   <h2 className="font-display font-bold text-[20px] text-ink">
@@ -374,21 +408,41 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
             )}
 
             {completedList.length > 0 && (
-              <section>
+              <section className="mb-8">
                 <button
                   type="button"
                   onClick={() => setShowCompleted((v) => !v)}
                   className="flex items-center gap-2 font-display font-bold text-[19px] text-ink-dim hover:text-ink mb-3.5 transition-colors"
                 >
                   <span>Completed ({completedList.length})</span>
-                  {showCompleted ? (
+                  {showCompleted || filter === 'completed' ? (
                     <ChevronDown className="w-4 h-4" />
                   ) : (
                     <ChevronRight className="w-4 h-4" />
                   )}
                 </button>
-                {showCompleted && (
+                {(showCompleted || filter === 'completed') && (
                   <div className={listClass}>{completedList.map(renderGameCard)}</div>
+                )}
+              </section>
+            )}
+
+            {droppedList.length > 0 && (
+              <section>
+                <button
+                  type="button"
+                  onClick={() => setShowDropped((v) => !v)}
+                  className="flex items-center gap-2 font-display font-bold text-[19px] text-ink-dim hover:text-ink mb-3.5 transition-colors"
+                >
+                  <span>Dropped ({droppedList.length})</span>
+                  {showDropped || filter === 'dropped' ? (
+                    <ChevronDown className="w-4 h-4" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4" />
+                  )}
+                </button>
+                {(showDropped || filter === 'dropped') && (
+                  <div className={listClass}>{droppedList.map(renderGameCard)}</div>
                 )}
               </section>
             )}
@@ -397,6 +451,71 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
       </ScrollUpHistoryFeed>
 
       <FilterSortSheet domain="play" />
+
+      {statusSheetGame && (
+        <div
+          className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/65 backdrop-blur-sm p-0 md:p-4 animate-fade-in"
+          onClick={() => setStatusSheetGameId(null)}
+        >
+          <div
+            className="w-full md:max-w-sm bg-surface border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 pb-8 md:pb-5 shadow-2xl animate-sheet-up space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-play">
+                  Game status
+                </p>
+                <h3 className="font-display font-bold text-base text-ink truncate">
+                  {statusSheetGame.title}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStatusSheetGameId(null)}
+                aria-label="Close status menu"
+                className="h-8 w-8 rounded-full bg-white/8 flex items-center justify-center text-ink-dim hover:text-ink shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              {(
+                [
+                  { id: 'playing', label: 'Playing', hint: 'Currently in active rotation' },
+                  { id: 'backlog', label: 'Backlog', hint: 'Saved for later' },
+                  { id: 'completed', label: 'Completed', hint: 'Finished main story' },
+                  { id: 'dropped', label: 'Dropped', hint: 'Shelved for now' },
+                ] as Array<{ id: GameWatchStatus; label: string; hint: string }>
+              ).map((opt) => {
+                const active = statusSheetCurrent === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => {
+                      updateGameProgress(statusSheetGame.id, { status: opt.id });
+                      setStatusSheetGameId(null);
+                    }}
+                    className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl border text-left transition-colors ${
+                      active
+                        ? 'bg-play/16 border-play/50 text-ink'
+                        : 'bg-background border-white/[0.06] text-ink-dim hover:text-ink hover:bg-surface-raised'
+                    }`}
+                  >
+                    <div>
+                      <p className="text-sm font-semibold">{opt.label}</p>
+                      <p className="text-[11px] text-ink-faint">{opt.hint}</p>
+                    </div>
+                    {active && <Check className="w-4 h-4 text-play shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

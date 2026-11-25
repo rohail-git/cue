@@ -1,5 +1,17 @@
 import { useMemo, useState } from 'react';
-import { Bell, ChevronRight, Lock, Pin, Plus, QrCode, Settings, Trash2, X } from 'lucide-react';
+import {
+  Bell,
+  ChevronRight,
+  Lock,
+  PenLine,
+  Pin,
+  Plus,
+  QrCode,
+  Settings,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { DeviceSyncModal } from '../components/DeviceSyncModal';
 import { MediaImage } from '../components/MediaImage';
 import { MOOD_OPTIONS } from '../components/PersonalNotesSection';
@@ -7,7 +19,14 @@ import { useCueStore } from '../store/useCueStore';
 import type { GameItem, MediaDomain, Movie, PersonalMood, ReadItem, Show } from '../types';
 import { evaluateCustomListProgress } from '../utils/containers';
 import { resolveComicEditionCover } from '../utils/editions';
-import { computeAllMediaStats, formatRelativeTime, getReadStats, getShowStats } from '../utils/stats';
+import {
+  computeAllMediaStats,
+  formatGameMeta,
+  formatReadStatSummary,
+  formatRelativeTime,
+  getReadStats,
+  getShowStats,
+} from '../utils/stats';
 
 export function JournalView() {
   const {
@@ -36,7 +55,89 @@ export function JournalView() {
   const [listDesc, setListDesc] = useState('');
 
   const analytics = useMemo(() => computeAllMediaStats(state), [state]);
+  const readSummary = useMemo(
+    () =>
+      formatReadStatSummary(
+        analytics.readChaptersCount,
+        analytics.readIssuesCount,
+        analytics.readFinishedCount
+      ),
+    [analytics.readChaptersCount, analytics.readIssuesCount, analytics.readFinishedCount]
+  );
   const unreadCount = state.notifications.filter((n) => !n.read).length;
+
+  const diaryPrompts = useMemo(() => {
+    const prompts: Array<{
+      key: string;
+      domain: MediaDomain;
+      mediaId: string;
+      title: string;
+      contextLabel?: string;
+    }> = [];
+    const seen = new Set<string>();
+    for (const h of state.history || []) {
+      const k = `${h.domain}:${h.mediaId}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      prompts.push({
+        key: k,
+        domain: h.domain,
+        mediaId: h.mediaId,
+        title: h.title,
+        contextLabel: h.codeLabel,
+      });
+      if (prompts.length >= 3) return prompts;
+    }
+    for (const id of state.showOrder) {
+      const s = state.shows[id];
+      const prog = state.showProgress[id];
+      if (!s || !prog?.bookmarked) continue;
+      const k = `watch:${id}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      prompts.push({ key: k, domain: 'watch', mediaId: id, title: s.title });
+      if (prompts.length >= 3) return prompts;
+    }
+    for (const id of state.readOrder) {
+      const r = state.readItems[id];
+      const prog = state.readProgress[id];
+      if (!r || !prog?.bookmarked) continue;
+      const k = `read:${id}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      prompts.push({ key: k, domain: 'read', mediaId: id, title: r.title });
+      if (prompts.length >= 3) return prompts;
+    }
+    for (const id of state.gameOrder) {
+      const g = state.games[id];
+      const prog = state.gameProgress[id];
+      if (!g || !prog?.bookmarked) continue;
+      const k = `play:${id}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      prompts.push({ key: k, domain: 'play', mediaId: id, title: g.title });
+      if (prompts.length >= 3) return prompts;
+    }
+    return prompts;
+  }, [
+    state.history,
+    state.showOrder,
+    state.shows,
+    state.showProgress,
+    state.readOrder,
+    state.readItems,
+    state.readProgress,
+    state.gameOrder,
+    state.games,
+    state.gameProgress,
+  ]);
+
+  const openComposeWithPrompt = (domain: MediaDomain, mediaId: string, contextLabel?: string) => {
+    setDraftDomain(domain);
+    setDraftMediaId(mediaId);
+    setDraftContext(contextLabel || '');
+    setComposeOpen(true);
+  };
 
   const watchShelf = useMemo(() => {
     const items: Array<{ kind: 'show' | 'movie'; id: string; title: string; year: number; poster: string; ratio?: number }> = [];
@@ -255,10 +356,10 @@ export function JournalView() {
               READ
             </p>
             <p className="font-display font-bold text-[24px] text-ink mt-2 tabular-nums leading-none">
-              {analytics.readChaptersCount} ch
+              {readSummary.primary}
             </p>
             <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">
-              {analytics.readIssuesCount} iss · {analytics.readFinishedCount} finished
+              {readSummary.secondary}
             </p>
           </button>
 
@@ -333,11 +434,31 @@ export function JournalView() {
 
           <div className="space-y-2.5">
             {visibleEntries.length === 0 ? (
-              <div className="rounded-[20px] bg-surface border border-white/[0.05] p-6 text-center">
-                <p className="text-sm font-semibold text-ink">No diary notes yet</p>
-                <p className="text-xs text-ink-dim mt-1">
-                  Log private reflections as you watch, read, or play titles.
-                </p>
+              <div className="rounded-[20px] bg-surface border border-white/[0.05] p-5 text-center space-y-3">
+                <div>
+                  <p className="text-sm font-semibold text-ink">No diary notes yet</p>
+                  <p className="text-xs text-ink-dim mt-1">
+                    Log private reflections as you watch, read, or play titles.
+                  </p>
+                </div>
+                {diaryPrompts.length > 0 && (
+                  <div className="flex items-center justify-center gap-2 flex-wrap pt-1">
+                    {diaryPrompts.map((p) => (
+                      <button
+                        key={p.key}
+                        type="button"
+                        onClick={() => openComposeWithPrompt(p.domain, p.mediaId, p.contextLabel)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-background border border-white/10 hover:border-brand/50 text-xs font-medium text-ink transition-colors max-w-[230px]"
+                      >
+                        <PenLine className="w-3 h-3 text-brand shrink-0" />
+                        <span className="truncate">
+                          Note on {p.title}
+                          {p.contextLabel ? ` (${p.contextLabel})` : ''}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             ) : (
               visibleEntries.map((entry) => {
@@ -458,10 +579,10 @@ export function JournalView() {
                       </div>
                     )}
                   </div>
-                  <p className="mt-2 text-[13.5px] font-medium text-ink truncate leading-tight">
+                  <p className="mt-2 text-[13px] font-medium text-ink line-clamp-2 leading-snug">
                     {item.title}
                   </p>
-                  <p className="text-[12px] text-ink-dim tabular-nums">{item.year}</p>
+                  <p className="text-[12px] text-ink-dim tabular-nums mt-0.5">{item.year}</p>
                 </button>
               ))}
             </div>
@@ -511,10 +632,10 @@ export function JournalView() {
                         </div>
                       )}
                     </div>
-                    <p className="mt-2 text-[13.5px] font-medium text-ink truncate leading-tight">
+                    <p className="mt-2 text-[13px] font-medium text-ink line-clamp-2 leading-snug">
                       {item.title}
                     </p>
-                    <p className="text-[12px] text-ink-dim tabular-nums">{item.creator}</p>
+                    <p className="text-[12px] text-ink-dim truncate tabular-nums mt-0.5">{item.creator}</p>
                   </button>
                 );
               })}
@@ -561,11 +682,11 @@ export function JournalView() {
                         </div>
                       )}
                     </div>
-                    <p className="mt-2 text-[13.5px] font-medium text-ink truncate leading-tight">
+                    <p className="mt-2 text-[13px] font-medium text-ink line-clamp-2 leading-snug">
                       {game.title}
                     </p>
-                    <p className="text-[12px] text-ink-dim tabular-nums">
-                      {prog?.hoursPlayed || 0}h · {prog?.platform || game.platforms[0]}
+                    <p className="text-[12px] text-ink-dim truncate tabular-nums mt-0.5">
+                      {formatGameMeta(game, prog, { includeDeveloper: false })}
                     </p>
                   </button>
                 );
@@ -589,11 +710,30 @@ export function JournalView() {
           </div>
 
           {state.lists.length === 0 ? (
-            <div className="rounded-[20px] bg-surface border border-white/[0.05] p-6 text-center">
-              <p className="text-sm font-semibold text-ink">No custom lists yet</p>
-              <p className="text-xs text-ink-dim mt-1">
-                Group favorite shows, comics, novels, or games into custom collections.
-              </p>
+            <div className="rounded-[20px] bg-surface border border-white/[0.05] p-5 text-center space-y-3">
+              <div>
+                <p className="text-sm font-semibold text-ink">No custom lists yet</p>
+                <p className="text-xs text-ink-dim mt-1">
+                  Start from a quick collection template or create your own shelf.
+                </p>
+              </div>
+              <div className="flex items-center justify-center gap-2 flex-wrap pt-0.5">
+                {[
+                  { name: 'Favorites of 2026', desc: 'Standout releases across Watch, Read & Play' },
+                  { name: 'Weekend Backlog', desc: 'Short picks ready for the next free weekend' },
+                  { name: 'All-Time Classics', desc: 'Must-revisit favorites in any medium' },
+                ].map((tpl) => (
+                  <button
+                    key={tpl.name}
+                    type="button"
+                    onClick={() => createCustomList(tpl.name, tpl.desc)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-background border border-white/10 hover:border-brand/50 text-xs font-medium text-ink transition-colors"
+                  >
+                    <Sparkles className="w-3 h-3 text-brand shrink-0" />
+                    <span>{tpl.name}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

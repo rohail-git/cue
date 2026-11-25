@@ -19,6 +19,7 @@ import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode } from '../types';
 import { evaluateMovieCollectionProgress, findMovieCollection } from '../utils/containers';
 import { formatRating } from '../utils/ratings';
+import { cleanDisplayGenres } from '../utils/stats';
 
 const sessionDetailModeByMovieId = new Map<string, DetailCardMode>();
 
@@ -227,9 +228,9 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                   </div>
                 )}
 
-                {movie.genres.length > 0 && (
+                {cleanDisplayGenres(movie.genres).length > 0 && (
                   <p className="text-[12.5px] text-ink-faint mt-1.5">
-                    {movie.genres.slice(0, 3).join(' · ')}
+                    {cleanDisplayGenres(movie.genres).slice(0, 3).join(' · ')}
                   </p>
                 )}
 
@@ -418,7 +419,11 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <h2 className="font-semibold text-[16px] text-ink">Movie info</h2>
-                    <p className="text-[13.5px] text-ink-dim mt-0.5">{movie.genres.join(' · ')}</p>
+                    {cleanDisplayGenres(movie.genres).length > 0 && (
+                      <p className="text-[13.5px] text-ink-dim mt-0.5">
+                        {cleanDisplayGenres(movie.genres).join(' · ')}
+                      </p>
+                    )}
                   </div>
                   <RatingControl
                     value={progress?.rating}
