@@ -14,7 +14,7 @@ import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
-import { RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
+import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode } from '../types';
 import { evaluateMovieCollectionProgress, findMovieCollection } from '../utils/containers';
@@ -253,6 +253,15 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                     </span>
                   )}
                 </div>
+              </section>
+
+              <section className="pt-4 pb-2">
+                <HeroRatingCard
+                  value={progress?.rating}
+                  onChange={(r) => rateMovie(movie.id, r)}
+                  promptLabel="Rate this movie"
+                  ariaPrefix={`Rate ${movie.title}`}
+                />
               </section>
 
               {movie.cast.length > 0 && (

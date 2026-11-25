@@ -10,6 +10,11 @@ interface RatingControlProps {
   allowClear?: boolean;
 }
 
+function nextStarRating(value: number, star: number): number {
+  if (value === star) return star - 0.5;
+  return star;
+}
+
 export function RatingControl({
   value = 0,
   onChange,
@@ -18,16 +23,6 @@ export function RatingControl({
   allowClear = false,
 }: RatingControlProps) {
   const iconClass = size === 'sm' ? 'w-3.5 h-3.5' : 'w-4 h-4';
-
-  const handleStarClick = (star: number) => {
-    if (value === star) {
-      onChange(star - 0.5);
-    } else if (value === star - 0.5) {
-      onChange(star);
-    } else {
-      onChange(star);
-    }
-  };
 
   return (
     <div className="inline-flex items-center gap-0.5">
@@ -38,7 +33,7 @@ export function RatingControl({
           <button
             key={star}
             type="button"
-            onClick={() => handleStarClick(star)}
+            onClick={() => onChange(nextStarRating(value, star))}
             aria-label={`${labelPrefix} ${star} stars`}
             title="Tap again for half-star"
             className="p-0.5 hover:scale-110 transition-transform relative inline-flex items-center justify-center"
@@ -71,6 +66,81 @@ export function RatingControl({
           <X className="w-3 h-3" />
         </button>
       )}
+    </div>
+  );
+}
+
+interface HeroRatingCardProps {
+  value?: number;
+  onChange: (next: number | undefined) => void;
+  promptLabel?: string;
+  ariaPrefix?: string;
+}
+
+/** Tactile large 5-star rating card with half-star support for Simple detail views. */
+export function HeroRatingCard({
+  value = 0,
+  onChange,
+  promptLabel = 'Rate this title',
+  ariaPrefix = 'Rate',
+}: HeroRatingCardProps) {
+  const rated = typeof value === 'number' && value > 0;
+
+  return (
+    <div className="rounded-[22px] bg-surface border border-white/[0.06] px-4 py-4">
+      <div className="flex items-center justify-between gap-2 mb-2.5">
+        <span className="text-xs font-semibold text-ink-dim">
+          {rated ? 'Your rating' : promptLabel}
+        </span>
+        {rated ? (
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-bold text-brand tabular-nums">
+              {formatRating(value)} / 5
+            </span>
+            <button
+              type="button"
+              onClick={() => onChange(undefined)}
+              aria-label="Clear rating"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/[0.06] text-[11px] font-medium text-ink-dim hover:text-ink transition-colors"
+            >
+              <X className="w-3 h-3" />
+              <span>Clear</span>
+            </button>
+          </div>
+        ) : (
+          <span className="text-[11px] text-ink-faint">Tap again for ½</span>
+        )}
+      </div>
+
+      <div className="grid grid-cols-5 max-w-[290px] sm:max-w-[320px] mx-auto place-items-center">
+        {[1, 2, 3, 4, 5].map((star) => {
+          const full = value >= star;
+          const half = !full && value >= star - 0.5;
+          return (
+            <button
+              key={star}
+              type="button"
+              onClick={() => onChange(nextStarRating(value, star))}
+              aria-label={`${ariaPrefix} ${star} ${star === 1 ? 'star' : 'stars'}`}
+              title="Tap again for half-star"
+              className="p-1 sm:p-1.5 rounded-xl hover:bg-white/[0.04] active:scale-95 transition-transform inline-flex items-center justify-center"
+            >
+              <span className="relative inline-flex w-8 h-8 sm:w-10 sm:h-10">
+                <Star
+                  className={`w-8 h-8 sm:w-10 sm:h-10 ${
+                    full ? 'text-brand fill-brand' : 'text-ink-faint/60'
+                  }`}
+                />
+                {half && (
+                  <span className="absolute inset-y-0 left-0 w-1/2 overflow-hidden pointer-events-none">
+                    <Star className="w-8 h-8 sm:w-10 sm:h-10 text-brand fill-brand" />
+                  </span>
+                )}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

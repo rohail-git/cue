@@ -20,7 +20,7 @@ import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
-import { RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
+import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import { fetchAnimeEpisodeDetails } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode, Episode, Season } from '../types';
@@ -621,6 +621,15 @@ export function ShowDetailView({ showId }: { showId: string }) {
                     </span>
                   )}
                 </div>
+              </section>
+
+              <section className="pt-4 pb-2">
+                <HeroRatingCard
+                  value={progress?.rating}
+                  onChange={(r) => rateShow(show.id, r, 'manual')}
+                  promptLabel={show.mediaType === 'anime' ? 'Rate this anime' : 'Rate this show'}
+                  ariaPrefix={`Rate ${show.title}`}
+                />
               </section>
 
               {/* Simple Accordion Seasons & Bare-Checkmark Episodes */}

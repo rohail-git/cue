@@ -21,7 +21,7 @@ import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
-import { RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
+import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import {
   fetchComicEditionMetadata,
   fetchComicIssueDetails,
@@ -460,6 +460,15 @@ export function ReadDetailView({ readId }: { readId: string }) {
                     </span>
                   )}
                 </div>
+              </section>
+
+              <section className="pt-4 pb-2">
+                <HeroRatingCard
+                  value={progress?.rating}
+                  onChange={(r) => rateReadItem(item.id, r, 'manual')}
+                  promptLabel={`Rate this ${formatLabel.toLowerCase()}`}
+                  ariaPrefix={`Rate ${item.title}`}
+                />
               </section>
 
               {/* Simple Accordion Issue / Chapter Checklist */}

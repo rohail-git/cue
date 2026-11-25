@@ -21,7 +21,7 @@ import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
-import { RatingControl } from '../components/RatingControl';
+import { HeroRatingCard, RatingControl } from '../components/RatingControl';
 import { fetchGameChapterInfo } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode, GameChapterUnit, GamePlatform } from '../types';
@@ -474,6 +474,15 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                     </span>
                   )}
                 </div>
+              </section>
+
+              <section className="pt-4 pb-2">
+                <HeroRatingCard
+                  value={progress?.rating}
+                  onChange={(r) => rateGame(game.id, r)}
+                  promptLabel="Rate this game"
+                  ariaPrefix={`Rate ${game.title}`}
+                />
               </section>
 
               {/* Simple Accordion Story Chapters List */}
