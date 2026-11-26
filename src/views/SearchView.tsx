@@ -1,60 +1,46 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  BookOpen,
   Check,
-  Flame,
-  Gamepad2,
+  ChevronLeft,
+  ChevronRight,
   Globe2,
+  ListPlus,
   Loader2,
   Plus,
   Search,
   Star,
-  Tv,
   X,
 } from 'lucide-react';
 import { MediaImage } from '../components/MediaImage';
+import { getDiscoverCollections, type DiscoverCollection } from '../data/discoverCollections';
 import {
   canonicalReadWorkKey,
-  fetchTrendingByCategory,
-  fetchTrendingByDomain,
+  fetchAllDiscoverRails,
+  fetchDomainDiscoverRails,
   hydrateLiveGameItem,
   hydrateLiveMovie,
   hydrateLiveReadItem,
   hydrateLiveShow,
   normalizeTitleKey,
   searchLiveMedia,
+  type DiscoverRail,
   type LiveSearchResult,
   type SearchMediaFilter,
-  type TrendingByDomain,
 } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import { resolveComicEditionCover } from '../utils/editions';
 import { cleanDisplayGenres } from '../utils/stats';
 
-type TrendingSortMode = 'hot' | 'rating' | 'newest';
+type DiscoverScope = 'all' | 'watch' | 'read' | 'play';
 
-function sortTrendingItems(items: LiveSearchResult[], sortMode: TrendingSortMode): LiveSearchResult[] {
-  if (sortMode === 'hot') return items;
-  return [...items].sort((a, b) => {
-    if (sortMode === 'rating') {
-      const ra = a.domain === 'watch' ? a.rating : a.rating * 2;
-      const rb = b.domain === 'watch' ? b.rating : b.rating * 2;
-      if (rb !== ra) return rb - ra;
-      return b.year - a.year;
-    }
-    if (b.year !== a.year) return b.year - a.year;
-    return b.rating - a.rating;
-  });
-}
-
-interface FilterPillConfig {
-  id: SearchMediaFilter;
+interface DomainPillConfig {
+  id: DiscoverScope;
   label: string;
   activeClass: string;
   idleClass: string;
 }
 
-const SEARCH_FILTER_PILLS: FilterPillConfig[] = [
+const DISCOVER_PILLS: DomainPillConfig[] = [
   {
     id: 'all',
     label: 'All',
@@ -62,48 +48,36 @@ const SEARCH_FILTER_PILLS: FilterPillConfig[] = [
     idleClass: 'bg-surface border-white/25 text-ink hover:border-white/45',
   },
   {
-    id: 'tv',
-    label: 'TV',
+    id: 'watch',
+    label: 'Watch',
     activeClass: 'bg-watch border-watch text-[#0E1A1E]',
     idleClass: 'bg-watch/10 border-watch/30 text-watch hover:bg-watch/18',
   },
   {
-    id: 'movie',
-    label: 'Movies',
-    activeClass: 'bg-watch border-watch text-[#0E1A1E]',
-    idleClass: 'bg-watch/10 border-watch/30 text-watch hover:bg-watch/18',
-  },
-  {
-    id: 'anime',
-    label: 'Anime',
-    activeClass: 'bg-watch border-watch text-[#0E1A1E]',
-    idleClass: 'bg-watch/10 border-watch/30 text-watch hover:bg-watch/18',
-  },
-  {
-    id: 'manga',
-    label: 'Manga',
+    id: 'read',
+    label: 'Read',
     activeClass: 'bg-read border-read text-[#1D160A]',
     idleClass: 'bg-read/10 border-read/30 text-read hover:bg-read/18',
   },
   {
-    id: 'comic',
-    label: 'Comics',
-    activeClass: 'bg-read border-read text-[#1D160A]',
-    idleClass: 'bg-read/10 border-read/30 text-read hover:bg-read/18',
-  },
-  {
-    id: 'novel',
-    label: 'Novels',
-    activeClass: 'bg-read border-read text-[#1D160A]',
-    idleClass: 'bg-read/10 border-read/30 text-read hover:bg-read/18',
-  },
-  {
-    id: 'game',
-    label: 'Games',
+    id: 'play',
+    label: 'Play',
     activeClass: 'bg-play border-play text-[#161124]',
     idleClass: 'bg-play/10 border-play/30 text-play hover:bg-play/18',
   },
 ];
+
+let sessionDiscoverScope: DiscoverScope = 'all';
+
+function badgeLabelForItem(item: LiveSearchResult): string {
+  if (item.mediaType === 'tv') return 'SHOW';
+  if (item.mediaType === 'movie') return 'MOVIE';
+  if (item.mediaType === 'anime') return 'ANIME';
+  if (item.mediaType === 'manga') return 'MANGA';
+  if (item.mediaType === 'comic') return 'COMIC';
+  if (item.mediaType === 'novel') return 'NOVEL';
+  return 'GAME';
+}
 
 export function SearchView() {
   const {
@@ -118,74 +92,64 @@ export function SearchView() {
     toggleMovieWatchlist,
     toggleReadBookmark,
     toggleGameBookmark,
+    createCustomList,
   } = useCueStore();
 
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<SearchMediaFilter>('all');
+  const [scope, setScopeState] = useState<DiscoverScope>(() => sessionDiscoverScope);
   const [liveResults, setLiveResults] = useState<LiveSearchResult[]>([]);
   const [loadingLive, setLoadingLive] = useState(false);
   const [hydratingId, setHydratingId] = useState<string | null>(null);
-  const [trending, setTrending] = useState<TrendingByDomain | null>(null);
-  const [loadingTrending, setLoadingTrending] = useState(true);
-  const [categoryTrending, setCategoryTrending] = useState<
-    Partial<Record<SearchMediaFilter, LiveSearchResult[]>>
-  >({});
-  const [loadingCategory, setLoadingCategory] = useState(false);
-  const [allColumnLimit, setAllColumnLimit] = useState(9);
-  const [categoryLimits, setCategoryLimits] = useState<Partial<Record<SearchMediaFilter, number>>>(
+
+  const [railsByScope, setRailsByScope] = useState<Partial<Record<DiscoverScope, DiscoverRail[]>>>(
     {}
   );
-  const [trendingSort, setTrendingSort] = useState<TrendingSortMode>('hot');
-  const activeCategoryLimit = categoryLimits[filter] ?? 12;
+  const [loadingRails, setLoadingRails] = useState(true);
+  const [expandedRail, setExpandedRail] = useState<DiscoverRail | null>(null);
+  const [expandedCollection, setExpandedCollection] = useState<DiscoverCollection | null>(null);
+  const [showAllCollections, setShowAllCollections] = useState(false);
+
+  const setScope = (nextScope: DiscoverScope) => {
+    sessionDiscoverScope = nextScope;
+    setScopeState(nextScope);
+    setExpandedRail(null);
+    setExpandedCollection(null);
+    setShowAllCollections(false);
+  };
 
   useEffect(() => {
-    let cancelled = false;
-    setLoadingTrending(true);
-    fetchTrendingByDomain(state.settings.tmdbApiKey)
-      .then((res) => {
-        if (!cancelled) setTrending(res);
-      })
-      .catch(() => {
-        if (!cancelled) setTrending({ watch: [], read: [], play: [] });
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingTrending(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [state.settings.tmdbApiKey]);
-
-  useEffect(() => {
-    if (filter === 'all' || query.trim().length >= 2) {
-      setLoadingCategory(false);
-      return;
-    }
-    if (categoryTrending[filter]) {
-      setLoadingCategory(false);
+    if (query.trim().length >= 2) return;
+    if (railsByScope[scope]) {
+      setLoadingRails(false);
       return;
     }
 
     let cancelled = false;
-    setLoadingCategory(true);
-    fetchTrendingByCategory(filter, state.settings.tmdbApiKey)
-      .then((items) => {
+    setLoadingRails(true);
+    const loader =
+      scope === 'all'
+        ? fetchAllDiscoverRails(state.settings.tmdbApiKey)
+        : fetchDomainDiscoverRails(scope, state.settings.tmdbApiKey);
+
+    loader
+      .then((rails) => {
         if (!cancelled) {
-          setCategoryTrending((prev) => ({ ...prev, [filter]: items }));
+          setRailsByScope((prev) => ({ ...prev, [scope]: rails }));
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setCategoryTrending((prev) => ({ ...prev, [filter]: [] }));
+          setRailsByScope((prev) => ({ ...prev, [scope]: [] }));
         }
       })
       .finally(() => {
-        if (!cancelled) setLoadingCategory(false);
+        if (!cancelled) setLoadingRails(false);
       });
+
     return () => {
       cancelled = true;
     };
-  }, [filter, query, categoryTrending, state.settings.tmdbApiKey]);
+  }, [scope, query, railsByScope, state.settings.tmdbApiKey]);
 
   useEffect(() => {
     const q = query.trim();
@@ -199,7 +163,7 @@ export function SearchView() {
     setLoadingLive(true);
     const timer = setTimeout(async () => {
       try {
-        const res = await searchLiveMedia(q, filter, state.settings.tmdbApiKey);
+        const res = await searchLiveMedia(q, scope, state.settings.tmdbApiKey);
         if (!cancelled) setLiveResults(res);
       } catch {
         if (!cancelled) setLiveResults([]);
@@ -212,13 +176,16 @@ export function SearchView() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query, filter, state.settings.tmdbApiKey]);
+  }, [query, scope, state.settings.tmdbApiKey]);
 
   const localMatches = useMemo(() => {
     const q = query.trim().toLowerCase();
+    if (!q) return [];
     const normQ = normalizeTitleKey(query);
     const matchesQ = (text: string) =>
-      text.toLowerCase().includes(q) || (normQ.length > 0 && normalizeTitleKey(text).includes(normQ));
+      text.toLowerCase().includes(q) ||
+      (normQ.length > 0 && normalizeTitleKey(text).includes(normQ));
+
     const items: Array<{
       domain: 'watch' | 'read' | 'play';
       kind: 'show' | 'movie' | 'read' | 'game';
@@ -234,13 +201,11 @@ export function SearchView() {
       inLibrary: boolean;
     }> = [];
 
-    if (filter === 'all' || filter === 'tv' || filter === 'anime') {
+    if (scope === 'all' || scope === 'watch') {
       for (const id of state.showOrder) {
         const s = state.shows[id];
         if (!s || !state.showProgress[s.id]?.bookmarked) continue;
-        if (filter === 'tv' && s.mediaType !== 'tv') continue;
-        if (filter === 'anime' && s.mediaType !== 'anime') continue;
-        if (q && !matchesQ(s.title) && !s.genres.some((g) => g.toLowerCase().includes(q))) continue;
+        if (!matchesQ(s.title) && !s.genres.some((g) => g.toLowerCase().includes(q))) continue;
         items.push({
           domain: 'watch',
           kind: 'show',
@@ -255,13 +220,11 @@ export function SearchView() {
           inLibrary: true,
         });
       }
-    }
 
-    if (filter === 'all' || filter === 'movie') {
       for (const id of state.movieOrder) {
         const m = state.movies[id];
         if (!m || !state.movieProgress[m.id]) continue;
-        if (q && !matchesQ(m.title) && !m.genres.some((g) => g.toLowerCase().includes(q))) continue;
+        if (!matchesQ(m.title) && !m.genres.some((g) => g.toLowerCase().includes(q))) continue;
         items.push({
           domain: 'watch',
           kind: 'movie',
@@ -278,19 +241,18 @@ export function SearchView() {
       }
     }
 
-    if (filter === 'all' || filter === 'manga' || filter === 'comic' || filter === 'novel') {
+    if (scope === 'all' || scope === 'read') {
       for (const id of state.readOrder) {
         const r = state.readItems[id];
         if (!r || !state.readProgress[r.id]?.bookmarked) continue;
-        if (filter !== 'all' && r.format !== filter) continue;
         if (
-          q &&
           !matchesQ(`${r.title} ${r.year} ${r.comicRunLabel || ''}`) &&
           !matchesQ(r.title) &&
           !matchesQ(r.creator) &&
           !r.genres.some((g) => g.toLowerCase().includes(q))
-        )
+        ) {
           continue;
+        }
         items.push({
           domain: 'read',
           kind: 'read',
@@ -312,17 +274,17 @@ export function SearchView() {
       }
     }
 
-    if (filter === 'all' || filter === 'game') {
+    if (scope === 'all' || scope === 'play') {
       for (const id of state.gameOrder) {
         const g = state.games[id];
         if (!g || !state.gameProgress[g.id]?.bookmarked) continue;
         if (
-          q &&
           !matchesQ(g.title) &&
           !matchesQ(g.developer) &&
           !g.genres.some((gen) => gen.toLowerCase().includes(q))
-        )
+        ) {
           continue;
+        }
         items.push({
           domain: 'play',
           kind: 'game',
@@ -340,7 +302,7 @@ export function SearchView() {
     }
 
     return items;
-  }, [state, query, filter]);
+  }, [state, query, scope]);
 
   const dedupedLive = useMemo(() => {
     const localIds = new Set(localMatches.map((m) => m.id));
@@ -361,7 +323,7 @@ export function SearchView() {
     const filtered: LiveSearchResult[] = [];
 
     for (const r of liveResults) {
-      if (filter !== 'all' && r.mediaType !== filter) continue;
+      if (scope !== 'all' && r.domain !== scope) continue;
       if (localIds.has(r.id)) continue;
       const key =
         r.domain === 'read'
@@ -379,149 +341,13 @@ export function SearchView() {
     }
 
     return filtered;
-  }, [liveResults, localMatches, filter]);
-
-  const trendingForActiveFilter = useMemo(() => {
-    if (filter === 'all') return [];
-    const dedicated = categoryTrending[filter];
-    const base = dedicated
-      ? dedicated
-      : trending
-        ? [...trending.watch, ...trending.read, ...trending.play].filter(
-            (item) => item.mediaType === filter
-          )
-        : [];
-    return sortTrendingItems(base, trendingSort);
-  }, [categoryTrending, trending, filter, trendingSort]);
-
-  const sortedAllTrending = useMemo(() => {
-    if (!trending) return null;
-    return {
-      watch: sortTrendingItems(trending.watch, trendingSort),
-      read: sortTrendingItems(trending.read, trendingSort),
-      play: sortTrendingItems(trending.play, trendingSort),
-    };
-  }, [trending, trendingSort]);
-
-  const visibleCategoryTrending = useMemo(
-    () => trendingForActiveFilter.slice(0, activeCategoryLimit),
-    [trendingForActiveFilter, activeCategoryLimit]
-  );
-
-  const renderTrendingSortPills = () => (
-    <div className="flex items-center gap-1 rounded-full bg-surface border border-white/10 p-0.5 shrink-0">
-      {(
-        [
-          { id: 'hot', label: 'Hot' },
-          { id: 'rating', label: 'Top rated' },
-          { id: 'newest', label: 'Newest' },
-        ] as const
-      ).map((opt) => (
-        <button
-          key={opt.id}
-          type="button"
-          onClick={() => setTrendingSort(opt.id)}
-          className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold transition-colors ${
-            trendingSort === opt.id ? 'bg-white/14 text-ink' : 'text-ink-dim hover:text-ink'
-          }`}
-        >
-          {opt.label}
-        </button>
-      ))}
-    </div>
-  );
+  }, [liveResults, localMatches, scope]);
 
   const isLiveItemInLibrary = (item: LiveSearchResult): boolean => {
     if (item.kind === 'show') return Boolean(state.showProgress[item.id]?.bookmarked);
     if (item.kind === 'movie') return Boolean(state.movieProgress[item.id]);
     if (item.kind === 'read') return Boolean(state.readProgress[item.id]?.bookmarked);
     return Boolean(state.gameProgress[item.id]?.bookmarked);
-  };
-
-  const renderTrendingPosterCard = (item: LiveSearchResult) => {
-    const inLibrary = isLiveItemInLibrary(item);
-    const isHydrating = hydratingId === item.id;
-    const badgeLabel =
-      item.mediaType === 'tv'
-        ? 'SHOW'
-        : item.mediaType === 'movie'
-          ? 'MOVIE'
-          : item.mediaType === 'anime'
-            ? 'ANIME'
-            : item.mediaType === 'manga'
-              ? 'MANGA'
-              : item.mediaType === 'comic'
-                ? 'COMIC'
-                : item.mediaType === 'novel'
-                  ? 'NOVEL'
-                  : 'GAME';
-    const badgeTint =
-      item.domain === 'watch'
-        ? 'text-watch'
-        : item.domain === 'read'
-          ? 'text-read'
-          : 'text-play';
-    const addActiveClass =
-      item.domain === 'watch'
-        ? 'border-watch/70 bg-watch/20 text-watch'
-        : item.domain === 'read'
-          ? 'border-read/70 bg-read/20 text-read'
-          : 'border-play/70 bg-play/20 text-play';
-
-    return (
-      <div
-        key={item.id}
-        role="button"
-        tabIndex={0}
-        onClick={() => handleOpenLiveResult(item, false)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            handleOpenLiveResult(item, false);
-          }
-        }}
-        className="group text-left cursor-pointer"
-      >
-        <div className="relative aspect-[2/3] rounded-[14px] sm:rounded-[18px] overflow-hidden bg-surface border border-white/8">
-          <MediaImage
-            src={item.posterUrl}
-            fallbackSrc={item.backdropUrl}
-            alt={item.title}
-            className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-          />
-          <span
-            className={`absolute top-1.5 left-1.5 px-1.5 py-[2px] rounded bg-[#0F1318]/85 border border-white/10 text-[9px] font-semibold uppercase tracking-wide leading-none ${badgeTint}`}
-          >
-            {badgeLabel}
-          </span>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleOpenLiveResult(item, true);
-            }}
-            aria-label={inLibrary ? `Remove ${item.title} from library` : `Add ${item.title}`}
-            className={`absolute top-1.5 right-1.5 h-7 w-7 rounded-full bg-[#0F1318]/85 border flex items-center justify-center transition-colors ${
-              inLibrary
-                ? addActiveClass
-                : 'border-white/20 text-ink hover:border-brand hover:text-brand'
-            }`}
-          >
-            {isHydrating ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : inLibrary ? (
-              <Check className="w-3.5 h-3.5" />
-            ) : (
-              <Plus className="w-3.5 h-3.5" />
-            )}
-          </button>
-        </div>
-        <p className="mt-1 text-xs sm:text-[13px] font-semibold text-ink line-clamp-2 leading-tight">
-          {item.title}
-        </p>
-        <p className="text-[10.5px] sm:text-[11px] text-ink-dim tabular-nums">{item.year}</p>
-      </div>
-    );
   };
 
   const handleOpenLiveResult = async (item: LiveSearchResult, andAdd = false) => {
@@ -539,6 +365,7 @@ export function SearchView() {
       if (!andAdd) pushRoute({ view: 'movie-detail', movieId: movie.id });
       return;
     }
+
     if (item.kind === 'read') {
       if (andAdd && state.readProgress[item.id]?.bookmarked) {
         toggleReadBookmark(item.id);
@@ -562,6 +389,7 @@ export function SearchView() {
       if (!andAdd) pushRoute({ view: 'read-detail', readId: readItem.id });
       return;
     }
+
     if (item.kind === 'game') {
       if (andAdd && state.gameProgress[item.id]?.bookmarked) {
         toggleGameBookmark(item.id);
@@ -600,11 +428,127 @@ export function SearchView() {
     }
   };
 
-  const hasActiveFilter = query.trim().length > 0 || filter !== 'all';
+  const renderPosterCard = (
+    item: LiveSearchResult,
+    showMediaBadge: boolean,
+    layout: 'rail' | 'grid'
+  ) => {
+    const inLibrary = isLiveItemInLibrary(item);
+    const isHydrating = hydratingId === item.id;
+    const badgeTint =
+      item.domain === 'watch'
+        ? 'text-watch'
+        : item.domain === 'read'
+          ? 'text-read'
+          : 'text-play';
+    const addActiveClass =
+      item.domain === 'watch'
+        ? 'border-watch/70 bg-watch/20 text-watch'
+        : item.domain === 'read'
+          ? 'border-read/70 bg-read/20 text-read'
+          : 'border-play/70 bg-play/20 text-play';
+
+    return (
+      <div
+        key={item.id}
+        role="button"
+        tabIndex={0}
+        onClick={() => handleOpenLiveResult(item, false)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleOpenLiveResult(item, false);
+          }
+        }}
+        className={`group text-left cursor-pointer ${
+          layout === 'rail'
+            ? 'w-[112px] sm:w-[136px] md:w-[150px] shrink-0 snap-start'
+            : 'min-w-0'
+        }`}
+      >
+        <div className="relative aspect-[2/3] rounded-[14px] sm:rounded-[16px] overflow-hidden bg-surface border border-white/8">
+          <MediaImage
+            src={item.posterUrl}
+            fallbackSrc={item.backdropUrl}
+            alt={item.title}
+            className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+          />
+          {showMediaBadge && (
+            <span
+              className={`absolute top-1.5 left-1.5 px-1.5 py-[2px] rounded bg-[#0F1318]/85 border border-white/10 text-[9px] font-semibold uppercase tracking-wide leading-none ${badgeTint}`}
+            >
+              {badgeLabelForItem(item)}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleOpenLiveResult(item, true);
+            }}
+            aria-label={inLibrary ? `Remove ${item.title} from library` : `Add ${item.title}`}
+            className={`absolute top-1.5 right-1.5 h-7 w-7 rounded-full bg-[#0F1318]/85 border flex items-center justify-center transition-colors ${
+              inLibrary
+                ? addActiveClass
+                : 'border-white/20 text-ink hover:border-brand hover:text-brand'
+            }`}
+          >
+            {isHydrating ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : inLibrary ? (
+              <Check className="w-3.5 h-3.5" />
+            ) : (
+              <Plus className="w-3.5 h-3.5" />
+            )}
+          </button>
+        </div>
+        <p className="mt-1.5 text-[12.5px] sm:text-[13px] font-semibold text-ink truncate leading-tight">
+          {item.title}
+        </p>
+        <p className="text-[10.5px] sm:text-[11px] text-ink-dim tabular-nums">{item.year}</p>
+      </div>
+    );
+  };
+
+  const renderCollectionCard = (col: DiscoverCollection, layout: 'rail' | 'grid') => (
+    <button
+      key={col.id}
+      type="button"
+      onClick={() => setExpandedCollection(col)}
+      className={`group text-left ${
+        layout === 'rail' ? 'w-[252px] sm:w-[292px] shrink-0 snap-start' : 'w-full'
+      }`}
+    >
+      <div className="aspect-[16/9] rounded-[16px] overflow-hidden bg-surface border border-white/10 grid grid-cols-3 gap-[2px]">
+        {col.previewPosters.map((src, idx) => (
+          <div key={`${col.id}-p-${idx}`} className="w-full h-full overflow-hidden bg-surface-raised">
+            <MediaImage
+              src={src}
+              alt={col.title}
+              className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+            />
+          </div>
+        ))}
+      </div>
+      <p className="mt-1.5 text-[13.5px] sm:text-sm font-semibold text-ink truncate leading-tight">
+        {col.title}
+      </p>
+      <p className="text-[11px] text-ink-dim truncate">
+        {col.items.length} titles · {col.domainLabel}
+      </p>
+    </button>
+  );
+
+  const activeRails = railsByScope[scope] || [];
+  const activeCollections = useMemo(() => getDiscoverCollections(scope), [scope]);
+  const isSearching = query.trim().length >= 2;
+  const savedCollectionList = expandedCollection
+    ? state.lists.find((l) => l.name.toLowerCase() === expandedCollection.title.toLowerCase())
+    : undefined;
 
   return (
     <div className="min-h-dvh pb-28 md:pb-14 pt-2 md:pt-20 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto">
-      {/* Sticky Search Bar + Color-Coded Filtering Pills */}
+      {/* Sticky Search Bar + 4 Clean Domain Pills */}
       <div className="sticky top-0 md:top-16 z-20 -mx-4 sm:-mx-6 lg:-mx-10 px-4 sm:px-6 lg:px-10 pt-2 pb-3 bg-background/95 backdrop-blur-md border-b border-white/[0.04] mb-4">
         <div className="relative flex items-center">
           <Search className="w-4 h-4 text-ink-dim absolute left-4 pointer-events-none" />
@@ -615,7 +559,7 @@ export function SearchView() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search titles, shows, games…"
             aria-label="Search all media"
-            className="w-full h-12 rounded-2xl bg-surface border border-white/10 pl-11 pr-20 text-[15px] text-ink placeholder:text-ink-faint outline-none focus:border-brand transition-colors"
+            className="w-full h-11 rounded-2xl bg-surface border border-white/10 pl-11 pr-20 text-[15px] text-ink placeholder:text-ink-faint outline-none focus:border-brand transition-colors"
           />
           <div className="absolute right-3 flex items-center gap-1.5">
             {loadingLive && <Loader2 className="w-4 h-4 text-brand animate-spin" />}
@@ -632,17 +576,17 @@ export function SearchView() {
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-2 mt-3">
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-            {SEARCH_FILTER_PILLS.map((tab) => {
-              const active = filter === tab.id;
+        <div className="flex items-center justify-between gap-2 mt-2.5">
+          <div className="flex items-center gap-1.5">
+            {DISCOVER_PILLS.map((tab) => {
+              const active = scope === tab.id;
               return (
                 <button
                   key={tab.id}
                   type="button"
-                  onClick={() => setFilter(tab.id)}
+                  onClick={() => setScope(tab.id)}
                   aria-pressed={active}
-                  className={`px-3 py-1 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
+                  className={`px-3.5 py-1 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
                     active ? tab.activeClass : tab.idleClass
                   }`}
                 >
@@ -659,7 +603,7 @@ export function SearchView() {
         </div>
       </div>
 
-      {hasActiveFilter ? (
+      {isSearching ? (
         <div className="space-y-6 animate-fade-in">
           {localMatches.length > 0 && (
             <section>
@@ -737,7 +681,7 @@ export function SearchView() {
                           else if (item.kind === 'read') toggleReadBookmark(item.id);
                           else toggleGameBookmark(item.id);
                         }}
-                        aria-label={item.inLibrary ? 'In library' : 'Add to library'}
+                        aria-label={item.inLibrary ? `Remove ${item.title} from library` : `Add ${item.title}`}
                         className={`h-9 w-9 rounded-full border flex items-center justify-center transition-colors ${
                           item.inLibrary
                             ? item.domain === 'watch'
@@ -757,283 +701,276 @@ export function SearchView() {
             </section>
           )}
 
-          {query.trim().length >= 2 && (
-            <section>
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="font-display font-bold text-lg text-ink">
-                  Live results ({dedupedLive.length})
-                </h2>
-                {loadingLive && (
-                  <span className="text-xs text-ink-dim">Searching live catalogs…</span>
-                )}
-              </div>
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-display font-bold text-lg text-ink">
+                Live results ({dedupedLive.length})
+              </h2>
+              {loadingLive && (
+                <span className="text-xs text-ink-dim">Searching live catalogs…</span>
+              )}
+            </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {dedupedLive.map((item) => {
-                  const isHydrating = hydratingId === item.id;
-                  const inLibrary = isLiveItemInLibrary(item);
-                  return (
-                    <div
-                      key={item.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => handleOpenLiveResult(item, false)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleOpenLiveResult(item, false);
-                      }}
-                      className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] overflow-hidden flex items-stretch min-h-[100px] cursor-pointer transition-colors"
-                    >
-                      <div className="w-[70px] min-h-[100px] shrink-0 overflow-hidden bg-surface-raised self-stretch">
-                        <MediaImage
-                          src={item.posterUrl}
-                          fallbackSrc={item.backdropUrl}
-                          alt={item.title}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                      <div className="flex-1 min-w-0 px-3 py-2.5 flex flex-col justify-center">
-                        <h3 className="text-[15px] font-semibold text-ink leading-[1.28] line-clamp-2">
-                          {item.title}
-                        </h3>
-                        <div className="flex items-center gap-1.5 mt-1 min-w-0">
-                          <span
-                            className={`text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-[2px] rounded shrink-0 leading-none ${
-                              item.domain === 'watch'
-                                ? 'bg-watch/15 text-watch'
-                                : item.domain === 'read'
-                                  ? 'bg-read/15 text-read'
-                                  : 'bg-play/15 text-play'
-                            }`}
-                          >
-                            {item.mediaType === 'tv' ? 'Show' : item.mediaType}
-                          </span>
-                          {item.comicKind === 'series' ? (
-                            <span className="text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-[2px] rounded border border-read/35 bg-read/10 text-read shrink-0 leading-none">
-                              Series
-                            </span>
-                          ) : item.mediaType === 'comic' && item.comicKind === 'collection' ? (
-                            <span className="text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-[2px] rounded bg-white/[0.06] text-ink-dim shrink-0 leading-none">
-                              Edition
-                            </span>
-                          ) : null}
-                          <p className="text-xs text-ink-dim truncate">
-                            {item.comicKind === 'series' && item.subtitle
-                              ? item.subtitle
-                              : `${item.year} · ${
-                                  item.subtitle ||
-                                  cleanDisplayGenres(item.genres).slice(0, 2).join(' · ') ||
-                                  item.mediaType
-                                }`}
-                          </p>
-                        </div>
-                        {item.overview && (
-                          <p className="text-xs text-ink-faint truncate mt-1">{item.overview}</p>
-                        )}
-                      </div>
-                      <div className="pr-3 shrink-0 flex items-center">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleOpenLiveResult(item, true);
-                          }}
-                          aria-label={inLibrary ? `Remove ${item.title} from library` : `Add ${item.title}`}
-                          className={`h-9 w-9 rounded-full border flex items-center justify-center transition-colors ${
-                            inLibrary
-                              ? item.domain === 'watch'
-                                ? 'border-watch/60 bg-watch/15 text-watch'
-                                : item.domain === 'read'
-                                  ? 'border-read/60 bg-read/15 text-read'
-                                  : 'border-play/60 bg-play/15 text-play'
-                              : 'border-white/15 text-ink-dim hover:border-brand hover:text-brand'
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {dedupedLive.map((item) => {
+                const isHydrating = hydratingId === item.id;
+                const inLibrary = isLiveItemInLibrary(item);
+                return (
+                  <div
+                    key={item.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => handleOpenLiveResult(item, false)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleOpenLiveResult(item, false);
+                    }}
+                    className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] overflow-hidden flex items-stretch min-h-[100px] cursor-pointer transition-colors"
+                  >
+                    <div className="w-[70px] min-h-[100px] shrink-0 overflow-hidden bg-surface-raised self-stretch">
+                      <MediaImage
+                        src={item.posterUrl}
+                        fallbackSrc={item.backdropUrl}
+                        alt={item.title}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div className="flex-1 min-w-0 px-3 py-2.5 flex flex-col justify-center">
+                      <h3 className="text-[15px] font-semibold text-ink leading-[1.28] line-clamp-2">
+                        {item.title}
+                      </h3>
+                      <div className="flex items-center gap-1.5 mt-1 min-w-0">
+                        <span
+                          className={`text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-[2px] rounded shrink-0 leading-none ${
+                            item.domain === 'watch'
+                              ? 'bg-watch/15 text-watch'
+                              : item.domain === 'read'
+                                ? 'bg-read/15 text-read'
+                                : 'bg-play/15 text-play'
                           }`}
                         >
-                          {isHydrating ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : inLibrary ? (
-                            <Check className="w-4 h-4" />
-                          ) : (
-                            <Plus className="w-4 h-4" />
-                          )}
-                        </button>
+                          {item.mediaType === 'tv' ? 'Show' : item.mediaType}
+                        </span>
+                        {item.comicKind === 'series' ? (
+                          <span className="text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-[2px] rounded border border-read/35 bg-read/10 text-read shrink-0 leading-none">
+                            Series
+                          </span>
+                        ) : item.mediaType === 'comic' && item.comicKind === 'collection' ? (
+                          <span className="text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-[2px] rounded bg-white/[0.06] text-ink-dim shrink-0 leading-none">
+                            Edition
+                          </span>
+                        ) : null}
+                        <p className="text-xs text-ink-dim truncate">
+                          {item.comicKind === 'series' && item.subtitle
+                            ? item.subtitle
+                            : `${item.year} · ${
+                                item.subtitle ||
+                                cleanDisplayGenres(item.genres).slice(0, 2).join(' · ') ||
+                                item.mediaType
+                              }`}
+                        </p>
                       </div>
+                      {item.overview && (
+                        <p className="text-xs text-ink-faint truncate mt-1">{item.overview}</p>
+                      )}
                     </div>
-                  );
-                })}
-              </div>
-
-              {!loadingLive && localMatches.length === 0 && dedupedLive.length === 0 && (
-                <div className="rounded-2xl bg-surface border border-white/8 p-8 text-center">
-                  <p className="font-semibold text-ink">No matches found for "{query}"</p>
-                  <p className="text-xs text-ink-dim mt-1">
-                    Try another title or switch filter pills above.
-                  </p>
-                </div>
-              )}
-            </section>
-          )}
-
-          {query.trim().length < 2 && filter !== 'all' && loadingCategory && visibleCategoryTrending.length === 0 && (
-            <section>
-              <div className="flex items-center justify-between gap-2 mb-3">
-                <div className="flex items-center gap-2">
-                  <Flame className="w-5 h-5 text-brand" />
-                  <h2 className="font-display font-bold text-lg text-ink">
-                    Trending{' '}
-                    {SEARCH_FILTER_PILLS.find((p) => p.id === filter)?.label || filter}
-                  </h2>
-                </div>
-                <span className="text-xs text-ink-dim">Last 6 months</span>
-              </div>
-              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2.5 sm:gap-4">
-                {Array.from({ length: 12 }).map((_, idx) => (
-                  <div key={`cat-skel-${idx}`} className="animate-pulse">
-                    <div className="aspect-[2/3] rounded-[14px] sm:rounded-[18px] bg-surface border border-white/6" />
-                    <div className="h-3 w-3/4 rounded bg-surface mt-2" />
+                    <div className="pr-3 shrink-0 flex items-center">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenLiveResult(item, true);
+                        }}
+                        aria-label={inLibrary ? `Remove ${item.title} from library` : `Add ${item.title}`}
+                        className={`h-9 w-9 rounded-full border flex items-center justify-center transition-colors ${
+                          inLibrary
+                            ? item.domain === 'watch'
+                              ? 'border-watch/60 bg-watch/15 text-watch'
+                              : item.domain === 'read'
+                                ? 'border-read/60 bg-read/15 text-read'
+                                : 'border-play/60 bg-play/15 text-play'
+                            : 'border-white/15 text-ink-dim hover:border-brand hover:text-brand'
+                        }`}
+                      >
+                        {isHydrating ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : inLibrary ? (
+                          <Check className="w-4 h-4" />
+                        ) : (
+                          <Plus className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
                   </div>
-                ))}
-              </div>
-            </section>
-          )}
+                );
+              })}
+            </div>
 
-          {query.trim().length < 2 && visibleCategoryTrending.length > 0 && (
-            <section className="space-y-3.5">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <Flame className="w-5 h-5 text-brand" />
-                  <h2 className="font-display font-bold text-lg text-ink">
-                    Trending{' '}
-                    {SEARCH_FILTER_PILLS.find((p) => p.id === filter)?.label || filter} (
-                    {trendingForActiveFilter.length})
-                  </h2>
-                </div>
-                {renderTrendingSortPills()}
-              </div>
-              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 sm:gap-3.5">
-                {visibleCategoryTrending.map(renderTrendingPosterCard)}
-              </div>
-              {trendingForActiveFilter.length > visibleCategoryTrending.length && (
-                <div className="flex justify-center pt-1">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setCategoryLimits((prev) => ({
-                        ...prev,
-                        [filter]: (prev[filter] ?? 12) + 12,
-                      }))
-                    }
-                    className="px-5 py-2 rounded-full bg-surface border border-white/12 text-xs font-semibold text-ink hover:border-white/25 transition-colors"
-                  >
-                    Load more ({trendingForActiveFilter.length - visibleCategoryTrending.length}{' '}
-                    remaining)
-                  </button>
-                </div>
-              )}
-            </section>
-          )}
-
-          {query.trim().length < 2 &&
-            !loadingCategory &&
-            localMatches.length === 0 &&
-            trendingForActiveFilter.length === 0 && (
-              <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center">
-                <Search className="w-7 h-7 text-brand mx-auto mb-2.5 opacity-85" />
-                <p className="font-display font-bold text-lg text-ink">Search to add titles</p>
-                <p className="text-xs text-ink-dim mt-1 max-w-sm mx-auto">
-                  Type at least 2 characters above to search TV, movies, anime, manga, comics,
-                  novels, or games.
+            {!loadingLive && localMatches.length === 0 && dedupedLive.length === 0 && (
+              <div className="rounded-2xl bg-surface border border-white/8 p-8 text-center">
+                <p className="font-semibold text-ink">No matches found for "{query}"</p>
+                <p className="text-xs text-ink-dim mt-1">
+                  Try another title or switch filter pills above.
                 </p>
               </div>
             )}
+          </section>
+        </div>
+      ) : expandedCollection ? (
+        <div className="space-y-4 animate-fade-in">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="flex items-start gap-2.5 min-w-0">
+              <button
+                type="button"
+                onClick={() => setExpandedCollection(null)}
+                aria-label="Back to Discover"
+                className="h-9 w-9 rounded-full bg-surface border border-white/10 flex items-center justify-center text-ink shrink-0 mt-0.5"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-dim">
+                  Collection · {expandedCollection.domainLabel}
+                </p>
+                <h2 className="font-display font-bold text-xl text-ink leading-tight">
+                  {expandedCollection.title}
+                </h2>
+                <p className="text-xs text-ink-dim mt-1">{expandedCollection.description}</p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (savedCollectionList) {
+                  pushRoute({ view: 'list-detail', listId: savedCollectionList.id });
+                  return;
+                }
+                const refs = expandedCollection.items.map((x) => ({
+                  kind: x.kind,
+                  id: x.id,
+                }));
+                createCustomList(
+                  expandedCollection.title,
+                  expandedCollection.description,
+                  refs[0],
+                  refs
+                );
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold border border-white/15 bg-surface hover:border-brand text-ink shrink-0"
+            >
+              <ListPlus className="w-3.5 h-3.5 text-brand" />
+              <span>{savedCollectionList ? 'Open List' : 'Save as List'}</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3 sm:gap-4">
+            {expandedCollection.items.map((item) => renderPosterCard(item, true, 'grid'))}
+          </div>
+        </div>
+      ) : expandedRail ? (
+        <div className="space-y-4 animate-fade-in">
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => setExpandedRail(null)}
+              aria-label="Back to Discover"
+              className="h-9 w-9 rounded-full bg-surface border border-white/10 flex items-center justify-center text-ink shrink-0"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <h2 className="font-display font-bold text-xl text-ink">
+              {expandedRail.title}
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3 sm:gap-4">
+            {expandedRail.items.map((item) =>
+              renderPosterCard(item, expandedRail.showMediaBadge, 'grid')
+            )}
+          </div>
+        </div>
+      ) : showAllCollections ? (
+        <div className="space-y-4 animate-fade-in">
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => setShowAllCollections(false)}
+              aria-label="Back to Discover"
+              className="h-9 w-9 rounded-full bg-surface border border-white/10 flex items-center justify-center text-ink shrink-0"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <h2 className="font-display font-bold text-xl text-ink">
+              Collections & Runs
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            {activeCollections.map((col) => renderCollectionCard(col, 'grid'))}
+          </div>
         </div>
       ) : (
-        <div className="space-y-4 animate-fade-in">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <div className="flex items-center gap-2">
-              <Flame className="w-5 h-5 text-brand" />
-              <h2 className="font-display font-bold text-[19px] sm:text-[20px] text-ink">
-                Trending now
-              </h2>
+        <div className="space-y-6 animate-fade-in">
+          {loadingRails && activeRails.length === 0 ? (
+            <div className="space-y-6">
+              {Array.from({ length: 4 }).map((_, railIdx) => (
+                <section key={`rail-skel-${railIdx}`} className="space-y-2.5">
+                  <div className="h-5 w-40 rounded bg-surface animate-pulse" />
+                  <div className="flex gap-3 overflow-hidden">
+                    {Array.from({ length: 4 }).map((_, cardIdx) => (
+                      <div
+                        key={`card-skel-${railIdx}-${cardIdx}`}
+                        className="w-[112px] sm:w-[136px] shrink-0 animate-pulse"
+                      >
+                        <div className="aspect-[2/3] rounded-[14px] bg-surface border border-white/6" />
+                        <div className="h-3 w-3/4 rounded bg-surface mt-2" />
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))}
             </div>
-            {renderTrendingSortPills()}
-          </div>
-
-          <div className="grid grid-cols-3 gap-2 sm:gap-3.5 items-start">
-            {/* Column 1: Watch */}
-            <section aria-label="Trending to Watch" className="min-w-0">
-              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-watch border-b border-watch/25 pb-1.5 mb-2">
-                <Tv className="w-3.5 h-3.5 shrink-0" />
-                <span>Watch</span>
-              </div>
-              <div className="space-y-2.5 sm:space-y-3.5">
-                {loadingTrending && !trending
-                  ? Array.from({ length: 4 }).map((_, i) => (
-                      <div key={`w-skel-${i}`} className="animate-pulse">
-                        <div className="aspect-[2/3] rounded-[14px] sm:rounded-[18px] bg-surface border border-white/6" />
-                        <div className="h-3 w-3/4 rounded bg-surface mt-2" />
-                      </div>
-                    ))
-                  : (sortedAllTrending?.watch || [])
-                      .slice(0, allColumnLimit)
-                      .map(renderTrendingPosterCard)}
-              </div>
-            </section>
-
-            {/* Column 2: Read */}
-            <section aria-label="Trending to Read" className="min-w-0">
-              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-read border-b border-read/25 pb-1.5 mb-2">
-                <BookOpen className="w-3.5 h-3.5 shrink-0" />
-                <span>Read</span>
-              </div>
-              <div className="space-y-2.5 sm:space-y-3.5">
-                {loadingTrending && !trending
-                  ? Array.from({ length: 4 }).map((_, i) => (
-                      <div key={`r-skel-${i}`} className="animate-pulse">
-                        <div className="aspect-[2/3] rounded-[14px] sm:rounded-[18px] bg-surface border border-white/6" />
-                        <div className="h-3 w-3/4 rounded bg-surface mt-2" />
-                      </div>
-                    ))
-                  : (sortedAllTrending?.read || [])
-                      .slice(0, allColumnLimit)
-                      .map(renderTrendingPosterCard)}
-              </div>
-            </section>
-
-            {/* Column 3: Play */}
-            <section aria-label="Trending to Play" className="min-w-0">
-              <div className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-play border-b border-play/25 pb-1.5 mb-2">
-                <Gamepad2 className="w-3.5 h-3.5 shrink-0" />
-                <span>Play</span>
-              </div>
-              <div className="space-y-2.5 sm:space-y-3.5">
-                {loadingTrending && !trending
-                  ? Array.from({ length: 4 }).map((_, i) => (
-                      <div key={`p-skel-${i}`} className="animate-pulse">
-                        <div className="aspect-[2/3] rounded-[14px] sm:rounded-[18px] bg-surface border border-white/6" />
-                        <div className="h-3 w-3/4 rounded bg-surface mt-2" />
-                      </div>
-                    ))
-                  : (sortedAllTrending?.play || [])
-                      .slice(0, allColumnLimit)
-                      .map(renderTrendingPosterCard)}
-              </div>
-            </section>
-          </div>
-
-          {trending &&
-            (trending.watch.length > allColumnLimit ||
-              trending.read.length > allColumnLimit ||
-              trending.play.length > allColumnLimit) && (
-              <div className="flex justify-center pt-1">
+          ) : (
+            activeRails.map((rail) => (
+              <section key={rail.id} aria-label={rail.title} className="space-y-2.5">
                 <button
                   type="button"
-                  onClick={() => setAllColumnLimit((n) => n + 6)}
-                  className="px-5 py-2 rounded-full bg-surface border border-white/12 text-xs font-semibold text-ink hover:border-white/25 transition-colors"
+                  onClick={() => setExpandedRail(rail)}
+                  className="inline-flex items-center gap-1 group text-left"
                 >
-                  Load more trending
+                  <h2 className="font-display font-bold text-[18px] sm:text-[19px] text-ink group-hover:text-brand transition-colors">
+                    {rail.title}
+                  </h2>
+                  <ChevronRight className="w-4 h-4 text-ink-dim group-hover:text-brand group-hover:translate-x-0.5 transition-all" />
                 </button>
+
+                <div className="flex gap-3 overflow-x-auto no-scrollbar -mx-4 px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0 pb-1 snap-x snap-proximity">
+                  {rail.items.map((item) =>
+                    renderPosterCard(item, rail.showMediaBadge, 'rail')
+                  )}
+                </div>
+              </section>
+            ))
+          )}
+
+          {activeCollections.length > 0 && (
+            <section aria-label="Collections & Runs" className="space-y-2.5">
+              <button
+                type="button"
+                onClick={() => setShowAllCollections(true)}
+                className="inline-flex items-center gap-1 group text-left"
+              >
+                <h2 className="font-display font-bold text-[18px] sm:text-[19px] text-ink group-hover:text-brand transition-colors">
+                  Collections & Runs
+                </h2>
+                <ChevronRight className="w-4 h-4 text-ink-dim group-hover:text-brand group-hover:translate-x-0.5 transition-all" />
+              </button>
+
+              <div className="flex gap-3.5 overflow-x-auto no-scrollbar -mx-4 px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0 pb-1 snap-x snap-proximity">
+                {activeCollections.map((col) => renderCollectionCard(col, 'rail'))}
               </div>
-            )}
+            </section>
+          )}
         </div>
       )}
     </div>

@@ -1,3 +1,5 @@
+export type GameDiscoverMode = 'trending' | 'anticipated' | 'popular';
+
 export interface TrendingGameItem {
   id: string;
   appId?: number;
@@ -278,9 +280,309 @@ async function fetchSteamRecentItems() {
   return { candidateIds, storeItems: chunkResults.flat() };
 }
 
-/** Fetches multi-platform live trending games (console + PC) released within the last 6 months. */
-export async function fetchTrendingGamesPayload(limit = 24): Promise<{ items: TrendingGameItem[] }> {
+async function fetchSteamIdsFromFilter(
+  filter: 'popularnew' | 'topsellers' | 'popularwishlist' | 'comingsoon',
+  count = 50
+): Promise<number[]> {
+  const ordered: number[] = [];
+  const seen = new Set<number>();
+  try {
+    const res = await fetch(
+      `https://store.steampowered.com/search/results/?query&start=0&count=${count}&category1=998&filter=${filter}&json=1`,
+      { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(5000) }
+    );
+    if (!res.ok) return ordered;
+    const json = (await res.json()) as SteamSearchJson;
+    for (const entry of json.items || []) {
+      const m = (entry.logo || '').match(/\/apps\/(\d+)\//);
+      if (!m) continue;
+      const id = Number(m[1]);
+      if (Number.isFinite(id) && id > 0 && !seen.has(id)) {
+        seen.add(id);
+        ordered.push(id);
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return ordered;
+}
+
+async function fetchMetacriticQuery(params: string): Promise<MetacriticGameRaw[]> {
+  try {
+    const res = await fetch(`https://backend.metacritic.com/finder/metacritic/web?${params}`, {
+      headers: { 'User-Agent': BROWSER_UA },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as { data?: { items?: MetacriticGameRaw[] } };
+    return json.data?.items || [];
+  } catch {
+    return [];
+  }
+}
+
+function mapMetacriticGame(raw: MetacriticGameRaw, fallbackText: string): TrendingGameItem | null {
+  const title = (raw.title || '').trim();
+  const bucketPath = raw.image?.bucketPath;
+  if (!title || !bucketPath) return null;
+  const relStr = raw.releaseDate || '';
+  const releasedMs = relStr ? Date.parse(`${relStr}T12:00:00Z`) : NaN;
+  const releasedSec = Number.isFinite(releasedMs)
+    ? Math.floor(releasedMs / 1000)
+    : raw.premiereYear
+      ? Math.floor(Date.UTC(raw.premiereYear, 6, 1) / 1000)
+      : 0;
+  const year =
+    raw.premiereYear ||
+    (Number.isFinite(releasedMs) ? new Date(releasedMs).getUTCFullYear() : new Date().getUTCFullYear());
+  const metaScore = raw.criticScoreSummary?.score || 0;
+  const platforms = normalizePlatformNames(raw.platforms);
+  const genres = (raw.genres || [])
+    .map((g) => (g.name || '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  const posterUrl = `https://www.metacritic.com/a/img/catalog${bucketPath}`;
+  const rating =
+    metaScore > 0 ? Number(Math.max(3.0, Math.min(5.0, metaScore / 20)).toFixed(1)) : 4.5;
+  const subtitle = platforms.length > 0 ? platforms.slice(0, 2).join(' · ') : 'Console & PC';
+  const key = normGameKey(title);
+  return {
+    id: raw.slug ? `mc-${raw.slug}` : `mc-${raw.id || key.replace(/\s+/g, '-')}`,
+    title,
+    year,
+    releasedAt: releasedSec,
+    rating,
+    posterUrl,
+    backdropUrl: posterUrl,
+    overview: (raw.description || '').trim() || `${title} — ${fallbackText}.`,
+    platforms: platforms.length > 0 ? platforms : ['PS5', 'Xbox Series X|S', 'PC'],
+    genres: genres.length > 0 ? genres : ['Video Game'],
+    subtitle,
+  };
+}
+
+async function fetchAnticipatedGamesPayload(limit: number): Promise<{ items: TrendingGameItem[] }> {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const currentYear = new Date().getUTCFullYear();
+
+  const [wishlistIds, comingIds, mcCurrRes, wikiRes] = await Promise.allSettled([
+    fetchSteamIdsFromFilter('popularwishlist', 40),
+    fetchSteamIdsFromFilter('comingsoon', 30),
+    fetchMetacriticQuery(
+      `sortBy=-releaseDate&productType=games&releaseYearMin=${currentYear}&offset=0&limit=50`
+    ),
+    fetchWikiPageviewBoostMap(),
+  ]);
+
+  const seenSteamIds = new Set<number>();
+  const orderedSteamIds: number[] = [];
+  for (const id of [
+    ...(wishlistIds.status === 'fulfilled' ? wishlistIds.value : []),
+    ...(comingIds.status === 'fulfilled' ? comingIds.value : []),
+  ]) {
+    if (!seenSteamIds.has(id)) {
+      seenSteamIds.add(id);
+      orderedSteamIds.push(id);
+    }
+  }
+  const steamItems =
+    orderedSteamIds.length > 0 ? await fetchStoreItemsChunk(orderedSteamIds.slice(0, 45)) : [];
+  const mcRaw = mcCurrRes.status === 'fulfilled' ? mcCurrRes.value : [];
+  const wikiMap = wikiRes.status === 'fulfilled' ? wikiRes.value : new Map<string, number>();
+
+  const orderIndex = new Map<number, number>();
+  orderedSteamIds.forEach((id, idx) => orderIndex.set(id, idx));
+
+  const byKey = new Map<string, TrendingGameItem & { buzz: number }>();
+
+  const orderedSteam = [...steamItems].sort(
+    (a, b) => (orderIndex.get(a.appid || 0) ?? 999) - (orderIndex.get(b.appid || 0) ?? 999)
+  );
+  orderedSteam.forEach((item, idx) => {
+    const appId = item.appid;
+    const title = (item.name || '').trim();
+    if (!appId || !title || (item.type !== undefined && item.type !== 0)) return;
+    const relSec = item.release?.steam_release_date || 0;
+    const isFuture = Boolean(item.release?.is_coming_soon) || relSec === 0 || relSec > nowSec;
+    if (!isFuture) return;
+    const relCapsule =
+      item.assets?.library_capsule_2x || item.assets?.library_capsule || item.assets?.header;
+    const posterUrl = buildSteamAssetUrl(item.assets?.asset_url_format, relCapsule);
+    if (!posterUrl) return;
+    const backdropUrl =
+      buildSteamAssetUrl(item.assets?.asset_url_format, item.assets?.header) ||
+      `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg`;
+    const key = normGameKey(title);
+    if (!key) return;
+    const wikiViews = wikiMap.get(key) || 0;
+    const wikiBoost = wikiViews > 0 ? Math.min(220, Math.log10(wikiViews) * 40) : 0;
+    const buzz = Math.max(90, 260 - idx * 7) + wikiBoost;
+    const year = relSec > nowSec ? new Date(relSec * 1000).getUTCFullYear() : currentYear + 1;
+
+    byKey.set(key, {
+      id: `steam-${appId}`,
+      appId,
+      title,
+      year,
+      releasedAt: relSec || Math.floor(Date.UTC(year, 6, 1) / 1000),
+      rating: 4.6,
+      posterUrl,
+      backdropUrl,
+      overview: (item.basic_info?.short_description || '').trim() || `${title} — upcoming release.`,
+      platforms: ['PC', 'Steam Deck'],
+      genres: ['Video Game'],
+      subtitle: 'Upcoming · PC',
+      isFree: item.is_free,
+      buzz,
+    });
+  });
+
+  for (const raw of mcRaw) {
+    const mapped = mapMetacriticGame(raw, 'upcoming release');
+    if (!mapped) continue;
+    const isFuture = mapped.releasedAt > nowSec || mapped.year >= currentYear + 1;
+    if (!isFuture) continue;
+    const key = normGameKey(mapped.title);
+    if (!key) continue;
+    const wikiViews = wikiMap.get(key) || 0;
+    const wikiBoost = wikiViews > 0 ? Math.min(220, Math.log10(wikiViews) * 40) : 0;
+    const buzz = 120 + mapped.platforms.length * 14 + wikiBoost;
+    const prev = byKey.get(key);
+    if (prev) {
+      const mergedPlatforms = prev.platforms.includes('PC')
+        ? prev.platforms
+        : [...mapped.platforms, 'PC'];
+      byKey.set(key, {
+        ...prev,
+        platforms: mergedPlatforms,
+        subtitle: mergedPlatforms.slice(0, 2).join(' · '),
+        buzz: Math.max(prev.buzz, buzz) + 20,
+      });
+    } else {
+      byKey.set(key, { ...mapped, buzz });
+    }
+  }
+
+  return {
+    items: Array.from(byKey.values())
+      .sort((a, b) => b.buzz - a.buzz)
+      .slice(0, limit)
+      .map(({ buzz: _b, ...rest }) => rest),
+  };
+}
+
+async function fetchPopularGamesPayload(limit: number): Promise<{ items: TrendingGameItem[] }> {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const sixMonthsSec = 190 * 86400;
+  const currentYear = new Date().getUTCFullYear();
+
+  const [mcTop0, mcTop1, steamIds] = await Promise.allSettled([
+    fetchMetacriticQuery(
+      `sortBy=-metaScore&productType=games&releaseYearMin=2012&releaseYearMax=${currentYear - 1}&offset=0&limit=50`
+    ),
+    fetchMetacriticQuery(
+      `sortBy=-metaScore&productType=games&releaseYearMin=2012&releaseYearMax=${currentYear - 1}&offset=50&limit=50`
+    ),
+    fetchSteamIdsFromFilter('topsellers', 50),
+  ]);
+
+  const mcRaw = [
+    ...(mcTop0.status === 'fulfilled' ? mcTop0.value : []),
+    ...(mcTop1.status === 'fulfilled' ? mcTop1.value : []),
+  ];
+  const orderedSteamIds = steamIds.status === 'fulfilled' ? steamIds.value.slice(0, 45) : [];
+  const steamItems = orderedSteamIds.length > 0 ? await fetchStoreItemsChunk(orderedSteamIds) : [];
+
+  const byKey = new Map<string, TrendingGameItem & { popScore: number }>();
+
+  for (const raw of mcRaw) {
+    const mapped = mapMetacriticGame(raw, 'all-time classic');
+    if (!mapped) continue;
+    const metaScore = raw.criticScoreSummary?.score || 0;
+    const reviewCount = raw.criticScoreSummary?.reviewCount || 0;
+    if (reviewCount < 25 || metaScore < 85) continue;
+    if (/\b(remastered|complete edition|definitive edition|goty|game of the year)\b/i.test(mapped.title)) {
+      continue;
+    }
+    const key = normGameKey(mapped.title);
+    if (!key) continue;
+    const popScore = metaScore * 2 + Math.min(80, reviewCount * 0.7);
+    const prev = byKey.get(key);
+    if (!prev || popScore > prev.popScore) {
+      byKey.set(key, { ...mapped, popScore });
+    }
+  }
+
+  for (const item of steamItems) {
+    const appId = item.appid;
+    const title = (item.name || '').trim();
+    if (!appId || !title || (item.type !== undefined && item.type !== 0)) continue;
+    const relSec = item.release?.steam_release_date || 0;
+    if (item.release?.is_coming_soon || relSec <= 0 || relSec > nowSec - sixMonthsSec) continue;
+    const reviewCount = item.reviews?.summary_filtered?.review_count || 0;
+    if (reviewCount < 1500) continue;
+    const relCapsule = item.assets?.library_capsule_2x || item.assets?.library_capsule;
+    const posterUrl = buildSteamAssetUrl(item.assets?.asset_url_format, relCapsule);
+    if (!posterUrl) continue;
+    const backdropUrl =
+      buildSteamAssetUrl(item.assets?.asset_url_format, item.assets?.header) ||
+      `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg`;
+    const key = normGameKey(title);
+    if (!key) continue;
+    const pctPos = item.reviews?.summary_filtered?.percent_positive || 88;
+    const rating = Number(Math.max(3.0, Math.min(5.0, pctPos / 20)).toFixed(1));
+    const popScore = pctPos * 1.6 + Math.min(90, Math.log10(reviewCount) * 18);
+
+    const prev = byKey.get(key);
+    if (prev) {
+      const mergedPlatforms = prev.platforms.includes('PC') ? prev.platforms : [...prev.platforms, 'PC'];
+      byKey.set(key, {
+        ...prev,
+        appId,
+        posterUrl,
+        backdropUrl,
+        platforms: mergedPlatforms,
+        subtitle: mergedPlatforms.slice(0, 2).join(' · '),
+        popScore: Math.max(prev.popScore, popScore) + 25,
+      });
+    } else {
+      byKey.set(key, {
+        id: `steam-${appId}`,
+        appId,
+        title,
+        year: new Date(relSec * 1000).getUTCFullYear(),
+        releasedAt: relSec,
+        rating,
+        posterUrl,
+        backdropUrl,
+        overview:
+          (item.basic_info?.short_description || '').trim() || `${title} — evergreen PC hit.`,
+        platforms: ['PC', 'Steam Deck'],
+        genres: ['Video Game'],
+        subtitle: 'PC · Steam',
+        isFree: item.is_free,
+        popScore,
+      });
+    }
+  }
+
+  return {
+    items: Array.from(byKey.values())
+      .sort((a, b) => b.popScore - a.popScore)
+      .slice(0, limit)
+      .map(({ popScore: _p, ...rest }) => rest),
+  };
+}
+
+/** Fetches multi-platform live games (trending, anticipated, or all-time popular). */
+export async function fetchTrendingGamesPayload(
+  limit = 24,
+  mode: GameDiscoverMode = 'trending'
+): Promise<{ items: TrendingGameItem[] }> {
   const cappedLimit = Math.max(6, Math.min(30, limit));
+  if (mode === 'anticipated') return fetchAnticipatedGamesPayload(cappedLimit);
+  if (mode === 'popular') return fetchPopularGamesPayload(cappedLimit);
 
   const [mcRes, wikiRes, steamRes] = await Promise.allSettled([
     fetchMetacriticRecentGames(),
@@ -507,8 +809,11 @@ export async function GET(request: Request): Promise<Response> {
   try {
     const url = new URL(request.url);
     const limitParam = Number(url.searchParams.get('limit') || '24');
+    const rawMode = url.searchParams.get('mode');
+    const mode: GameDiscoverMode =
+      rawMode === 'anticipated' || rawMode === 'popular' ? rawMode : 'trending';
     const limit = Number.isFinite(limitParam) ? limitParam : 24;
-    const payload = await fetchTrendingGamesPayload(limit);
+    const payload = await fetchTrendingGamesPayload(limit, mode);
     return new Response(JSON.stringify(payload), {
       status: 200,
       headers: {

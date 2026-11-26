@@ -1,7 +1,7 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { fetchTrendingGamesPayload } from './api/trending-games.ts'
+import { type GameDiscoverMode, fetchTrendingGamesPayload } from './api/trending-games.ts'
 import {
   type ComicWikiSlug,
   fetchComicSeriesIssuesPayload,
@@ -136,8 +136,12 @@ function trendingGamesDevPlugin(): Plugin {
         try {
           const url = new URL(req.url || '/', 'http://localhost');
           const limitParam = Number(url.searchParams.get('limit') || '24');
+          const rawMode = url.searchParams.get('mode');
+          const mode: GameDiscoverMode =
+            rawMode === 'anticipated' || rawMode === 'popular' ? rawMode : 'trending';
           const payload = await fetchTrendingGamesPayload(
-            Number.isFinite(limitParam) ? limitParam : 24
+            Number.isFinite(limitParam) ? limitParam : 24,
+            mode
           );
           res.setHeader('Content-Type', 'application/json');
           res.statusCode = 200;

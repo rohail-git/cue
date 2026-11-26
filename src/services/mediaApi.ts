@@ -38,6 +38,9 @@ import {
 
 export type SearchMediaFilter =
   | 'all'
+  | 'watch'
+  | 'read'
+  | 'play'
   | 'tv'
   | 'movie'
   | 'anime'
@@ -384,6 +387,9 @@ function rankAndDedupeLiveResults(results: LiveSearchResult[], query: string): L
 
 function matchesMediaFilter(item: LiveSearchResult, mediaFilter: SearchMediaFilter): boolean {
   if (mediaFilter === 'all') return true;
+  if (mediaFilter === 'watch' || mediaFilter === 'read' || mediaFilter === 'play') {
+    return item.domain === mediaFilter;
+  }
   return item.mediaType === mediaFilter;
 }
 
@@ -397,10 +403,18 @@ export async function searchLiveMedia(
 
   const tasks: Promise<LiveSearchResult[]>[] = [];
   const wantsWatch =
-    mediaFilter === 'all' || mediaFilter === 'tv' || mediaFilter === 'movie' || mediaFilter === 'anime';
+    mediaFilter === 'all' ||
+    mediaFilter === 'watch' ||
+    mediaFilter === 'tv' ||
+    mediaFilter === 'movie' ||
+    mediaFilter === 'anime';
   const wantsRead =
-    mediaFilter === 'all' || mediaFilter === 'manga' || mediaFilter === 'comic' || mediaFilter === 'novel';
-  const wantsPlay = mediaFilter === 'all' || mediaFilter === 'game';
+    mediaFilter === 'all' ||
+    mediaFilter === 'read' ||
+    mediaFilter === 'manga' ||
+    mediaFilter === 'comic' ||
+    mediaFilter === 'novel';
+  const wantsPlay = mediaFilter === 'all' || mediaFilter === 'play' || mediaFilter === 'game';
 
   if (wantsWatch) {
     const hasTmdb = Boolean(tmdbApiKey && tmdbApiKey.trim().length > 8);
@@ -408,33 +422,42 @@ export async function searchLiveMedia(
       tasks.push(
         searchTmdbMulti(trimmed, tmdbApiKey!.trim()).catch(async () => {
           const fallback: LiveSearchResult[] = [];
-          if (mediaFilter === 'all' || mediaFilter === 'tv') fallback.push(...(await searchTvMaze(trimmed)));
-          if (mediaFilter === 'all' || mediaFilter === 'movie') fallback.push(...(await searchItunesMovies(trimmed)));
+          if (mediaFilter === 'all' || mediaFilter === 'watch' || mediaFilter === 'tv') {
+            fallback.push(...(await searchTvMaze(trimmed)));
+          }
+          if (mediaFilter === 'all' || mediaFilter === 'watch' || mediaFilter === 'movie') {
+            fallback.push(...(await searchItunesMovies(trimmed)));
+          }
           return fallback;
         })
       );
     } else {
-      if (mediaFilter === 'all' || mediaFilter === 'tv') {
+      if (mediaFilter === 'all' || mediaFilter === 'watch' || mediaFilter === 'tv') {
         tasks.push(searchTvMaze(trimmed));
       }
-      if (mediaFilter === 'all' || mediaFilter === 'movie') {
+      if (mediaFilter === 'all' || mediaFilter === 'watch' || mediaFilter === 'movie') {
         tasks.push(searchItunesMovies(trimmed));
       }
     }
-    if (mediaFilter === 'all' || mediaFilter === 'anime') {
+    if (mediaFilter === 'all' || mediaFilter === 'watch' || mediaFilter === 'anime') {
       tasks.push(searchAniListAnime(trimmed));
     }
   }
 
   if (wantsRead) {
     const { baseQuery } = extractQueryYear(trimmed);
-    if (mediaFilter === 'all' || mediaFilter === 'comic') {
+    if (mediaFilter === 'all' || mediaFilter === 'read' || mediaFilter === 'comic') {
       tasks.push(searchComicSeries(trimmed));
       tasks.push(searchOpenLibrary(baseQuery || trimmed));
     } else if (mediaFilter === 'novel') {
       tasks.push(searchOpenLibrary(baseQuery || trimmed));
     }
-    if (mediaFilter === 'all' || mediaFilter === 'manga' || mediaFilter === 'novel') {
+    if (
+      mediaFilter === 'all' ||
+      mediaFilter === 'read' ||
+      mediaFilter === 'manga' ||
+      mediaFilter === 'novel'
+    ) {
       tasks.push(searchAniListManga(baseQuery || trimmed));
     }
   }
@@ -984,28 +1007,20 @@ async function fetchTrendingManga(limit: number): Promise<LiveSearchResult[]> {
   return interleaveGroups([appleList, alList], limit, (x) => canonicalReadWorkKey(x.title));
 }
 
-async function fetchTrendingComics(limit: number): Promise<LiveSearchResult[]> {
+async function fetchTrendingComics(limit: number, targetYear?: number): Promise<LiveSearchResult[]> {
   const win = getRecentDateWindow(185);
+  const queryYear = targetYear || win.currentYear;
   const fields =
     'key,title,subtitle,author_name,first_publish_year,cover_i,isbn,publisher,number_of_pages_median';
-  const queries = [
-    `https://openlibrary.org/search.json?q=${encodeURIComponent(
-      `publisher:("DC Comics" OR "Marvel" OR "Image Comics" OR "BOOM! Studios" OR "Dark Horse") first_publish_year:${win.currentYear}`
-    )}&language=eng&limit=45&fields=${fields}`,
-    `https://openlibrary.org/search.json?q=${encodeURIComponent(
-      `comics first_publish_year:${win.currentYear}`
-    )}&language=eng&limit=25&fields=${fields}`,
-  ];
+  const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(
+    `publisher:("DC Comics" OR "Marvel" OR "Image Comics" OR "BOOM! Studios" OR "Dark Horse") first_publish_year:${queryYear}`
+  )}&language=eng&limit=45&fields=${fields}`;
 
   try {
-    const responses = await Promise.allSettled(queries.map((u) => fetch(u)));
-    const docs: OpenLibraryDoc[] = [];
-    for (const r of responses) {
-      if (r.status === 'fulfilled' && r.value.ok) {
-        const json = (await r.value.json()) as { docs?: OpenLibraryDoc[] };
-        docs.push(...(json.docs || []));
-      }
-    }
+    const r = await fetch(url);
+    const docs: OpenLibraryDoc[] = r.ok
+      ? (((await r.json()) as { docs?: OpenLibraryDoc[] }).docs || [])
+      : [];
 
     const out: LiveSearchResult[] = [];
     const seen = new Set<string>();
@@ -1049,14 +1064,14 @@ async function fetchTrendingComics(limit: number): Promise<LiveSearchResult[]> {
         externalId: cleanKey,
         title: fullTitle,
         subtitle: author,
-        year: d.first_publish_year || win.currentYear,
+        year: d.first_publish_year || queryYear,
         mediaType: 'comic',
         genres: ['Comics'],
         rating: 4.6,
         posterUrl: cover,
         backdropUrl: cover,
         overview: d.publisher?.[0]
-          ? `${fullTitle} (${d.first_publish_year || win.currentYear}) · ${d.publisher[0]}.`
+          ? `${fullTitle} (${d.first_publish_year || queryYear}) · ${d.publisher[0]}.`
           : `${fullTitle} by ${author}.`,
         director: author,
         totalUnits: inferredIssues,
@@ -1141,10 +1156,13 @@ async function fetchTrendingNovels(limit: number): Promise<LiveSearchResult[]> {
   }
 }
 
-async function fetchTrendingGames(limit: number): Promise<LiveSearchResult[]> {
+async function fetchGamesByMode(
+  limit: number,
+  mode: 'trending' | 'anticipated' | 'popular' = 'trending'
+): Promise<LiveSearchResult[]> {
   try {
     const res = await fetch(
-      `/api/trending-games?limit=${Math.max(12, Math.min(30, limit))}`,
+      `/api/trending-games?mode=${mode}&limit=${Math.max(12, Math.min(30, limit))}`,
       { signal: AbortSignal.timeout(10000) }
     );
     if (!res.ok) return [];
@@ -1187,6 +1205,899 @@ async function fetchTrendingGames(limit: number): Promise<LiveSearchResult[]> {
   } catch {
     return [];
   }
+}
+
+async function fetchTrendingGames(limit: number): Promise<LiveSearchResult[]> {
+  return fetchGamesByMode(limit, 'trending');
+}
+
+export interface DiscoverRail {
+  id: string;
+  title: string;
+  domain: 'all' | 'watch' | 'read' | 'play';
+  showMediaBadge: boolean;
+  items: LiveSearchResult[];
+}
+
+const discoverAllCache = new Map<string, { ts: number; rails: DiscoverRail[] }>();
+const discoverDomainCache = new Map<string, { ts: number; rails: DiscoverRail[] }>();
+
+function excludeSeenWorkKeys(items: LiveSearchResult[], excludeKeys: Set<string>): LiveSearchResult[] {
+  return items.filter((item) => {
+    const key =
+      item.domain === 'read'
+        ? `read:${canonicalReadWorkKey(item.title)}`
+        : `${item.domain}:${normalizeTitleKey(item.title)}`;
+    return !excludeKeys.has(key);
+  });
+}
+
+function addWorkKeysToSet(items: LiveSearchResult[], target: Set<string>): void {
+  for (const item of items) {
+    const key =
+      item.domain === 'read'
+        ? `read:${canonicalReadWorkKey(item.title)}`
+        : `${item.domain}:${normalizeTitleKey(item.title)}`;
+    target.add(key);
+  }
+}
+
+async function fetchAnticipatedWatch(
+  limit: number,
+  tmdbApiKey?: string
+): Promise<LiveSearchResult[]> {
+  const win = getRecentDateWindow(185);
+  const hasTmdb = Boolean(tmdbApiKey && tmdbApiKey.trim().length > 8);
+
+  const animeTask = (async (): Promise<LiveSearchResult[]> => {
+    try {
+      const gql = `query{Page(perPage:20){media(type:ANIME,status:NOT_YET_RELEASED,sort:[POPULARITY_DESC]){id format title{english romaji} coverImage{extraLarge large} bannerImage episodes startDate{year} genres averageScore popularity description(asHtml:false)}}}`;
+      const res = await fetch('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: gql }),
+      });
+      if (!res.ok) return [];
+      const json = (await res.json()) as {
+        data?: {
+          Page?: {
+            media?: Array<{
+              id: number;
+              format?: string;
+              title?: { english?: string; romaji?: string };
+              coverImage?: { extraLarge?: string; large?: string };
+              bannerImage?: string;
+              episodes?: number;
+              startDate?: { year?: number };
+              genres?: string[];
+              averageScore?: number;
+              popularity?: number;
+              description?: string;
+            }>;
+          };
+        };
+      };
+      return (json.data?.Page?.media || [])
+        .filter((a) => a.format !== 'MUSIC')
+        .map((a): LiveSearchResult | null => {
+          const title = a.title?.english || a.title?.romaji || '';
+          const cover = a.coverImage?.extraLarge || a.coverImage?.large || '';
+          if (!title || !cover || hasNonLatinScript(title)) return null;
+          return {
+            domain: 'watch',
+            kind: 'show',
+            id: `al-anime-${a.id}`,
+            source: 'anilist',
+            externalId: a.id,
+            title,
+            subtitle: 'Upcoming Anime',
+            year: a.startDate?.year || win.currentYear + 1,
+            mediaType: 'anime',
+            genres: a.genres?.length ? a.genres.slice(0, 3) : ['Anime'],
+            rating: a.averageScore ? Number((a.averageScore / 10).toFixed(1)) : 8.5,
+            posterUrl: cover,
+            backdropUrl: a.bannerImage || cover,
+            overview: stripHtml(a.description) || `${title} — upcoming anime release.`,
+            popularity: a.popularity || 0,
+            anilistFormat: a.format,
+            anilistEpisodes: a.episodes || 12,
+          };
+        })
+        .filter((x): x is LiveSearchResult => Boolean(x));
+    } catch {
+      return [];
+    }
+  })();
+
+  const tvTask = (async (): Promise<LiveSearchResult[]> => {
+    try {
+      const dates = [7, 14, 21, 30].map((offset) =>
+        new Date(Date.now() + offset * 86400 * 1000).toISOString().slice(0, 10)
+      );
+      const responses = await Promise.allSettled(
+        dates.map((d) => fetch(`https://api.tvmaze.com/schedule/web?date=${d}`))
+      );
+      const byId = new Map<number, LiveSearchResult>();
+      for (const r of responses) {
+        if (r.status !== 'fulfilled' || !r.value.ok) continue;
+        const list = (await r.value.json()) as Array<{
+          _embedded?: {
+            show?: {
+              id: number;
+              name?: string;
+              language?: string;
+              type?: string;
+              genres?: string[];
+              premiered?: string;
+              weight?: number;
+              rating?: { average?: number };
+              image?: { medium?: string; original?: string };
+              summary?: string;
+              averageRuntime?: number;
+            };
+          };
+        }>;
+        for (const ep of list) {
+          const s = ep._embedded?.show;
+          if (!s || !s.id || !s.name || byId.has(s.id)) continue;
+          if (hasNonLatinScript(s.name)) continue;
+          if (s.language && s.language !== 'English') continue;
+          if (s.genres?.includes('Anime') || (s.type === 'Animation' && s.language === 'Japanese')) {
+            continue;
+          }
+          if ((s.weight || 0) < 35) continue;
+          if (s.premiered && s.premiered < win.cutoffIso) continue;
+          const poster = s.image?.medium || s.image?.original || '';
+          if (!poster) continue;
+          byId.set(s.id, {
+            domain: 'watch',
+            kind: 'show',
+            id: `tvmaze-${s.id}`,
+            source: 'tvmaze',
+            externalId: s.id,
+            title: s.name,
+            year: s.premiered ? Number(s.premiered.slice(0, 4)) : win.currentYear + 1,
+            mediaType: 'tv',
+            genres: s.genres?.length ? s.genres.slice(0, 2) : ['Series'],
+            rating: s.rating?.average || 8.0,
+            posterUrl: poster,
+            backdropUrl: s.image?.original || poster,
+            overview: stripHtml(s.summary) || `${s.name} — upcoming series.`,
+            runtime: s.averageRuntime || 45,
+          });
+        }
+      }
+      return Array.from(byId.values());
+    } catch {
+      return [];
+    }
+  })();
+
+  const moviesTask = (async (): Promise<LiveSearchResult[]> => {
+    if (hasTmdb) {
+      try {
+        const res = await fetch(
+          `https://api.themoviedb.org/3/movie/upcoming?language=en-US&page=1&api_key=${encodeURIComponent(
+            tmdbApiKey!.trim()
+          )}`
+        );
+        if (res.ok) {
+          const data = (await res.json()) as {
+            results?: Array<{
+              id: number;
+              title?: string;
+              release_date?: string;
+              poster_path?: string;
+              backdrop_path?: string;
+              overview?: string;
+              vote_average?: number;
+            }>;
+          };
+          const out: LiveSearchResult[] = [];
+          for (const r of data.results || []) {
+            if (!r.poster_path || !r.title) continue;
+            if (r.release_date && r.release_date <= win.todayIso) continue;
+            const poster = `https://image.tmdb.org/t/p/w500${r.poster_path}`;
+            out.push({
+              domain: 'watch',
+              kind: 'movie',
+              id: `tmdb-movie-${r.id}`,
+              source: 'tmdb',
+              externalId: r.id,
+              title: r.title,
+              year: r.release_date ? Number(r.release_date.slice(0, 4)) : win.currentYear + 1,
+              mediaType: 'movie',
+              genres: ['Feature Film'],
+              rating: r.vote_average ? Number(r.vote_average.toFixed(1)) : 8.0,
+              posterUrl: poster,
+              backdropUrl: r.backdrop_path ? `https://image.tmdb.org/t/p/w1280${r.backdrop_path}` : poster,
+              overview: r.overview || `${r.title} — upcoming film.`,
+            });
+          }
+          if (out.length > 0) return out;
+        }
+      } catch {
+        // fall through
+      }
+    }
+    return [];
+  })();
+
+  const [animeRes, tvRes, movieRes] = await Promise.allSettled([animeTask, tvTask, moviesTask]);
+  return interleaveGroups(
+    [
+      movieRes.status === 'fulfilled' ? movieRes.value : [],
+      animeRes.status === 'fulfilled' ? animeRes.value : [],
+      tvRes.status === 'fulfilled' ? tvRes.value : [],
+    ],
+    limit,
+    (x) => normalizeTitleKey(x.title)
+  );
+}
+
+async function fetchPopularWatch(
+  limit: number,
+  tmdbApiKey?: string
+): Promise<LiveSearchResult[]> {
+  const win = getRecentDateWindow(185);
+  const hasTmdb = Boolean(tmdbApiKey && tmdbApiKey.trim().length > 8);
+
+  const showsTask = (async (): Promise<LiveSearchResult[]> => {
+    try {
+      const res = await fetch('https://api.tvmaze.com/shows?page=0');
+      if (!res.ok) return [];
+      const list = (await res.json()) as Array<{
+        id: number;
+        name?: string;
+        language?: string;
+        type?: string;
+        genres?: string[];
+        premiered?: string;
+        weight?: number;
+        rating?: { average?: number };
+        image?: { medium?: string; original?: string };
+        summary?: string;
+        averageRuntime?: number;
+      }>;
+      return list
+        .filter((s) => {
+          if (!s.id || !s.name || hasNonLatinScript(s.name)) return false;
+          if (s.language && s.language !== 'English') return false;
+          if (s.genres?.includes('Anime') || (s.type === 'Animation' && s.language === 'Japanese')) {
+            return false;
+          }
+          if (!s.image?.medium && !s.image?.original) return false;
+          const premiered = s.premiered || '';
+          if (premiered && premiered >= win.cutoffIso) return false;
+          return (s.weight || 0) >= 88 && (s.rating?.average || 0) >= 8.0;
+        })
+        .sort((a, b) => (b.weight || 0) * (b.rating?.average || 8) - (a.weight || 0) * (a.rating?.average || 8))
+        .slice(0, 14)
+        .map((s) => {
+          const poster = s.image?.medium || s.image?.original || '';
+          return {
+            domain: 'watch' as const,
+            kind: 'show' as const,
+            id: `tvmaze-${s.id}`,
+            source: 'tvmaze' as const,
+            externalId: s.id,
+            title: s.name!,
+            year: s.premiered ? Number(s.premiered.slice(0, 4)) : 2018,
+            mediaType: 'tv' as const,
+            genres: s.genres?.length ? s.genres.slice(0, 2) : ['Series'],
+            rating: s.rating?.average || 8.4,
+            posterUrl: poster,
+            backdropUrl: s.image?.original || poster,
+            overview: stripHtml(s.summary) || `${s.name} series.`,
+            runtime: s.averageRuntime || 45,
+          };
+        });
+    } catch {
+      return [];
+    }
+  })();
+
+  const animeTask = (async (): Promise<LiveSearchResult[]> => {
+    try {
+      const gql = `query{Page(perPage:20){media(type:ANIME,status_in:[FINISHED,RELEASING],sort:[POPULARITY_DESC]){id format title{english romaji} coverImage{extraLarge large} bannerImage episodes startDate{year} genres averageScore popularity description(asHtml:false)}}}`;
+      const res = await fetch('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: gql }),
+      });
+      if (!res.ok) return [];
+      const json = (await res.json()) as {
+        data?: {
+          Page?: {
+            media?: Array<{
+              id: number;
+              format?: string;
+              title?: { english?: string; romaji?: string };
+              coverImage?: { extraLarge?: string; large?: string };
+              bannerImage?: string;
+              episodes?: number;
+              startDate?: { year?: number };
+              genres?: string[];
+              averageScore?: number;
+              popularity?: number;
+              description?: string;
+            }>;
+          };
+        };
+      };
+      return (json.data?.Page?.media || [])
+        .filter((a) => a.format !== 'MUSIC')
+        .map((a): LiveSearchResult | null => {
+          const title = a.title?.english || a.title?.romaji || '';
+          const cover = a.coverImage?.extraLarge || a.coverImage?.large || '';
+          if (!title || !cover || hasNonLatinScript(title)) return null;
+          return {
+            domain: 'watch',
+            kind: 'show',
+            id: `al-anime-${a.id}`,
+            source: 'anilist',
+            externalId: a.id,
+            title,
+            subtitle: a.episodes ? `${a.episodes} episodes` : 'Anime classic',
+            year: a.startDate?.year || 2016,
+            mediaType: 'anime',
+            genres: a.genres?.length ? a.genres.slice(0, 3) : ['Anime'],
+            rating: a.averageScore ? Number((a.averageScore / 10).toFixed(1)) : 8.7,
+            posterUrl: cover,
+            backdropUrl: a.bannerImage || cover,
+            overview: stripHtml(a.description) || `${title} anime series.`,
+            popularity: a.popularity || 0,
+            anilistFormat: a.format,
+            anilistEpisodes: a.episodes || 12,
+          };
+        })
+        .filter((x): x is LiveSearchResult => Boolean(x));
+    } catch {
+      return [];
+    }
+  })();
+
+  const moviesTask = (async (): Promise<LiveSearchResult[]> => {
+    if (hasTmdb) {
+      try {
+        const res = await fetch(
+          `https://api.themoviedb.org/3/movie/top_rated?language=en-US&page=1&api_key=${encodeURIComponent(
+            tmdbApiKey!.trim()
+          )}`
+        );
+        if (res.ok) {
+          const data = (await res.json()) as {
+            results?: Array<{
+              id: number;
+              title?: string;
+              release_date?: string;
+              poster_path?: string;
+              backdrop_path?: string;
+              overview?: string;
+              vote_average?: number;
+            }>;
+          };
+          const out: LiveSearchResult[] = [];
+          for (const r of data.results || []) {
+            if (!r.poster_path || !r.title) continue;
+            const poster = `https://image.tmdb.org/t/p/w500${r.poster_path}`;
+            out.push({
+              domain: 'watch',
+              kind: 'movie',
+              id: `tmdb-movie-${r.id}`,
+              source: 'tmdb',
+              externalId: r.id,
+              title: r.title,
+              year: r.release_date ? Number(r.release_date.slice(0, 4)) : 2014,
+              mediaType: 'movie',
+              genres: ['Feature Film'],
+              rating: r.vote_average ? Number(r.vote_average.toFixed(1)) : 8.5,
+              posterUrl: poster,
+              backdropUrl: r.backdrop_path ? `https://image.tmdb.org/t/p/w1280${r.backdrop_path}` : poster,
+              overview: r.overview || '',
+            });
+          }
+          if (out.length > 0) return out;
+        }
+      } catch {
+        // fall through to Apple classics
+      }
+    }
+
+    try {
+      const res = await fetch('https://itunes.apple.com/us/rss/topmovies/limit=60/json');
+      if (!res.ok) return [];
+      const data = (await res.json()) as {
+        feed?: {
+          entry?: Array<{
+            id?: { attributes?: { 'im:id'?: string } };
+            'im:name'?: { label?: string };
+            'im:artist'?: { label?: string };
+            'im:image'?: Array<{ label?: string }>;
+            'im:releaseDate'?: { label?: string };
+            category?: { attributes?: { label?: string } };
+            summary?: { label?: string };
+          }>;
+        };
+      };
+      const parsed = parseAppleRssEntries(data.feed?.entry || [], win.cutoffDate);
+      const classics = parsed.filter(
+        (x) => !x.isRecent && x.relDate && x.relDate.getUTCFullYear() < win.currentYear
+      );
+      const out: LiveSearchResult[] = [];
+      const seen = new Set<string>();
+      for (const { e, relDate } of classics) {
+        const id = e.id?.attributes?.['im:id'] || '';
+        const title = cleanAppleTitle(e['im:name']?.label || '');
+        const poster = upscaleAppleArtwork(e['im:image']?.[e['im:image'].length - 1]?.label || '');
+        const key = normalizeTitleKey(title);
+        if (!id || !title || !poster || seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          domain: 'watch',
+          kind: 'movie',
+          id: `itunes-${id}`,
+          source: 'itunes',
+          externalId: Number(id) || id,
+          title,
+          subtitle: e['im:artist']?.label || 'Feature Film',
+          year: relDate ? relDate.getUTCFullYear() : 2015,
+          mediaType: 'movie',
+          genres: [e.category?.attributes?.label || 'Feature Film'],
+          rating: 8.2,
+          posterUrl: poster,
+          backdropUrl: poster,
+          overview: e.summary?.label || `${title} — classic release.`,
+          director: e['im:artist']?.label || 'Feature Film',
+          runtime: 125,
+        });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  })();
+
+  const [moviesRes, showsRes, animeRes] = await Promise.allSettled([
+    moviesTask,
+    showsTask,
+    animeTask,
+  ]);
+  return interleaveGroups(
+    [
+      showsRes.status === 'fulfilled' ? showsRes.value : [],
+      moviesRes.status === 'fulfilled' ? moviesRes.value : [],
+      animeRes.status === 'fulfilled' ? animeRes.value : [],
+    ],
+    limit,
+    (x) => normalizeTitleKey(x.title)
+  );
+}
+
+async function fetchAnticipatedRead(limit: number): Promise<LiveSearchResult[]> {
+  const win = getRecentDateWindow(185);
+  const mangaTask = (async (): Promise<LiveSearchResult[]> => {
+    try {
+      const gql = `query($d:FuzzyDateInt){Page(perPage:15){media(type:MANGA,startDate_greater:$d,sort:[POPULARITY_DESC]){id format title{english romaji} coverImage{extraLarge large} bannerImage chapters startDate{year} genres averageScore popularity description(asHtml:false) staff(perPage:1){nodes{name{full}}}}}}`;
+      const res = await fetch('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: gql, variables: { d: win.currentYear * 10000 } }),
+      });
+      if (!res.ok) return [];
+      const json = (await res.json()) as {
+        data?: {
+          Page?: {
+            media?: Array<{
+              id: number;
+              title?: { english?: string; romaji?: string };
+              coverImage?: { extraLarge?: string; large?: string };
+              bannerImage?: string;
+              chapters?: number;
+              startDate?: { year?: number };
+              genres?: string[];
+              averageScore?: number;
+              description?: string;
+              staff?: { nodes?: Array<{ name?: { full?: string } }> };
+            }>;
+          };
+        };
+      };
+      return (json.data?.Page?.media || [])
+        .map((m): LiveSearchResult | null => {
+          const title = m.title?.english || m.title?.romaji || '';
+          const cover = m.coverImage?.extraLarge || m.coverImage?.large || '';
+          if (!title || !cover || hasNonLatinScript(title)) return null;
+          const author = m.staff?.nodes?.[0]?.name?.full || 'Mangaka';
+          return {
+            domain: 'read',
+            kind: 'read',
+            id: `al-manga-${m.id}`,
+            source: 'anilist',
+            externalId: m.id,
+            title,
+            subtitle: author,
+            year: m.startDate?.year || win.currentYear + 1,
+            mediaType: 'manga',
+            genres: m.genres?.length ? m.genres.slice(0, 2) : ['Manga'],
+            rating: m.averageScore ? Number((m.averageScore / 20).toFixed(1)) : 4.7,
+            posterUrl: cover,
+            backdropUrl: m.bannerImage || cover,
+            overview: stripHtml(m.description) || `${title} — upcoming manga.`,
+            director: author,
+            totalUnits: m.chapters || 12,
+          };
+        })
+        .filter((x): x is LiveSearchResult => Boolean(x));
+    } catch {
+      return [];
+    }
+  })();
+
+  const [comicsNextRes, mangaRes] = await Promise.allSettled([
+    fetchTrendingComics(8, win.currentYear + 1),
+    mangaTask,
+  ]);
+  return interleaveGroups(
+    [
+      comicsNextRes.status === 'fulfilled' ? comicsNextRes.value : [],
+      mangaRes.status === 'fulfilled' ? mangaRes.value : [],
+    ],
+    limit,
+    (x) => canonicalReadWorkKey(x.title)
+  );
+}
+
+async function fetchPopularRead(limit: number): Promise<LiveSearchResult[]> {
+  const win = getRecentDateWindow(185);
+  const mangaTask = (async (): Promise<LiveSearchResult[]> => {
+    try {
+      const gql = `query{Page(perPage:20){media(type:MANGA,sort:[POPULARITY_DESC]){id format title{english romaji} coverImage{extraLarge large} bannerImage chapters startDate{year} genres averageScore popularity description(asHtml:false) staff(perPage:1){nodes{name{full}}}}}}`;
+      const res = await fetch('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: gql }),
+      });
+      if (!res.ok) return [];
+      const json = (await res.json()) as {
+        data?: {
+          Page?: {
+            media?: Array<{
+              id: number;
+              title?: { english?: string; romaji?: string };
+              coverImage?: { extraLarge?: string; large?: string };
+              bannerImage?: string;
+              chapters?: number;
+              startDate?: { year?: number };
+              genres?: string[];
+              averageScore?: number;
+              description?: string;
+              staff?: { nodes?: Array<{ name?: { full?: string } }> };
+            }>;
+          };
+        };
+      };
+      return (json.data?.Page?.media || [])
+        .map((m): LiveSearchResult | null => {
+          const title = m.title?.english || m.title?.romaji || '';
+          const cover = m.coverImage?.extraLarge || m.coverImage?.large || '';
+          if (!title || !cover || hasNonLatinScript(title)) return null;
+          const author = m.staff?.nodes?.[0]?.name?.full || 'Mangaka';
+          return {
+            domain: 'read',
+            kind: 'read',
+            id: `al-manga-${m.id}`,
+            source: 'anilist',
+            externalId: m.id,
+            title,
+            subtitle: author,
+            year: m.startDate?.year || 2015,
+            mediaType: 'manga',
+            genres: m.genres?.length ? m.genres.slice(0, 2) : ['Manga'],
+            rating: m.averageScore ? Number((m.averageScore / 20).toFixed(1)) : 4.8,
+            posterUrl: cover,
+            backdropUrl: m.bannerImage || cover,
+            overview: stripHtml(m.description) || `${title} manga series.`,
+            director: author,
+            totalUnits: m.chapters || 80,
+          };
+        })
+        .filter((x): x is LiveSearchResult => Boolean(x));
+    } catch {
+      return [];
+    }
+  })();
+
+  const classicBooksTask = async (genreId: number, mediaType: 'novel' | 'manga'): Promise<LiveSearchResult[]> => {
+    try {
+      const res = await fetch(
+        `https://itunes.apple.com/us/rss/topebooks/limit=45/genre=${genreId}/json`
+      );
+      if (!res.ok) return [];
+      const data = (await res.json()) as {
+        feed?: {
+          entry?: Array<{
+            id?: { attributes?: { 'im:id'?: string } };
+            'im:name'?: { label?: string };
+            'im:artist'?: { label?: string };
+            'im:image'?: Array<{ label?: string }>;
+            'im:releaseDate'?: { label?: string };
+            category?: { attributes?: { label?: string } };
+            summary?: { label?: string };
+          }>;
+        };
+      };
+      const parsed = parseAppleRssEntries(data.feed?.entry || [], win.cutoffDate).filter(
+        (x) => !x.isRecent && x.relDate && x.relDate.getUTCFullYear() < win.currentYear
+      );
+      const out: LiveSearchResult[] = [];
+      const seen = new Set<string>();
+      for (const { e, relDate } of parsed) {
+        const id = e.id?.attributes?.['im:id'] || '';
+        const title = cleanAppleTitle(e['im:name']?.label || '');
+        const cover = upscaleAppleArtwork(e['im:image']?.[e['im:image'].length - 1]?.label || '');
+        const key = canonicalReadWorkKey(title);
+        if (!id || !title || !cover || hasNonLatinScript(title) || seen.has(key)) continue;
+        seen.add(key);
+        const author = e['im:artist']?.label || 'Author';
+        out.push({
+          domain: 'read',
+          kind: 'read',
+          id: mediaType === 'manga' ? `itunes-manga-${id}` : `itunes-book-${id}`,
+          source: 'openlibrary',
+          externalId: id,
+          title,
+          subtitle: author,
+          year: relDate ? relDate.getUTCFullYear() : 2018,
+          mediaType,
+          genres: [e.category?.attributes?.label || (mediaType === 'manga' ? 'Manga' : 'Fiction')],
+          rating: 4.7,
+          posterUrl: cover,
+          backdropUrl: cover,
+          overview: e.summary?.label || `${title} by ${author}.`,
+          director: author,
+          totalUnits: mediaType === 'manga' ? 12 : 24,
+        });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  };
+
+  const [mangaRes, novelsRes, graphicRes] = await Promise.allSettled([
+    mangaTask,
+    classicBooksTask(9031, 'novel'),
+    classicBooksTask(9026, 'manga'),
+  ]);
+  return interleaveGroups(
+    [
+      mangaRes.status === 'fulfilled' ? mangaRes.value : [],
+      novelsRes.status === 'fulfilled' ? novelsRes.value : [],
+      graphicRes.status === 'fulfilled' ? graphicRes.value : [],
+    ],
+    limit,
+    (x) => canonicalReadWorkKey(x.title)
+  );
+}
+
+/** Fetches distinct Discover horizontal rails for the `All` view. */
+export async function fetchAllDiscoverRails(tmdbApiKey?: string): Promise<DiscoverRail[]> {
+  const key = tmdbApiKey?.trim() ? 'tmdb' : 'public';
+  const cached = discoverAllCache.get(key);
+  if (cached && Date.now() - cached.ts < TRENDING_TTL_MS) {
+    return cached.rails;
+  }
+
+  const [
+    domainTrending,
+    antGamesRes,
+    antWatchRes,
+    antReadRes,
+    popWatchRes,
+    popReadRes,
+    popGamesRes,
+  ] = await Promise.all([
+    fetchTrendingByDomain(tmdbApiKey),
+    fetchGamesByMode(12, 'anticipated'),
+    fetchAnticipatedWatch(12, tmdbApiKey),
+    fetchAnticipatedRead(10),
+    fetchPopularWatch(12, tmdbApiKey),
+    fetchPopularRead(12),
+    fetchGamesByMode(12, 'popular'),
+  ]);
+
+  const seenTrendingKeys = new Set<string>();
+  addWorkKeysToSet(domainTrending.watch, seenTrendingKeys);
+  addWorkKeysToSet(domainTrending.read, seenTrendingKeys);
+  addWorkKeysToSet(domainTrending.play, seenTrendingKeys);
+
+  const anticipatedPool = interleaveGroups(
+    [
+      excludeSeenWorkKeys(antGamesRes, seenTrendingKeys),
+      excludeSeenWorkKeys(antWatchRes, seenTrendingKeys),
+      excludeSeenWorkKeys(antReadRes, seenTrendingKeys),
+    ],
+    15,
+    (x) => `${x.domain}:${canonicalReadWorkKey(x.title)}`
+  );
+  const seenPlusAnticipated = new Set(seenTrendingKeys);
+  addWorkKeysToSet(anticipatedPool, seenPlusAnticipated);
+
+  const popularPool = interleaveGroups(
+    [
+      excludeSeenWorkKeys(popWatchRes, seenPlusAnticipated),
+      excludeSeenWorkKeys(popReadRes, seenPlusAnticipated),
+      excludeSeenWorkKeys(popGamesRes, seenPlusAnticipated),
+    ],
+    15,
+    (x) => `${x.domain}:${canonicalReadWorkKey(x.title)}`
+  );
+
+  const rawRails: DiscoverRail[] = [
+    {
+      id: 'trending-watch',
+      title: 'Trending to Watch',
+      domain: 'watch',
+      showMediaBadge: true,
+      items: domainTrending.watch,
+    },
+    {
+      id: 'trending-read',
+      title: 'Trending to Read',
+      domain: 'read',
+      showMediaBadge: true,
+      items: domainTrending.read,
+    },
+    {
+      id: 'trending-play',
+      title: 'Trending to Play',
+      domain: 'play',
+      showMediaBadge: false,
+      items: domainTrending.play,
+    },
+    {
+      id: 'most-anticipated',
+      title: 'Most Anticipated',
+      domain: 'all',
+      showMediaBadge: true,
+      items: anticipatedPool,
+    },
+    {
+      id: 'popular-all-time',
+      title: 'Popular All-Time',
+      domain: 'all',
+      showMediaBadge: true,
+      items: popularPool,
+    },
+  ];
+  const rails = rawRails.filter((r) => r.items.length > 0);
+
+  discoverAllCache.set(key, { ts: Date.now(), rails });
+  return rails;
+}
+
+/** Fetches tailored horizontal rails when browsing `Watch`, `Read`, or `Play`. */
+export async function fetchDomainDiscoverRails(
+  domain: 'watch' | 'read' | 'play',
+  tmdbApiKey?: string
+): Promise<DiscoverRail[]> {
+  const key = `${domain}::${tmdbApiKey?.trim() ? 'tmdb' : 'public'}`;
+  const cached = discoverDomainCache.get(key);
+  if (cached && Date.now() - cached.ts < TRENDING_TTL_MS) {
+    return cached.rails;
+  }
+
+  let rails: DiscoverRail[] = [];
+  if (domain === 'watch') {
+    const [showsRes, moviesRes, animeRes, antRes, popRes] = await Promise.allSettled([
+      fetchTrendingShows(15, tmdbApiKey),
+      fetchTrendingMovies(15, tmdbApiKey),
+      fetchTrendingAnime(15),
+      fetchAnticipatedWatch(15, tmdbApiKey),
+      fetchPopularWatch(15, tmdbApiKey),
+    ]);
+    const shows = showsRes.status === 'fulfilled' ? showsRes.value : [];
+    const movies = moviesRes.status === 'fulfilled' ? moviesRes.value : [];
+    const anime = animeRes.status === 'fulfilled' ? animeRes.value : [];
+    const ant = antRes.status === 'fulfilled' ? antRes.value : [];
+    const pop = popRes.status === 'fulfilled' ? popRes.value : [];
+
+    const seen = new Set<string>();
+    addWorkKeysToSet([...shows, ...movies, ...anime], seen);
+
+    const rawWatchRails: DiscoverRail[] = [
+      { id: 'watch-shows', title: 'Trending Shows', domain: 'watch', showMediaBadge: false, items: shows },
+      { id: 'watch-movies', title: 'Trending Movies', domain: 'watch', showMediaBadge: false, items: movies },
+      { id: 'watch-anime', title: 'Trending Anime', domain: 'watch', showMediaBadge: false, items: anime },
+      {
+        id: 'watch-anticipated',
+        title: 'Most Anticipated',
+        domain: 'watch',
+        showMediaBadge: true,
+        items: excludeSeenWorkKeys(ant, seen),
+      },
+      {
+        id: 'watch-popular',
+        title: 'Popular All-Time',
+        domain: 'watch',
+        showMediaBadge: true,
+        items: excludeSeenWorkKeys(pop, seen),
+      },
+    ];
+    rails = rawWatchRails.filter((r) => r.items.length > 0);
+  } else if (domain === 'read') {
+    const [comicsRes, mangaRes, novelsRes, antRes, popRes] = await Promise.allSettled([
+      fetchTrendingComics(15),
+      fetchTrendingManga(15),
+      fetchTrendingNovels(15),
+      fetchAnticipatedRead(12),
+      fetchPopularRead(15),
+    ]);
+    const comics = comicsRes.status === 'fulfilled' ? comicsRes.value : [];
+    const manga = mangaRes.status === 'fulfilled' ? mangaRes.value : [];
+    const novels = novelsRes.status === 'fulfilled' ? novelsRes.value : [];
+    const ant = antRes.status === 'fulfilled' ? antRes.value : [];
+    const pop = popRes.status === 'fulfilled' ? popRes.value : [];
+
+    const seen = new Set<string>();
+    addWorkKeysToSet([...comics, ...manga, ...novels], seen);
+
+    const rawReadRails: DiscoverRail[] = [
+      { id: 'read-comics', title: 'Trending Comics', domain: 'read', showMediaBadge: false, items: comics },
+      { id: 'read-manga', title: 'Trending Manga', domain: 'read', showMediaBadge: false, items: manga },
+      { id: 'read-novels', title: 'Trending Novels', domain: 'read', showMediaBadge: false, items: novels },
+      {
+        id: 'read-anticipated',
+        title: 'Coming Soon',
+        domain: 'read',
+        showMediaBadge: true,
+        items: excludeSeenWorkKeys(ant, seen),
+      },
+      {
+        id: 'read-popular',
+        title: 'Popular All-Time',
+        domain: 'read',
+        showMediaBadge: true,
+        items: excludeSeenWorkKeys(pop, seen),
+      },
+    ];
+    rails = rawReadRails.filter((r) => r.items.length > 0);
+  } else {
+    const [trendRes, antRes, popRes] = await Promise.allSettled([
+      fetchGamesByMode(15, 'trending'),
+      fetchGamesByMode(15, 'anticipated'),
+      fetchGamesByMode(15, 'popular'),
+    ]);
+    const trend = trendRes.status === 'fulfilled' ? trendRes.value : [];
+    const ant = antRes.status === 'fulfilled' ? antRes.value : [];
+    const pop = popRes.status === 'fulfilled' ? popRes.value : [];
+
+    const seen = new Set<string>();
+    addWorkKeysToSet(trend, seen);
+
+    const rawPlayRails: DiscoverRail[] = [
+      { id: 'play-trending', title: 'Trending Games', domain: 'play', showMediaBadge: false, items: trend },
+      {
+        id: 'play-anticipated',
+        title: 'Most Anticipated',
+        domain: 'play',
+        showMediaBadge: false,
+        items: excludeSeenWorkKeys(ant, seen),
+      },
+      {
+        id: 'play-popular',
+        title: 'Popular All-Time',
+        domain: 'play',
+        showMediaBadge: false,
+        items: excludeSeenWorkKeys(pop, seen),
+      },
+    ];
+    rails = rawPlayRails.filter((r) => r.items.length > 0);
+  }
+
+  discoverDomainCache.set(key, { ts: Date.now(), rails });
+  return rails;
 }
 
 /** Fetches last-6-months trending posters & covers for the 3-column Search discovery grid. */

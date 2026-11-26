@@ -315,7 +315,8 @@ interface CueContextValue {
   createCustomList: (
     name: string,
     description: string,
-    initialItem?: { kind: 'show' | 'movie' | 'read' | 'game'; id: string }
+    initialItem?: { kind: 'show' | 'movie' | 'read' | 'game'; id: string },
+    initialItems?: Array<{ kind: 'show' | 'movie' | 'read' | 'game'; id: string }>
   ) => void;
   toggleItemInList: (
     listId: string,
@@ -3153,8 +3154,15 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     (
       name: string,
       description: string,
-      initialItem?: { kind: 'show' | 'movie' | 'read' | 'game'; id: string }
+      initialItem?: { kind: 'show' | 'movie' | 'read' | 'game'; id: string },
+      initialItems?: Array<{ kind: 'show' | 'movie' | 'read' | 'game'; id: string }>
     ) => {
+      const items =
+        initialItems && initialItems.length > 0
+          ? initialItems
+          : initialItem
+            ? [initialItem]
+            : [];
       commitState((prev) => ({
         ...prev,
         lists: [
@@ -3162,7 +3170,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             id: `list-${Date.now()}`,
             name: name.trim(),
             description: description.trim(),
-            items: initialItem ? [initialItem] : [],
+            items,
             createdAt: new Date().toISOString(),
           },
           ...prev.lists,
