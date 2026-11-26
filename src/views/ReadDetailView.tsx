@@ -28,6 +28,7 @@ import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import {
   COMIC_ISSUE_CACHE_VERSION,
+  fetchComicCollectionIssues,
   fetchComicEditionMetadata,
   fetchComicIssueDetails,
   fetchComicSeriesIssues,
@@ -37,7 +38,13 @@ import {
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode } from '../types';
 import {
+  extractReadItemIsbn,
+  getComicIssueAtomicId,
+  isCollectedComicItem,
+} from '../utils/atoms';
+import {
   evaluateBookSeriesProgress,
+  evaluateOverlappingComicContainers,
   findBookSeries,
 } from '../utils/containers';
 import {
@@ -66,6 +73,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
     advanceReadProgress,
     setReadProgress,
     toggleReadUnit,
+    setReadUnitsBatch,
     markReadFinished,
     incrementReread,
     toggleReadBookmark,
@@ -102,6 +110,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const [activeUnitDrawer, setActiveUnitDrawer] = useState<number | null>(null);
   const [unitNoteText, setUnitNoteText] = useState('');
   const [loadingUnitDetail, setLoadingUnitDetail] = useState(false);
+  const [hydratingIssues, setHydratingIssues] = useState(false);
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
     () => sessionDetailModeByReadId.get(readId) || state.settings.detailMode || 'simple'
   );
@@ -177,38 +186,67 @@ export function ReadDetailView({ readId }: { readId: string }) {
     if (fetchedIssueKeyRef.current.has(cacheKey)) return;
 
     let cancelled = false;
-    if (
-      item.comicSeriesWiki &&
-      item.comicSeriesVolTitle &&
-      (!progress?.edition || progress.edition === 'digital')
-    ) {
-      fetchComicSeriesIssues(
-        item.comicSeriesWiki,
-        item.comicSeriesVolTitle,
-        Math.max(60, total)
-      ).then(({ issues, totalIssues }) => {
-        if (cancelled) return;
-        fetchedIssueKeyRef.current.add(cacheKey);
+    setHydratingIssues(true);
+    const runFetch = async () => {
+      try {
         if (
-          Object.keys(issues).length > 0 ||
-          (item.issueDetails && Object.keys(item.issueDetails).length > 0)
+          item.comicKind === 'series' &&
+          item.comicSeriesWiki &&
+          item.comicSeriesVolTitle &&
+          (!progress?.edition || progress.edition === 'digital')
         ) {
-          updateReadIssueDetails(
-            item.id,
-            issues,
-            detailsKey,
-            totalIssues > 0 ? totalIssues : undefined
+          const { issues, totalIssues } = await fetchComicSeriesIssues(
+            item.comicSeriesWiki,
+            item.comicSeriesVolTitle,
+            Math.max(90, total)
           );
+          if (cancelled) return;
+          fetchedIssueKeyRef.current.add(cacheKey);
+          if (
+            Object.keys(issues).length > 0 ||
+            (item.issueDetails && Object.keys(item.issueDetails).length > 0)
+          ) {
+            updateReadIssueDetails(
+              item.id,
+              issues,
+              detailsKey,
+              totalIssues > 0 ? totalIssues : undefined
+            );
+          }
+          return;
         }
-      });
-    } else {
-      fetchComicIssueDetails(
-        item.title,
-        total,
-        item.creator,
-        progress?.editionId,
-        item.comicPublisher
-      ).then((details) => {
+
+        if (isCollectedComicItem(item) && (!progress?.edition || progress.edition === 'digital') && !progress?.editionId) {
+          const col = await fetchComicCollectionIssues({
+            title: item.title,
+            isbn: extractReadItemIsbn(item),
+            overview: item.overview,
+            publisher: item.comicPublisher,
+            wiki: item.comicSeriesWiki,
+            pageTitle: item.comicSeriesVolTitle,
+            limit: Math.max(100, total),
+          });
+          if (cancelled) return;
+          if (Object.keys(col.issues).length > 0) {
+            fetchedIssueKeyRef.current.add(cacheKey);
+            const nextKey = `${progress?.editionId || progress?.edition || 'default'}::${col.totalIssues || total}::${COMIC_ISSUE_CACHE_VERSION}`;
+            updateReadIssueDetails(
+              item.id,
+              col.issues,
+              nextKey,
+              col.totalIssues > 0 ? col.totalIssues : undefined
+            );
+            return;
+          }
+        }
+
+        const details = await fetchComicIssueDetails(
+          item.title,
+          total,
+          item.creator,
+          progress?.editionId,
+          item.comicPublisher
+        );
         if (cancelled) return;
         fetchedIssueKeyRef.current.add(cacheKey);
         if (
@@ -217,8 +255,11 @@ export function ReadDetailView({ readId }: { readId: string }) {
         ) {
           updateReadIssueDetails(item.id, details, detailsKey);
         }
-      });
-    }
+      } finally {
+        if (!cancelled) setHydratingIssues(false);
+      }
+    };
+    void runFetch();
     return () => {
       cancelled = true;
     };
@@ -279,6 +320,8 @@ export function ReadDetailView({ readId }: { readId: string }) {
     item.format === 'comic' ? getCuratedComicEditionRecords(item) : [];
   const bookSeries = item.format === 'novel' ? findBookSeries(item.title) : null;
   const evalBookSeries = bookSeries ? evaluateBookSeriesProgress(bookSeries, state) : null;
+  const overlappingContainers =
+    item.format === 'comic' ? evaluateOverlappingComicContainers(item, state) : [];
   const seriesRatingKey = bookSeries ? `book-series:${bookSeries.id}` : '';
   const storedSeriesRating = seriesRatingKey ? state.collectionRatings?.[seriesRatingKey] : undefined;
 
@@ -296,36 +339,66 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const editionLabel =
     item.format === 'comic' ? getComicEditionLabel(progress?.edition, item, progress) : '';
 
-  const BUCKET_SIZE = 25;
-  const simpleBuckets: Array<{ idx: number; label: string; start: number; end: number }> = [];
-  if (stats.total <= BUCKET_SIZE) {
-    simpleBuckets.push({
-      idx: 0,
-      label: item.unit === 'issues' ? 'Issues' : 'Chapters',
-      start: 1,
-      end: stats.total,
-    });
-  } else {
-    let idx = 0;
-    for (let s = 1; s <= stats.total; s += BUCKET_SIZE) {
-      const e = Math.min(stats.total, s + BUCKET_SIZE - 1);
-      simpleBuckets.push({
-        idx,
-        label: `${item.unit === 'issues' ? 'Issues' : 'Chapters'} ${s}–${e}`,
-        start: s,
-        end: e,
-      });
-      idx += 1;
+  const simpleBuckets: Array<{ idx: number; label: string; unitNums: number[] }> = [];
+  const distinctSeriesTitles = new Set<string>();
+  if (item.format === 'comic' && item.issueDetails) {
+    for (let u = 1; u <= stats.total; u += 1) {
+      const st = item.issueDetails[u]?.seriesTitle;
+      if (st) distinctSeriesTitles.add(st);
     }
   }
-  const activeBucketIdx = simpleBuckets.findIndex((b) => {
-    for (let u = b.start; u <= b.end; u += 1) {
-      if (!completedSet.has(u)) return true;
+
+  if (distinctSeriesTitles.size >= 2 && item.issueDetails) {
+    let curGroupTitle = '';
+    let curGroupNums: number[] = [];
+    const flushGroup = () => {
+      if (curGroupNums.length === 0) return;
+      simpleBuckets.push({
+        idx: simpleBuckets.length,
+        label: curGroupTitle || 'Other Issues',
+        unitNums: curGroupNums,
+      });
+    };
+    for (let u = 1; u <= stats.total; u += 1) {
+      const sTitle = item.issueDetails[u]?.seriesTitle || 'Collected Issues';
+      if (sTitle !== curGroupTitle) {
+        flushGroup();
+        curGroupTitle = sTitle;
+        curGroupNums = [u];
+      } else {
+        curGroupNums.push(u);
+      }
     }
-    return false;
-  });
+    flushGroup();
+  } else {
+    const BUCKET_SIZE = 25;
+    if (stats.total <= BUCKET_SIZE) {
+      const nums: number[] = [];
+      for (let u = 1; u <= stats.total; u += 1) nums.push(u);
+      simpleBuckets.push({
+        idx: 0,
+        label: item.unit === 'issues' ? 'Issues' : 'Chapters',
+        unitNums: nums,
+      });
+    } else {
+      let idx = 0;
+      for (let s = 1; s <= stats.total; s += BUCKET_SIZE) {
+        const e = Math.min(stats.total, s + BUCKET_SIZE - 1);
+        const nums: number[] = [];
+        for (let u = s; u <= e; u += 1) nums.push(u);
+        simpleBuckets.push({
+          idx,
+          label: `${item.unit === 'issues' ? 'Issues' : 'Chapters'} ${s}–${e}`,
+          unitNums: nums,
+        });
+        idx += 1;
+      }
+    }
+  }
+  const activeBucketIdx = simpleBuckets.findIndex((b) => b.unitNums.some((u) => !completedSet.has(u)));
   const defaultOpenBucket =
     activeBucketIdx >= 0 ? activeBucketIdx : Math.max(0, simpleBuckets.length - 1);
+  const showSeriesPrefixInRows = distinctSeriesTitles.size >= 2;
 
   return (
     <div className="min-h-dvh pb-20 bg-background">
@@ -597,17 +670,75 @@ export function ReadDetailView({ readId }: { readId: string }) {
                 />
               </section>
 
+              {/* Synced Smart Containers */}
+              {overlappingContainers.length > 0 && (
+                <section className="pt-2 pb-1">
+                  <div className="rounded-2xl bg-surface border border-white/[0.07] p-3.5 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Layers className="w-3.5 h-3.5 text-read shrink-0" />
+                        <span className="text-xs font-semibold text-ink truncate">
+                          Synced Smart Containers
+                        </span>
+                      </div>
+                      <span className="text-[10.5px] font-medium text-ink-faint shrink-0">
+                        No double-logging
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {overlappingContainers.map((c) => (
+                        <button
+                          key={c.readId}
+                          type="button"
+                          onClick={() => pushRoute({ view: 'read-detail', readId: c.readId })}
+                          className="w-full rounded-xl bg-background/60 hover:bg-surface-raised border border-white/[0.06] px-2.5 py-2 flex items-center gap-2.5 text-left transition-colors"
+                        >
+                          <div className="w-8 h-12 rounded-md overflow-hidden border border-white/10 bg-surface shrink-0">
+                            <MediaImage
+                              src={c.coverUrl}
+                              alt={c.title}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-semibold text-ink truncate">{c.title}</p>
+                            <p className="text-[11px] text-ink-dim tabular-nums mt-0.5">
+                              {c.sharedCompleted}/{c.sharedTotal} shared issues ·{' '}
+                              <span className={c.isComplete ? 'text-watched font-semibold' : ''}>
+                                {Math.round(c.ratio * 100)}% ({c.containerRead}/{c.containerTotal})
+                              </span>
+                            </p>
+                            <div className="h-[2.5px] w-full rounded-full bg-white/10 overflow-hidden mt-1.5">
+                              <div
+                                className="h-full bg-watched transition-all duration-300"
+                                style={{ width: `${Math.round(c.ratio * 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                          <ChevronRight className="w-3.5 h-3.5 text-ink-faint shrink-0" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+              )}
+
               {/* Simple Accordion Issue / Chapter Checklist */}
               <section className="pt-2 pb-4 divide-y divide-white/[0.06]">
+                {hydratingIssues && (
+                  <div className="py-2 text-xs text-ink-dim flex items-center gap-2">
+                    <Clock className="w-3.5 h-3.5 text-read shrink-0" />
+                    <span>Resolving individual issues, covers & atomic links…</span>
+                  </div>
+                )}
                 {simpleBuckets.map((bucket) => {
-                  const totalInBucket = bucket.end - bucket.start + 1;
-                  let doneInBucket = 0;
-                  const unitNums: number[] = [];
-                  for (let u = bucket.start; u <= bucket.end; u += 1) {
-                    unitNums.push(u);
-                    if (completedSet.has(u)) doneInBucket += 1;
-                  }
-                  const bucketDone = doneInBucket >= totalInBucket;
+                  const unitNums = bucket.unitNums;
+                  const totalInBucket = unitNums.length;
+                  const doneInBucket = unitNums.reduce(
+                    (acc, u) => (completedSet.has(u) ? acc + 1 : acc),
+                    0
+                  );
+                  const bucketDone = totalInBucket > 0 && doneInBucket >= totalInBucket;
                   const bucketRatio = Math.min(1, doneInBucket / Math.max(1, totalInBucket));
                   const isOpen =
                     expandedBuckets[bucket.idx] !== undefined
@@ -626,13 +757,13 @@ export function ReadDetailView({ readId }: { readId: string }) {
                             }))
                           }
                           aria-expanded={isOpen}
-                          className="flex items-center gap-1.5 font-display font-bold text-[15px] text-ink text-left"
+                          className="flex items-center gap-1.5 font-display font-bold text-[15px] text-ink text-left min-w-0"
                         >
-                          <span>{bucket.label}</span>
+                          <span className="truncate">{bucket.label}</span>
                           {isOpen ? (
-                            <ChevronUp className="w-4 h-4 text-ink-dim" />
+                            <ChevronUp className="w-4 h-4 text-ink-dim shrink-0" />
                           ) : (
-                            <ChevronDown className="w-4 h-4 text-ink-dim" />
+                            <ChevronDown className="w-4 h-4 text-ink-dim shrink-0" />
                           )}
                         </button>
 
@@ -652,24 +783,10 @@ export function ReadDetailView({ readId }: { readId: string }) {
                                   item.format !== 'comic' ||
                                   isComicIssueReleased(item.issueDetails?.[u])
                               );
-                              if (simpleBuckets.length === 1) {
-                                if (bucketDone) setReadProgress(item.id, 0);
-                                else if (releasedInBucket.length === unitNums.length) {
-                                  markReadFinished(item.id);
-                                } else if (releasedInBucket.length > 0) {
-                                  setReadProgress(
-                                    item.id,
-                                    Math.max(stats.current, Math.max(...releasedInBucket))
-                                  );
-                                }
-                              } else {
-                                if (bucketDone) setReadProgress(item.id, bucket.start - 1);
-                                else if (releasedInBucket.length > 0) {
-                                  setReadProgress(
-                                    item.id,
-                                    Math.max(stats.current, Math.max(...releasedInBucket))
-                                  );
-                                }
+                              if (bucketDone) {
+                                setReadUnitsBatch(item.id, unitNums, false);
+                              } else if (releasedInBucket.length > 0) {
+                                setReadUnitsBatch(item.id, releasedInBucket, true);
                               }
                             }}
                             aria-label={`Toggle ${bucket.label} complete`}
@@ -700,18 +817,22 @@ export function ReadDetailView({ readId }: { readId: string }) {
                               item.format !== 'comic' || isComicIssueReleased(meta);
                             const fallbackLabel =
                               item.unit === 'issues' ? `Issue #${u}` : `Chapter ${u}`;
+                            const issueTag =
+                              showSeriesPrefixInRows && meta?.seriesTitle
+                                ? `${meta.seriesTitle} ${meta.issueLabel || `#${u}`}`
+                                : meta?.issueLabel || `Issue #${u}`;
                             const primaryTitle =
                               item.format === 'comic'
                                 ? meta?.title ||
-                                  (meta?.issueLabel
-                                    ? `${item.title} ${meta.issueLabel}`
-                                    : fallbackLabel)
+                                  (showSeriesPrefixInRows && meta?.seriesTitle
+                                    ? `${meta.seriesTitle} ${meta.issueLabel || `#${u}`}`
+                                    : meta?.issueLabel
+                                      ? `${item.title} ${meta.issueLabel}`
+                                      : fallbackLabel)
                                 : fallbackLabel;
                             const issueSub =
                               item.format === 'comic'
-                                ? [meta?.issueLabel || `Issue #${u}`, meta?.releaseDate]
-                                    .filter(Boolean)
-                                    .join(' · ')
+                                ? [issueTag, meta?.releaseDate].filter(Boolean).join(' · ')
                                 : '';
                             const issueThumb = meta?.coverUrl || activeCover;
                             const unitRating = progress?.unitRatings?.[u];
@@ -1030,6 +1151,60 @@ export function ReadDetailView({ readId }: { readId: string }) {
                   <ChevronRight className="w-3.5 h-3.5 text-read" />
                 </span>
               </button>
+            </section>
+          )}
+
+          {/* Advanced Smart Container: Overlapping Comic Runs & Collections */}
+          {detailMode === 'advanced' && overlappingContainers.length > 0 && (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-read flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5" />
+                    <span>Synced Smart Containers</span>
+                  </p>
+                  <h2 className="font-display font-bold text-base text-ink mt-0.5">
+                    Connected Collections & Runs
+                  </h2>
+                </div>
+                <span className="text-[11px] font-semibold text-ink-dim px-2.5 py-1 rounded-full bg-white/[0.06]">
+                  Auto-synced atoms
+                </span>
+              </div>
+              <div className="space-y-2">
+                {overlappingContainers.map((c) => (
+                  <button
+                    key={c.readId}
+                    type="button"
+                    onClick={() => pushRoute({ view: 'read-detail', readId: c.readId })}
+                    className="w-full rounded-xl bg-background/60 hover:bg-surface-raised border border-white/[0.06] px-3 py-2.5 flex items-center gap-3 text-left transition-colors"
+                  >
+                    <div className="w-9 aspect-[2/3] rounded-md overflow-hidden border border-white/10 bg-surface shrink-0">
+                      <MediaImage
+                        src={c.coverUrl}
+                        alt={c.title}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-ink truncate">{c.title}</p>
+                      <p className="text-xs text-ink-dim tabular-nums mt-0.5">
+                        {c.sharedCompleted}/{c.sharedTotal} shared issues ·{' '}
+                        <span className={c.isComplete ? 'text-watched font-semibold' : ''}>
+                          {Math.round(c.ratio * 100)}% ({c.containerRead}/{c.containerTotal})
+                        </span>
+                      </p>
+                      <div className="h-1 w-full rounded-full bg-white/10 overflow-hidden mt-1.5">
+                        <div
+                          className="h-full bg-watched transition-all duration-300"
+                          style={{ width: `${Math.round(c.ratio * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-ink-faint shrink-0" />
+                  </button>
+                ))}
+              </div>
             </section>
           )}
 
@@ -1468,7 +1643,9 @@ export function ReadDetailView({ readId }: { readId: string }) {
 
                   <div className="min-w-0">
                     <p className="text-[11px] font-bold uppercase tracking-wider text-read tabular-nums">
-                      {meta?.issueLabel || unitLabel}
+                      {meta?.seriesTitle
+                        ? `${meta.seriesTitle} ${meta?.issueLabel || `#${u}`}`
+                        : meta?.issueLabel || unitLabel}
                     </p>
                     <h3 className="font-display font-bold text-lg text-ink leading-snug mt-0.5">
                       {displayTitle}
@@ -1479,6 +1656,29 @@ export function ReadDetailView({ readId }: { readId: string }) {
                     {item.format !== 'comic' && (
                       <p className="text-xs text-ink-dim mt-1">{item.title}</p>
                     )}
+                    {(() => {
+                      const atomId = getComicIssueAtomicId(meta);
+                      if (!atomId) return null;
+                      const linkedCount = overlappingContainers.filter((c) => {
+                        const other = state.readItems[c.readId];
+                        return (
+                          other?.issueDetails &&
+                          Object.values(other.issueDetails).some(
+                            (om) => getComicIssueAtomicId(om) === atomId
+                          )
+                        );
+                      }).length;
+                      if (linkedCount === 0) return null;
+                      return (
+                        <p className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-watched/12 border border-watched/25 text-[10.5px] font-semibold text-watched">
+                          <Layers className="w-3 h-3" />
+                          <span>
+                            Synced across {linkedCount + 1}{' '}
+                            {linkedCount + 1 === 1 ? 'container' : 'containers'}
+                          </span>
+                        </p>
+                      );
+                    })()}
                   </div>
                 </div>
 

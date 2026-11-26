@@ -11,6 +11,7 @@ import type {
   Show,
   ShowProgress,
 } from '../types';
+import { countDeduplicatedReadUnits } from './atoms';
 
 export function pad2(n: number): string {
   return String(n).padStart(2, '0');
@@ -631,6 +632,7 @@ export function computeAllMediaStats(state: CueStoreState): AllMediaAnalytics {
     }
   }
 
+  const countedComicAtomicIds = new Set<string>();
   for (const readId of state.readOrder) {
     const item = state.readItems[readId];
     const prog = state.readProgress[readId];
@@ -647,8 +649,13 @@ export function computeAllMediaStats(state: CueStoreState): AllMediaAnalytics {
         count: stats.rereadCount,
       });
     }
-    const mult = Math.max(1, stats.rereadCount);
-    const totalUnits = stats.current * (stats.isFinished ? mult : 1);
+    const totalUnits = countDeduplicatedReadUnits(
+      item,
+      stats.completedUnits,
+      stats.rereadCount,
+      stats.isFinished,
+      countedComicAtomicIds
+    );
     if (item.unit === 'issues') readIssuesCount += totalUnits;
     else readChaptersCount += totalUnits;
 

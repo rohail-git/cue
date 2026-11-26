@@ -7,6 +7,7 @@ import { handleTmdbProxyRequest } from './api/tmdb.ts'
 import { handleIgdbProxyRequest } from './api/igdb.ts'
 import {
   type ComicWikiSlug,
+  fetchComicCollectionIssuesPayload,
   fetchComicSeriesIssuesPayload,
   fetchTrendingComicSeriesPayload,
   searchComicSeriesPayload,
@@ -180,6 +181,22 @@ function comicSeriesDevPlugin(): Plugin {
           const vol = url.searchParams.get('vol');
           res.setHeader('Content-Type', 'application/json');
           res.statusCode = 200;
+          if (url.searchParams.get('mode') === 'collection') {
+            const limitParam = Number(url.searchParams.get('limit') || '100');
+            const wikiHint =
+              wiki === 'marvel' || wiki === 'dc' || wiki === 'imagecomics' ? wiki : undefined;
+            const payload = await fetchComicCollectionIssuesPayload({
+              title: url.searchParams.get('title') || '',
+              isbn: url.searchParams.get('isbn') || undefined,
+              overview: url.searchParams.get('overview') || undefined,
+              publisher: url.searchParams.get('publisher') || undefined,
+              wikiHint,
+              pageTitleHint: url.searchParams.get('pageTitle') || undefined,
+              limit: Number.isFinite(limitParam) ? limitParam : 100,
+            });
+            res.end(JSON.stringify(payload));
+            return;
+          }
           if (
             wiki &&
             (wiki === 'marvel' || wiki === 'dc' || wiki === 'imagecomics') &&

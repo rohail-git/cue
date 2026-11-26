@@ -1,5 +1,6 @@
 import { MOOD_OPTIONS } from '../components/PersonalNotesSection';
 import type { CueStoreState, MediaDomain, PersonalMood } from '../types';
+import { countDeduplicatedReadUnits } from './atoms';
 import { resolveComicEditionCover } from './editions';
 import { cleanDisplayGenres, getAllEpisodes, getEpisodeKey, getReadStats, getShowStats } from './stats';
 
@@ -482,6 +483,7 @@ export function computeJournalAdvancedStats(
   }
 
   if (includesRead) {
+    const countedComicAtomicIds = new Set<string>();
     for (const id of state.readOrder) {
       const item = state.readItems[id];
       const prog = state.readProgress[id];
@@ -489,8 +491,13 @@ export function computeJournalAdvancedStats(
       const stats = getReadStats(item, prog);
       if (!prog.bookmarked && stats.current === 0) continue;
 
-      const mult = Math.max(1, stats.rereadCount);
-      const totalReadUnits = stats.current * mult;
+      const totalReadUnits = countDeduplicatedReadUnits(
+        item,
+        stats.completedUnits,
+        stats.rereadCount,
+        stats.isFinished,
+        countedComicAtomicIds
+      );
       const minsPerUnit = item.unit === 'issues' ? 10 : 12;
       const itemMins = totalReadUnits * minsPerUnit;
       readMinutes += itemMins;

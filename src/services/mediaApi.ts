@@ -35,6 +35,7 @@ import {
   type PreparedImportEntry,
   type ResolvedImdbTitle,
 } from '../utils/mediaImport';
+import { extractSeriesTitleFromPageTitle, makeComicAtomicId } from '../utils/atoms';
 
 export type SearchMediaFilter =
   | 'all'
@@ -82,6 +83,7 @@ export interface LiveSearchResult {
   comicPublisher?: string;
   comicSeriesWiki?: 'marvel' | 'dc' | 'imagecomics';
   comicSeriesVolTitle?: string;
+  isbn?: string;
   editionCovers?: Partial<Record<ComicEditionId, string>>;
   editionIssueCounts?: Partial<Record<ComicEditionId, number>>;
   editionVariants?: Partial<Record<GeneralizedComicEditionId, string[]>>;
@@ -319,6 +321,18 @@ function scoreResult(item: LiveSearchResult, query: string): number {
     }
   }
 
+  // Boost canonical Fandom comic series runs & omnibuses on creator-qualified queries ("X by Y")
+  const byCreatorMatch = effectiveQuery.match(/^(.+?)\s+by\s+([a-z][a-z\s.&'-]{2,42})$/i);
+  if (byCreatorMatch && item.source === 'comicseries') {
+    const cNorm = normalizeTitleKey(byCreatorMatch[2].replace(/\b(?:omnibus|tpb|hc|vol\.?\s*\d+)\b/gi, ''));
+    const dirNorm = normalizeTitleKey(item.director || '');
+    if (cNorm && dirNorm && dirNorm.includes(cNorm)) {
+      score += 48;
+    } else {
+      score += 22;
+    }
+  }
+
   if (queryIsLatin) {
     if (hasNonLatinScript(item.title)) score -= 80;
     else score += 15;
@@ -380,9 +394,11 @@ function rankAndDedupeLiveResults(results: LiveSearchResult[], query: string): L
       item.domain === 'read'
         ? item.comicKind === 'series'
           ? `read:series:${canonicalReadWorkKey(item.title)}:${item.year}`
-          : item.mediaType === 'comic'
-            ? `read:collection:${canonicalReadWorkKey(item.title)}`
-            : `read:${canonicalReadWorkKey(item.title)}`
+          : item.source === 'comicseries' && item.comicKind === 'collection'
+            ? `read:comiccol:${normalizeTitleKey(item.title)}`
+            : item.mediaType === 'comic'
+              ? `read:collection:${canonicalReadWorkKey(item.title)}`
+              : `read:${canonicalReadWorkKey(item.title)}`
         : item.kind === 'show'
           ? `watch:show:${normalizeTitleKey(item.title)}`
           : `${item.domain}:${item.kind}:${normalizeTitleKey(item.title)}`;
@@ -2742,6 +2758,7 @@ export async function searchByIsbn(rawIsbn: string): Promise<LiveSearchResult[]>
       overview,
       director: author || publisher || 'Author',
       totalUnits,
+      isbn: isbn13,
     },
   ];
 }
@@ -3543,8 +3560,8 @@ export async function fetchComicEditionsCatalog(
 
 async function searchComicSeries(query: string): Promise<LiveSearchResult[]> {
   try {
-    const res = await fetch(`/api/comic-series?q=${encodeURIComponent(query)}&v=2`, {
-      signal: AbortSignal.timeout(9000),
+    const res = await fetch(`/api/comic-series?q=${encodeURIComponent(query)}&v=3`, {
+      signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return [];
     const data = (await res.json()) as {
@@ -3563,6 +3580,8 @@ async function searchComicSeries(query: string): Promise<LiveSearchResult[]> {
         creator: string;
         genres: string[];
         overview: string;
+        comicKind?: 'series' | 'collection';
+        collectionPageTitle?: string;
       }>;
     };
     return (data.items || [])
@@ -3572,18 +3591,18 @@ async function searchComicSeries(query: string): Promise<LiveSearchResult[]> {
         kind: 'read' as const,
         id: it.id,
         source: 'comicseries' as const,
-        externalId: it.volTitle,
+        externalId: it.collectionPageTitle || it.volTitle,
         title: it.title,
         subtitle: `${it.runLabel} · ${it.publisher} · ${it.issueCount} ${
           it.issueCount === 1 ? 'issue' : 'issues'
         }`,
         year: it.startYear,
         mediaType: 'comic' as const,
-        comicKind: 'series' as const,
+        comicKind: it.comicKind || 'series',
         comicRunLabel: it.runLabel,
         comicPublisher: it.publisher,
         comicSeriesWiki: it.wiki,
-        comicSeriesVolTitle: it.volTitle,
+        comicSeriesVolTitle: it.collectionPageTitle || it.volTitle,
         genres: it.genres.length > 0 ? it.genres : ['Superhero'],
         rating: 4.7,
         posterUrl: it.coverUrl,
@@ -3591,26 +3610,26 @@ async function searchComicSeries(query: string): Promise<LiveSearchResult[]> {
         overview: it.overview,
         director: it.creator || it.publisher,
         totalUnits: it.issueCount,
-        popularityScore: it.isOngoing ? 90 : 82,
+        popularityScore: it.comicKind === 'collection' ? 92 : it.isOngoing ? 90 : 86,
       }));
   } catch {
     return [];
   }
 }
 
-export const COMIC_ISSUE_CACHE_VERSION = 'ca7';
+export const COMIC_ISSUE_CACHE_VERSION = 'ca8';
 
 export async function fetchComicSeriesIssues(
   wiki: 'marvel' | 'dc' | 'imagecomics',
   volTitle: string,
-  limit = 60
+  limit = 90
 ): Promise<{ totalIssues: number; issues: Record<number, ComicIssueMeta> }> {
   try {
     const res = await fetch(
       `/api/comic-series?wiki=${encodeURIComponent(wiki)}&vol=${encodeURIComponent(
         volTitle
-      )}&limit=${Math.max(1, Math.min(75, Math.round(limit)))}&v=4`,
-      { signal: AbortSignal.timeout(10000) }
+      )}&limit=${Math.max(1, Math.min(120, Math.round(limit)))}&v=5`,
+      { signal: AbortSignal.timeout(14000) }
     );
     if (!res.ok) return { totalIssues: 0, issues: {} };
     const data = (await res.json()) as {
@@ -3619,6 +3638,55 @@ export async function fetchComicSeriesIssues(
     };
     return {
       totalIssues: data.totalIssues || Object.keys(data.issues || {}).length,
+      issues: data.issues || {},
+    };
+  } catch {
+    return { totalIssues: 0, issues: {} };
+  }
+}
+
+/** Resolves individual atomic issues & covers inside any Omnibus, TPB, Hardcover, or ISBN edition. */
+export async function fetchComicCollectionIssues(params: {
+  title: string;
+  isbn?: string;
+  overview?: string;
+  publisher?: string;
+  wiki?: 'marvel' | 'dc' | 'imagecomics';
+  pageTitle?: string;
+  limit?: number;
+}): Promise<{
+  totalIssues: number;
+  wiki?: 'marvel' | 'dc' | 'imagecomics';
+  collectionPageTitle?: string;
+  issues: Record<number, ComicIssueMeta>;
+}> {
+  try {
+    const qs = new URLSearchParams({
+      mode: 'collection',
+      title: params.title,
+      limit: String(Math.max(1, Math.min(120, Math.round(params.limit || 100)))),
+      v: '1',
+    });
+    if (params.isbn) qs.set('isbn', params.isbn);
+    if (params.publisher) qs.set('publisher', params.publisher);
+    if (params.wiki) qs.set('wiki', params.wiki);
+    if (params.pageTitle) qs.set('pageTitle', params.pageTitle);
+    if (params.overview) qs.set('overview', params.overview.slice(0, 800));
+
+    const res = await fetch(`/api/comic-series?${qs.toString()}`, {
+      signal: AbortSignal.timeout(18000),
+    });
+    if (!res.ok) return { totalIssues: 0, issues: {} };
+    const data = (await res.json()) as {
+      totalIssues?: number;
+      wiki?: 'marvel' | 'dc' | 'imagecomics';
+      collectionPageTitle?: string;
+      issues?: Record<number, ComicIssueMeta>;
+    };
+    return {
+      totalIssues: data.totalIssues || Object.keys(data.issues || {}).length,
+      wiki: data.wiki,
+      collectionPageTitle: data.collectionPageTitle,
       issues: data.issues || {},
     };
   } catch {
@@ -4924,7 +4992,14 @@ export async function fetchComicIssueDetails(
     }
   }
 
-  if (!targetWiki || slotSpecs.length === 0) return {};
+  if (!targetWiki || slotSpecs.length === 0) {
+    const col = await fetchComicCollectionIssues({
+      title,
+      publisher,
+      limit: Math.max(48, Math.round(totalIssues)),
+    });
+    return col.issues;
+  }
 
   const result: Record<number, ComicIssueMeta> = {};
   const batchSize = 20;
@@ -5073,6 +5148,7 @@ export async function fetchComicIssueDetails(
           number: spec.slot,
           issueLabel: spec.issueLabel,
           title: storyTitle,
+          seriesTitle: extractSeriesTitleFromPageTitle(spec.pageTitle),
           releaseDate,
           ...(releaseDateIso ? { releaseDateIso } : {}),
           coverUrl,
@@ -5081,6 +5157,7 @@ export async function fetchComicIssueDetails(
           artists,
           wiki: targetWiki,
           pageTitle: spec.pageTitle,
+          atomicId: makeComicAtomicId(targetWiki, spec.pageTitle),
         };
       }
     } catch {
@@ -5490,6 +5567,7 @@ export function hydrateLiveReadItem(item: LiveSearchResult): ReadItem {
     comicPublisher: item.comicPublisher,
     comicSeriesWiki: item.comicSeriesWiki,
     comicSeriesVolTitle: item.comicSeriesVolTitle,
+    ...(item.isbn ? { isbn: item.isbn } : {}),
   };
 }
 

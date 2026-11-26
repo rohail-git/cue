@@ -32,6 +32,7 @@ export interface ComicIssueMeta {
   number: number;
   issueLabel?: string;
   title?: string;
+  seriesTitle?: string;
   releaseDate?: string;
   releaseDateIso?: string;
   coverUrl?: string;
@@ -40,6 +41,15 @@ export interface ComicIssueMeta {
   artists?: string;
   wiki?: 'marvel' | 'dc' | 'imagecomics';
   pageTitle?: string;
+  atomicId?: string;
+}
+
+export interface AtomicReadRecord {
+  readAt?: string;
+  count: number;
+  rating?: number;
+  seriesTitle?: string;
+  issueLabel?: string;
 }
 
 export type GamePlatform = 'PC' | 'PS5' | 'Switch' | 'Xbox' | 'Steam Deck';
@@ -138,6 +148,7 @@ export interface ReadItem {
   comicPublisher?: string;
   comicSeriesWiki?: 'marvel' | 'dc' | 'imagecomics';
   comicSeriesVolTitle?: string;
+  isbn?: string;
 }
 
 export type GameChapterUnit = 'chapters' | 'acts' | 'missions' | 'milestones';
@@ -356,6 +367,7 @@ export interface CueStoreState {
   movieProgress: Record<string, MovieProgress>;
   readProgress: Record<string, ReadProgress>;
   gameProgress: Record<string, GameProgress>;
+  atomicReadUnits?: Record<string, AtomicReadRecord>;
   upcoming: UpcomingEntry[];
   history: HistoryEntry[];
   journalEntries: JournalEntry[];

@@ -18,6 +18,7 @@ import {
   getShowStats,
   isMovieReleased,
 } from './stats';
+import { getComicIssueAtomicId } from './atoms';
 
 export function normalizeCollectionKey(title: string): string {
   return title
@@ -714,6 +715,71 @@ export function evaluateComicEditionContainers(
       isActive: activeEdition === ed.id,
     };
   });
+}
+
+export interface OverlappingComicContainer {
+  readId: string;
+  title: string;
+  coverUrl: string;
+  comicKind?: 'series' | 'collection';
+  sharedTotal: number;
+  sharedCompleted: number;
+  containerRead: number;
+  containerTotal: number;
+  ratio: number;
+  isComplete: boolean;
+}
+
+/** Finds other comic series runs, TPBs, omnibuses, or events in the user's library sharing canonical issue atoms. */
+export function evaluateOverlappingComicContainers(
+  item: ReadItem,
+  state: CueStoreState
+): OverlappingComicContainer[] {
+  if (item.format !== 'comic' || !item.issueDetails) return [];
+  const sourceAtoms = new Set<string>();
+  const total = Math.max(1, item.totalUnits);
+  for (let u = 1; u <= total; u += 1) {
+    const atomId = getComicIssueAtomicId(item.issueDetails[u]);
+    if (atomId) sourceAtoms.add(atomId);
+  }
+  if (sourceAtoms.size === 0) return [];
+
+  const matches: OverlappingComicContainer[] = [];
+  for (const otherId of state.readOrder) {
+    if (otherId === item.id) continue;
+    const other = state.readItems[otherId];
+    if (!other || other.format !== 'comic' || !other.issueDetails) continue;
+    const otherProg = state.readProgress[otherId];
+    const otherCompletedSet = new Set(getCompletedReadUnits(other, otherProg));
+    const otherTotal = Math.max(1, other.totalUnits);
+
+    let sharedTotal = 0;
+    let sharedCompleted = 0;
+    for (let u = 1; u <= otherTotal; u += 1) {
+      const atomId = getComicIssueAtomicId(other.issueDetails[u]);
+      if (atomId && sourceAtoms.has(atomId)) {
+        sharedTotal += 1;
+        if (otherCompletedSet.has(u)) sharedCompleted += 1;
+      }
+    }
+    if (sharedTotal === 0) continue;
+
+    const containerRead = Math.min(otherTotal, otherCompletedSet.size);
+    matches.push({
+      readId: otherId,
+      title: other.title,
+      coverUrl: other.coverUrl,
+      comicKind: other.comicKind,
+      sharedTotal,
+      sharedCompleted,
+      containerRead,
+      containerTotal: otherTotal,
+      ratio: Math.min(1, containerRead / otherTotal),
+      isComplete: containerRead >= otherTotal,
+    });
+  }
+
+  return matches.sort((a, b) => b.sharedTotal - a.sharedTotal || b.ratio - a.ratio);
 }
 
 export interface EvaluatedCustomList {

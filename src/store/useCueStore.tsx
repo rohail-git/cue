@@ -9,6 +9,7 @@ import {
 } from '../services/syncApi';
 import {
   COMIC_ISSUE_CACHE_VERSION,
+  fetchComicCollectionIssues,
   fetchComicSeriesIssues,
   fetchTvmazeEpisodeSchedule,
 } from '../services/mediaApi';
@@ -59,6 +60,15 @@ import {
 } from '../utils/editions';
 import { lookupKnownGameChapters } from '../utils/gameChapters';
 import {
+  type AtomicDelta,
+  type SyncedContainerSummary,
+  extractReadItemIsbn,
+  getComicIssueAtomicId,
+  isCollectedComicItem,
+  reconcileHydratedComicItemWithAtoms,
+  syncAtomicReadUnitsAcrossState,
+} from '../utils/atoms';
+import {
   annotateImportDuplicates,
   classifyReadFormat,
   type ImportConflictPolicy,
@@ -107,6 +117,9 @@ function loadInitialState(): CueStoreState {
         }
         if (!parsed.mindFeedback) {
           parsed.mindFeedback = { dismissedIds: [], dismissedGenres: {}, acceptedCount: 0 };
+        }
+        if (!parsed.atomicReadUnits) {
+          parsed.atomicReadUnits = {};
         }
         if (parsed.settings && !parsed.settings.detailMode) {
           parsed.settings.detailMode = 'simple';
@@ -259,6 +272,7 @@ interface CueContextValue {
   advanceReadProgress: (readId: string, delta?: number) => void;
   setReadProgress: (readId: string, currentUnit: number) => void;
   toggleReadUnit: (readId: string, unitNumber: number) => void;
+  setReadUnitsBatch: (readId: string, unitNumbers: number[], completed: boolean) => void;
   markReadFinished: (readId: string) => void;
   incrementReread: (readId: string, delta: number) => void;
   toggleReadBookmark: (readId: string) => void;
@@ -1713,13 +1727,75 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     };
   };
 
+  const applyReadAtomicSync = (
+    nextState: CueStoreState,
+    readId: string,
+    prevCompleted: number[],
+    nextCompleted: number[]
+  ): { state: CueStoreState; syncedContainers: SyncedContainerSummary[] } => {
+    const item = nextState.readItems[readId];
+    if (!item || item.format !== 'comic' || !item.issueDetails) {
+      return { state: nextState, syncedContainers: [] };
+    }
+    const prevSet = new Set(prevCompleted);
+    const nextSet = new Set(nextCompleted);
+    const deltas: AtomicDelta[] = [];
+    const total = Math.max(1, item.totalUnits);
+    for (let u = 1; u <= total; u += 1) {
+      const wasDone = prevSet.has(u);
+      const isDone = nextSet.has(u);
+      if (wasDone === isDone) continue;
+      const meta = item.issueDetails[u];
+      const atomicId = getComicIssueAtomicId(meta);
+      if (!atomicId) continue;
+      deltas.push({
+        atomicId,
+        completed: isDone,
+        seriesTitle: meta?.seriesTitle,
+        issueLabel: meta?.issueLabel,
+      });
+    }
+    if (deltas.length === 0) {
+      return { state: nextState, syncedContainers: [] };
+    }
+    const synced = syncAtomicReadUnitsAcrossState(nextState, readId, deltas);
+    return {
+      state: {
+        ...nextState,
+        atomicReadUnits: synced.atomicReadUnits,
+        readProgress: synced.readProgress,
+      },
+      syncedContainers: synced.syncedContainers,
+    };
+  };
+
   const computeReadSmartNudge = (
     item: ReadItem,
     prevProg: ReadProgress | undefined,
     updatedProg: ReadProgress,
     unitLabel: string,
-    nextState: CueStoreState
+    nextState: CueStoreState,
+    syncedContainers: SyncedContainerSummary[] = []
   ): { msg: string; actionLabel?: string } => {
+    const completedOtherContainer = syncedContainers.find((c) => c.newlyCompleted);
+    if (completedOtherContainer) {
+      return {
+        msg: `${item.title} · ${unitLabel} · Completes ${completedOtherContainer.title} (${completedOtherContainer.afterRead}/${completedOtherContainer.total})!`,
+        actionLabel: 'Inspect',
+      };
+    }
+
+    const advancedOtherContainer = syncedContainers.find((c) => c.afterRead > c.beforeRead);
+    if (advancedOtherContainer) {
+      const pct = Math.round(
+        (advancedOtherContainer.afterRead / Math.max(1, advancedOtherContainer.total)) * 100
+      );
+      return {
+        msg: `${item.title} · ${unitLabel} · Synced ${advancedOtherContainer.title} (${pct}%)`,
+        actionLabel: 'Inspect',
+      };
+    }
+
     if (item.format === 'comic') {
       const before = evaluateComicEditionContainers(item, prevProg);
       const after = evaluateComicEditionContainers(item, updatedProg);
@@ -1852,15 +1928,23 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 loggedAt: new Date().toISOString(),
               })
             : prev.history;
-        const nextState: CueStoreState = {
+        const rawNextState: CueStoreState = {
           ...prev,
           readProgress: { ...prev.readProgress, [readId]: updated },
           history: nextHistory,
         };
-        const nudge = computeReadSmartNudge(item, prog, updated, unitLabel, nextState);
+        const synced = applyReadAtomicSync(rawNextState, readId, prevUnits, nextActive);
+        const nudge = computeReadSmartNudge(
+          item,
+          prog,
+          updated,
+          unitLabel,
+          synced.state,
+          synced.syncedContainers
+        );
         msg = nudge.msg;
         actionLabel = nudge.actionLabel;
-        return nextState;
+        return synced.state;
       });
       if (msg) {
         showToast(msg, actionLabel, () => pushRoute({ view: 'read-detail', readId }), {
@@ -1877,13 +1961,17 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       const item = prev.readItems[readId];
       if (!item) return prev;
       const prog = prev.readProgress[readId];
-      return {
+      const prevUnits = getCompletedReadUnits(item, prog);
+      const updated = normalizeReadProgress(item, currentUnit, prog);
+      const nextUnits = getCompletedReadUnits(item, updated);
+      const rawNextState: CueStoreState = {
         ...prev,
         readProgress: {
           ...prev.readProgress,
-          [readId]: normalizeReadProgress(item, currentUnit, prog),
+          [readId]: updated,
         },
       };
+      return applyReadAtomicSync(rawNextState, readId, prevUnits, nextUnits).state;
     });
   }, []);
 
@@ -1907,7 +1995,6 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const unitLabel = item.unit === 'issues' ? `Issue #${unitNumber}` : `Ch. ${unitNumber}`;
         const activeCover = resolveComicEditionCover(item, updated.edition, updated);
         coverUrl = activeCover;
-        coverUrl = activeCover;
         const nextHistory = !hadUnit
           ? appendHistory(prev.history || [], {
               id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1921,17 +2008,92 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               loggedAt: new Date().toISOString(),
             })
           : prev.history;
-        const nextState: CueStoreState = {
+        const rawNextState: CueStoreState = {
           ...prev,
           readProgress: { ...prev.readProgress, [readId]: updated },
           history: nextHistory,
         };
+        const synced = applyReadAtomicSync(rawNextState, readId, prevUnits, nextActive);
         if (!hadUnit) {
-          const nudge = computeReadSmartNudge(item, prog, updated, unitLabel, nextState);
+          const nudge = computeReadSmartNudge(
+            item,
+            prog,
+            updated,
+            unitLabel,
+            synced.state,
+            synced.syncedContainers
+          );
           msg = nudge.msg;
           actionLabel = nudge.actionLabel;
         }
-        return nextState;
+        return synced.state;
+      });
+      if (msg) {
+        showToast(msg, actionLabel, () => pushRoute({ view: 'read-detail', readId }), {
+          domain: 'read',
+          posterUrl: coverUrl,
+        });
+      }
+    },
+    [pushRoute, showToast]
+  );
+
+  const setReadUnitsBatch = useCallback(
+    (readId: string, unitNumbers: number[], completed: boolean) => {
+      let msg = '';
+      let actionLabel: string | undefined;
+      let coverUrl = '';
+      commitState((prev) => {
+        const item = prev.readItems[readId];
+        if (!item || unitNumbers.length === 0) return prev;
+        const prog = prev.readProgress[readId];
+        const prevUnits = getCompletedReadUnits(item, prog);
+        const existingHigh = (prog?.completedUnits || []).filter((n) => n > item.totalUnits);
+        const targetSet = new Set(unitNumbers.filter((n) => n >= 1 && n <= item.totalUnits));
+        const activeSet = new Set(prevUnits);
+        if (completed) {
+          for (const u of targetSet) activeSet.add(u);
+        } else {
+          for (const u of targetSet) activeSet.delete(u);
+        }
+        const nextActive = [...activeSet].sort((a, b) => a - b);
+        const combined = [...new Set([...nextActive, ...existingHigh])].sort((a, b) => a - b);
+        const updated = normalizeReadProgress(item, nextActive.length, prog, combined);
+        const activeCover = resolveComicEditionCover(item, updated.edition, updated);
+        coverUrl = activeCover;
+        const unitLabel = `${targetSet.size} ${targetSet.size === 1 ? (item.unit === 'issues' ? 'issue' : 'chapter') : item.unit}`;
+        const nextHistory = completed
+          ? appendHistory(prev.history || [], {
+              id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              domain: 'read',
+              mediaKind: 'read',
+              mediaId: readId,
+              title: item.title,
+              posterUrl: activeCover,
+              codeLabel: unitLabel,
+              subtitle: item.creator,
+              loggedAt: new Date().toISOString(),
+            })
+          : prev.history;
+        const rawNextState: CueStoreState = {
+          ...prev,
+          readProgress: { ...prev.readProgress, [readId]: updated },
+          history: nextHistory,
+        };
+        const synced = applyReadAtomicSync(rawNextState, readId, prevUnits, nextActive);
+        if (completed) {
+          const nudge = computeReadSmartNudge(
+            item,
+            prog,
+            updated,
+            unitLabel,
+            synced.state,
+            synced.syncedContainers
+          );
+          msg = nudge.msg;
+          actionLabel = nudge.actionLabel;
+        }
+        return synced.state;
       });
       if (msg) {
         showToast(msg, actionLabel, () => pushRoute({ view: 'read-detail', readId }), {
@@ -1980,6 +2142,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const item = prev.readItems[readId];
         if (!item) return prev;
         const prog = prev.readProgress[readId];
+        const prevUnits = getCompletedReadUnits(item, prog);
         const isDone = prog?.status === 'finished';
         const existingHigh = (prog?.completedUnits || []).filter((n) => n > item.totalUnits);
         const allUnits: number[] = [];
@@ -1995,6 +2158,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           bookmarked: prog?.bookmarked ?? true,
           edition: prog?.edition,
           lastReadAt: new Date().toISOString(),
+          finishedAt: prog?.finishedAt || new Date().toISOString(),
         };
         const activeCover = resolveComicEditionCover(item, updated.edition, updated);
         coverUrl = activeCover;
@@ -2015,16 +2179,24 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               loggedAt: new Date().toISOString(),
             })
           : prev.history;
-        const nextState: CueStoreState = {
+        const rawNextState: CueStoreState = {
           ...prev,
           readProgress: { ...prev.readProgress, [readId]: updated },
           history: nextHistory,
         };
+        const synced = applyReadAtomicSync(rawNextState, readId, prevUnits, allUnits);
         const unitLabel = item.unit === 'issues' ? `Issues #1–${item.totalUnits}` : `Ch. 1–${item.totalUnits}`;
-        const nudge = computeReadSmartNudge(item, prog, updated, unitLabel, nextState);
+        const nudge = computeReadSmartNudge(
+          item,
+          prog,
+          updated,
+          unitLabel,
+          synced.state,
+          synced.syncedContainers
+        );
         msg = nudge.msg;
         actionLabel = nudge.actionLabel;
-        return nextState;
+        return synced.state;
       });
       if (msg) {
         showToast(msg, actionLabel, () => pushRoute({ view: 'read-detail', readId }), {
@@ -2096,6 +2268,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const rateReadUnit = useCallback(
     (readId: string, unitNumber: number, rating: number | undefined) => {
       commitState((prev) => {
+        const item = prev.readItems[readId];
         const existing = prev.readProgress[readId];
         const nextUnitRatings = { ...(existing?.unitRatings || {}) };
         if (typeof rating === 'number' && rating > 0) {
@@ -2103,7 +2276,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         } else {
           delete nextUnitRatings[unitNumber];
         }
-        return {
+        const rawNextState: CueStoreState = {
           ...prev,
           readProgress: {
             ...prev.readProgress,
@@ -2116,6 +2289,16 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               unitRatings: nextUnitRatings,
             },
           },
+        };
+        const atomId = getComicIssueAtomicId(item?.issueDetails?.[unitNumber]);
+        if (!atomId) return rawNextState;
+        const synced = syncAtomicReadUnitsAcrossState(rawNextState, readId, [], [
+          { atomicId: atomId, rating },
+        ]);
+        return {
+          ...rawNextState,
+          atomicReadUnits: synced.atomicReadUnits,
+          readProgress: synced.readProgress,
         };
       });
     },
@@ -2328,25 +2511,45 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const prog = prev.readProgress[readId];
         const isDefaultSeriesEdition =
           item.comicKind === 'series' && (!prog?.edition || prog.edition === 'digital');
+        const isCollectionDefault =
+          isCollectedComicItem(item) && (!prog?.edition || prog.edition === 'digital') && !prog?.editionId;
         const nextTotal =
-          isDefaultSeriesEdition && resolvedTotalUnits && resolvedTotalUnits > item.totalUnits
-            ? resolvedTotalUnits
+          resolvedTotalUnits && resolvedTotalUnits > 0
+            ? isDefaultSeriesEdition
+              ? Math.max(item.totalUnits, resolvedTotalUnits)
+              : isCollectionDefault
+                ? resolvedTotalUnits
+                : item.totalUnits
             : item.totalUnits;
-        return {
+        const updatedItem: ReadItem = {
+          ...item,
+          totalUnits: nextTotal,
+          baseTotalUnits:
+            (isDefaultSeriesEdition || isCollectionDefault) && resolvedTotalUnits && resolvedTotalUnits > 0
+              ? nextTotal
+              : item.baseTotalUnits,
+          issueDetails,
+          issueDetailsKey: detailsKey,
+        };
+        const nextProgForSelf =
+          prog && nextTotal !== item.totalUnits
+            ? normalizeReadProgress(updatedItem, prog.currentUnit, prog, prog.completedUnits)
+            : prog;
+        const intermediate: CueStoreState = {
           ...prev,
           readItems: {
             ...prev.readItems,
-            [readId]: {
-              ...item,
-              totalUnits: nextTotal,
-              baseTotalUnits:
-                isDefaultSeriesEdition && nextTotal > (item.baseTotalUnits || 0)
-                  ? nextTotal
-                  : item.baseTotalUnits,
-              issueDetails,
-              issueDetailsKey: detailsKey,
-            },
+            [readId]: updatedItem,
           },
+          readProgress: nextProgForSelf
+            ? { ...prev.readProgress, [readId]: nextProgForSelf }
+            : prev.readProgress,
+        };
+        const reconciled = reconcileHydratedComicItemWithAtoms(intermediate, readId, updatedItem);
+        return {
+          ...intermediate,
+          atomicReadUnits: reconciled.atomicReadUnits,
+          readProgress: reconciled.readProgress,
         };
       });
     },
@@ -2388,14 +2591,17 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     releaseScheduleRefreshedRef.current = true;
     const snap = stateRef.current;
 
-    // 1. Refresh stale bookmarked comic series issue caches so exact releaseDateIso dates are stored
+    // 1. Refresh stale bookmarked comic series & collections so exact dates, covers, and atomicIds stay synced
     const staleComics = snap.readOrder
       .map((id) => snap.readItems[id])
       .filter((item): item is ReadItem => {
         if (!item || item.format !== 'comic') return false;
         const prog = snap.readProgress[item.id];
-        if (!prog?.bookmarked || (prog.edition && prog.edition !== 'digital')) return false;
-        if (!item.comicSeriesWiki || !item.comicSeriesVolTitle) return false;
+        if (!prog?.bookmarked) return false;
+        if (prog.edition && prog.edition !== 'digital') return false;
+        const hasSeriesSource = Boolean(item.comicSeriesWiki && item.comicSeriesVolTitle);
+        const hasCollectionSource = isCollectedComicItem(item);
+        if (!hasSeriesSource && !hasCollectionSource) return false;
         return !item.issueDetailsKey?.endsWith(`::${COMIC_ISSUE_CACHE_VERSION}`);
       })
       .slice(0, 6);
@@ -2403,20 +2609,39 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     if (staleComics.length > 0) {
       void Promise.allSettled(
         staleComics.map(async (item) => {
-          const { issues, totalIssues } = await fetchComicSeriesIssues(
-            item.comicSeriesWiki!,
-            item.comicSeriesVolTitle!,
-            Math.max(60, item.totalUnits)
-          );
-          if (Object.keys(issues).length > 0) {
+          const isCollection = isCollectedComicItem(item);
+          const payload =
+            item.comicKind === 'series' && item.comicSeriesWiki && item.comicSeriesVolTitle
+              ? await fetchComicSeriesIssues(
+                  item.comicSeriesWiki,
+                  item.comicSeriesVolTitle,
+                  Math.max(90, item.totalUnits)
+                )
+              : isCollection
+                ? await fetchComicCollectionIssues({
+                    title: item.title,
+                    isbn: extractReadItemIsbn(item),
+                    overview: item.overview,
+                    publisher: item.comicPublisher,
+                    wiki: item.comicSeriesWiki,
+                    pageTitle: item.comicSeriesVolTitle,
+                    limit: Math.max(100, item.totalUnits),
+                  })
+                : { totalIssues: 0, issues: {} };
+          if (Object.keys(payload.issues).length > 0) {
             const prog = stateRef.current.readProgress[item.id];
-            const nextTotal = totalIssues > 0 ? Math.max(totalIssues, item.totalUnits) : item.totalUnits;
+            const nextTotal =
+              payload.totalIssues > 0
+                ? isCollection
+                  ? payload.totalIssues
+                  : Math.max(payload.totalIssues, item.totalUnits)
+                : item.totalUnits;
             const detailsKey = `${prog?.editionId || prog?.edition || 'default'}::${nextTotal}::${COMIC_ISSUE_CACHE_VERSION}`;
             updateReadIssueDetails(
               item.id,
-              issues,
+              payload.issues,
               detailsKey,
-              totalIssues > 0 ? totalIssues : undefined
+              payload.totalIssues > 0 ? payload.totalIssues : undefined
             );
           }
         })
@@ -2657,8 +2882,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const resetReadProgress = useCallback(
     (readId: string) => {
       commitState((prev) => {
+        const item = prev.readItems[readId];
         const existing = prev.readProgress[readId];
-        return {
+        const prevUnits = item ? getCompletedReadUnits(item, existing) : [];
+        const rawNextState: CueStoreState = {
           ...prev,
           readProgress: {
             ...prev.readProgress,
@@ -2671,9 +2898,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               rereadCount: 0,
               bookmarked: existing?.bookmarked ?? true,
               edition: existing?.edition,
+              finishedAt: undefined,
             },
           },
         };
+        return applyReadAtomicSync(rawNextState, readId, prevUnits, []).state;
       });
       showToast('Reset reading progress');
     },
@@ -4235,6 +4464,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             showProgress: nextShows,
             movieProgress: nextMovies,
             readProgress: resetReadState(prev),
+            atomicReadUnits: {},
             gameProgress: resetPlayState(prev),
             history: [],
             mindFeedback: { dismissedIds: [], dismissedGenres: {}, acceptedCount: 0 },
@@ -4264,6 +4494,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         commitState((prev) => ({
           ...prev,
           readProgress: resetReadState(prev),
+          atomicReadUnits: {},
           history: (prev.history || []).filter((h) => h.domain !== 'read'),
         }));
         showToast('Reset Read progress');
@@ -4398,6 +4629,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         advanceReadProgress,
         setReadProgress,
         toggleReadUnit,
+        setReadUnitsBatch,
         markReadFinished,
         incrementReread,
         toggleReadBookmark,
