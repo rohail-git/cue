@@ -5,6 +5,7 @@ import { type GameDiscoverMode, fetchTrendingGamesPayload } from './api/trending
 import { fetchLiveHealthPayload } from './api/health.ts'
 import { handleTmdbProxyRequest } from './api/tmdb.ts'
 import { handleIgdbProxyRequest } from './api/igdb.ts'
+import { GET as handleGameChaptersGet } from './api/game-chapters.ts'
 import {
   type ComicWikiSlug,
   fetchComicCollectionIssuesPayload,
@@ -330,6 +331,36 @@ function igdbDevPlugin(env: Record<string, string | undefined>): Plugin {
   };
 }
 
+function gameChaptersDevPlugin(): Plugin {
+  return {
+    name: 'cue-game-chapters-dev',
+    configureServer(server) {
+      server.middlewares.use('/api/game-chapters', async (req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== 'GET') {
+          next();
+          return;
+        }
+        try {
+          const url = new URL(req.url || '/', 'http://localhost');
+          const out = await handleGameChaptersGet(new Request(url.toString()));
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = out.status;
+          res.end(await out.text());
+        } catch {
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 200;
+          res.end(JSON.stringify({ found: false, chapters: [] }));
+        }
+      });
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
@@ -339,6 +370,7 @@ export default defineConfig(({ mode }) => {
       imdbResolveDevPlugin(),
       trendingGamesDevPlugin(),
       comicSeriesDevPlugin(),
+      gameChaptersDevPlugin(),
       tmdbDevPlugin(env),
       igdbDevPlugin(env),
       healthDevPlugin(env),

@@ -337,6 +337,13 @@ interface CueContextValue {
     source?: GameChapterSource,
     note?: string
   ) => void;
+  applyGameChapterList: (
+    gameId: string,
+    chapters: string[],
+    unit: GameChapterUnit,
+    source?: GameChapterSource,
+    note?: string
+  ) => void;
   updateGameProgress: (
     gameId: string,
     patch: Partial<{
@@ -3328,6 +3335,76 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const applyGameChapterList = useCallback(
+    (
+      gameId: string,
+      chapters: string[],
+      unit: GameChapterUnit = 'chapters',
+      source: GameChapterSource = 'web',
+      note?: string
+    ) => {
+      const cleanList = chapters.map((c) => c.trim()).filter(Boolean).slice(0, 120);
+      if (cleanList.length === 0) return;
+      let gameTitle = '';
+      let gameCover = '';
+      commitState((prev) => {
+        const game = prev.games[gameId];
+        if (!game) return prev;
+        gameTitle = game.title;
+        gameCover = game.coverUrl;
+        const safeTotal = cleanList.length;
+        const updatedGame: GameItem = {
+          ...game,
+          totalChapters: safeTotal,
+          chapterUnit: unit,
+          chapterSource: source,
+          chapterNote: note || `${safeTotal} ${unit}`,
+        };
+        const chapterTitles: Record<number, string> = {};
+        cleanList.forEach((t, idx) => {
+          chapterTitles[idx + 1] = t;
+        });
+        const existingProg = prev.gameProgress[gameId];
+        const prevChapter = Math.min(safeTotal, existingProg?.currentChapter || 0);
+        const baseProg: CueStoreState['gameProgress'][string] = {
+          ...(existingProg || {}),
+          status: existingProg?.status || (prevChapter > 0 ? 'playing' : 'backlog'),
+          hoursPlayed: existingProg?.hoursPlayed || 0,
+          completionPct: existingProg?.completionPct || 0,
+          playthroughCount: existingProg?.playthroughCount || 0,
+          platinum: existingProg?.platinum ?? false,
+          platform: existingProg?.platform || game.platforms[0] || 'PC',
+          bookmarked: existingProg?.bookmarked ?? true,
+          chapterTitles,
+        };
+        const nextProg =
+          baseProg.status === 'completed' || prevChapter > 0
+            ? applyGameChapter(
+                updatedGame,
+                baseProg,
+                baseProg.status === 'completed' ? safeTotal : prevChapter
+              )
+            : baseProg;
+        return {
+          ...prev,
+          games: { ...prev.games, [gameId]: updatedGame },
+          gameProgress: {
+            ...prev.gameProgress,
+            [gameId]: nextProg,
+          },
+        };
+      });
+      if (gameTitle) {
+        showToast(gameTitle, undefined, undefined, {
+          domain: 'play',
+          subtitle: `Added ${cleanList.length} ${unit}`,
+          posterUrl: gameCover,
+        });
+      }
+    },
+    [showToast]
+  );
+
   const logGameSession = useCallback(
     (gameId: string, hoursDelta: number) => {
       let label = '';
@@ -4906,6 +4983,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         advanceGameChapter,
         setGameChapter,
         updateGameChaptersMeta,
+        applyGameChapterList,
         updateGameProgress,
         toggleGameCompleted,
         toggleGamePlatinum,

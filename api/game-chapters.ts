@@ -1,4 +1,13 @@
-type ChapterUnit = 'chapters' | 'acts' | 'missions';
+type ChapterUnit = 'chapters' | 'acts' | 'missions' | 'milestones';
+
+export interface GameChapterSuggestPayload {
+  found: boolean;
+  unit: ChapterUnit;
+  source?: 'catalog' | 'fandom' | 'wikipedia' | 'web';
+  sourceLabel?: string;
+  note?: string;
+  chapters: string[];
+}
 
 const KNOWN_GAME_CHAPTERS: Record<
   string,
@@ -305,11 +314,366 @@ async function searchWebSnippetChapters(title: string) {
   }
 }
 
+function cleanGameTitleForSearch(rawTitle: string): { cleanTitle: string; wantsDlc: boolean } {
+  const wantsDlc = /\b(complete|definitive|goty|game of the year|ultimate|royal)\b/i.test(rawTitle);
+  const cleanTitle = rawTitle
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(
+      /\s*[-–—:]\s*(the\s+)?(complete|definitive|goty|game of the year|remastered|director'?s cut|royal|ultimate|anniversary|gold|deluxe|standard)\s*(edition|version|cut)?$/i,
+      ''
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+  return { cleanTitle: cleanTitle || rawTitle.trim(), wantsDlc };
+}
+
+function cleanWikiItemText(raw: string): string {
+  return raw
+    .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
+    .replace(/<ref[^/]*\/>/gi, '')
+    .replace(/\[\[(?:File|Image):[^\]]+\]\]/gi, '')
+    .replace(/\[\[([^|\]]+)\|([^\]]+)\]\]/g, '$2')
+    .replace(/\[\[([^\]]+)\]\]/g, '$1')
+    .replace(/\{\{[^}]*\}\}/g, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/'{2,3}/g, '')
+    .replace(/^[-*•+]+\s*/, '')
+    .replace(/^\d{1,3}[.):\-]\s+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseFandomMissionListFromWikitext(
+  wikitext: string,
+  wantsDlc: boolean
+): { chapters: string[]; detectedUnit: ChapterUnit } {
+  const lines = wikitext.replace(/\r/g, '').split('\n');
+  const chapters: string[] = [];
+  const seen = new Set<string>();
+  let missionHits = 0;
+  let chapterHits = 0;
+  let actHits = 0;
+
+  let skipSection = false;
+  let inDlcSection = false;
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+
+    // Detect MediaWiki section headings or bold table headings
+    const headingMatch =
+      trimmed.match(/^={2,5}\s*([^=]+?)\s*={2,5}$/) ||
+      trimmed.match(/^\|\s*colspan=["']?\d+["']?\s*\|\s*(.+)$/i);
+    if (headingMatch) {
+      const h = cleanWikiItemText(headingMatch[1]).toLowerCase();
+      if (/\b(?:alphabetical|sub missions|side quests|side missions|twilight|trivia|collectibles|navigation|references|gallery)\b/.test(h)) {
+        skipSection = true;
+        continue;
+      }
+      if (/\bdlc\b/.test(h)) {
+        inDlcSection = true;
+        skipSection = !wantsDlc;
+        continue;
+      }
+      if (/\b(?:main missions|story missions|campaign missions|chapters|episodes|walkthrough|acts)\b/.test(h)) {
+        skipSection = false;
+        inDlcSection = false;
+        if (/\bmissions?\b/.test(h)) missionHits += 3;
+        if (/\bacts?\b/.test(h)) actHits += 3;
+        if (/\bchapters?\b/.test(h)) chapterHits += 3;
+      }
+      continue;
+    }
+
+    if (skipSection) continue;
+    if (inDlcSection && !wantsDlc) continue;
+
+    // Bullet item `* [[Title]]` or numbered `# [[Title]]`
+    const listMatch = trimmed.match(/^[*#]+\s*(.+)$/);
+    if (!listMatch) continue;
+
+    const rawEntry = listMatch[1].trim();
+    // Skip pure category / template / meta links
+    if (/^\[\[Category:|^\[\[:Category:/i.test(rawEntry)) continue;
+
+    const cleaned = cleanWikiItemText(rawEntry)
+      .replace(/^(?:chapter|mission|act|episode|part|stage)\s+(?:\d{1,3}|[IVX]+)\s*[:.\-–—]\s*/i, '')
+      .trim();
+
+    if (!cleaned || cleaned.length < 2 || cleaned.length > 90) continue;
+    if (/^(?:none|tba|n\/a|region|mission|chapter|act)$/i.test(cleaned)) continue;
+
+    const lower = cleaned.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    chapters.push(cleaned);
+    if (chapters.length >= 120) break;
+  }
+
+  let detectedUnit: ChapterUnit = 'chapters';
+  if (missionHits > chapterHits && missionHits >= actHits) detectedUnit = 'missions';
+  else if (actHits > chapterHits && actHits > missionHits && chapters.length <= 10) detectedUnit = 'acts';
+
+  return { chapters, detectedUnit };
+}
+
+async function discoverFandomGameChapters(
+  rawTitle: string,
+  cleanTitle: string,
+  wantsDlc: boolean
+): Promise<GameChapterSuggestPayload | null> {
+  const words = cleanTitle
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return null;
+
+  const subdomains = Array.from(
+    new Set(
+      [
+        words.join(''),
+        words.filter((w) => !/^\d+$/.test(w)).join(''),
+        words.slice(0, 2).join(''),
+        words[0],
+      ].filter((s) => s && s.length >= 3)
+    )
+  ).slice(0, 3);
+
+  const cleanNorm = cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const titleNums = cleanNorm.match(/\b\d+\b/g) || [];
+  const lastNum = titleNums[titleNums.length - 1];
+
+  const searchHits = await Promise.allSettled(
+    subdomains.map(async (sub) => {
+      const srUrl = `https://${sub}.fandom.com/api.php?action=query&list=search&srsearch=${encodeURIComponent(
+        `${cleanTitle} main missions OR chapters OR episodes`
+      )}&srlimit=6&format=json`;
+      const r = await fetch(srUrl, {
+        headers: { 'User-Agent': 'CueMediaTracker/1.0 (+https://cue-three-theta.vercel.app)' },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!r.ok) return [];
+      const j = (await r.json()) as { query?: { search?: Array<{ title?: string }> } };
+      return (j.query?.search || []).map((s) => ({
+        sub,
+        pageTitle: s.title || '',
+      }));
+    })
+  );
+
+  const candidates: Array<{ sub: string; pageTitle: string; score: number }> = [];
+  for (const res of searchHits) {
+    if (res.status !== 'fulfilled') continue;
+    for (const hit of res.value) {
+      if (!hit.pageTitle) continue;
+      const lower = hit.pageTitle.toLowerCase();
+      if (/\b(?:sub missions|twilight missions|side quests|achievements|trophies|collectibles)\b/.test(lower)) {
+        continue;
+      }
+      let score = 0;
+      if (/\bmain missions\b/.test(lower)) score += 35;
+      else if (/\bstory missions\b/.test(lower)) score += 32;
+      else if (/\b(?:chapters|episodes|acts|missions)\b/.test(lower)) score += 24;
+      else if (/\bwalkthrough\b/.test(lower)) score += 12;
+      else continue;
+
+      if (lower.includes(cleanNorm)) score += 25;
+      else if (words[0] && lower.includes(words[0])) score += 8;
+
+      if (lastNum) {
+        if (new RegExp(`\\b${lastNum}\\b`).test(lower)) score += 15;
+        else if (/\b\d+\b/.test(lower)) score -= 30;
+      }
+
+      candidates.push({ ...hit, score });
+    }
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  const top = candidates.slice(0, 3);
+  if (top.length === 0) return null;
+
+  for (const cand of top) {
+    try {
+      const pageRes = await fetch(
+        `https://${cand.sub}.fandom.com/api.php?action=query&titles=${encodeURIComponent(
+          cand.pageTitle
+        )}&prop=revisions&rvprop=content&rvslots=main&redirects=1&format=json&formatversion=2`,
+        {
+          headers: { 'User-Agent': 'CueMediaTracker/1.0 (+https://cue-three-theta.vercel.app)' },
+          signal: AbortSignal.timeout(4000),
+        }
+      );
+      if (!pageRes.ok) continue;
+      const pj = (await pageRes.json()) as {
+        query?: {
+          pages?: Array<{
+            missing?: boolean;
+            title?: string;
+            revisions?: Array<{ slots?: { main?: { content?: string } } }>;
+          }>;
+        };
+      };
+      const page = pj.query?.pages?.find((p) => !p.missing);
+      const wt = page?.revisions?.[0]?.slots?.main?.content || '';
+      if (!wt) continue;
+      const parsed = parseFandomMissionListFromWikitext(wt, wantsDlc);
+      if (parsed.chapters.length >= 3) {
+        return {
+          found: true,
+          unit: parsed.detectedUnit,
+          source: 'fandom',
+          sourceLabel: `${cand.sub}.fandom.com · ${page?.title || cand.pageTitle}`,
+          note: `Suggested ${parsed.chapters.length} ${parsed.detectedUnit} from Fandom (${cand.pageTitle})`,
+          chapters: parsed.chapters,
+        };
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+
+  void rawTitle;
+  return null;
+}
+
+async function searchStrategyWikiChapters(cleanTitle: string): Promise<GameChapterSuggestPayload | null> {
+  try {
+    const r = await fetch(
+      `https://strategywiki.org/w/api.php?action=query&titles=${encodeURIComponent(
+        `${cleanTitle}/Table of Contents`
+      )}&prop=revisions&rvprop=content&rvslots=main&redirects=1&format=json&formatversion=2`,
+      {
+        headers: { 'User-Agent': 'CueMediaTracker/1.0 (+https://cue-three-theta.vercel.app)' },
+        signal: AbortSignal.timeout(4000),
+      }
+    );
+    if (!r.ok) return null;
+    const j = (await r.json()) as {
+      query?: {
+        pages?: Array<{
+          missing?: boolean;
+          revisions?: Array<{ slots?: { main?: { content?: string } } }>;
+        }>;
+      };
+    };
+    const wt = j.query?.pages?.find((p) => !p.missing)?.revisions?.[0]?.slots?.main?.content || '';
+    if (!wt) return null;
+
+    const wtWalkMatch = wt.match(/Walkthrough[\s\S]*?(?=\{\{col\|3\}\}|Appendices|$)/i)?.[0] || wt;
+    const chapters: string[] = [];
+    const seen = new Set<string>();
+    const escapedPrefix = cleanTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const m of wtWalkMatch.matchAll(
+      new RegExp(`\\[\\[${escapedPrefix}\\/([^|\\]]+?)(?:\\|([^\\]]+))?\\]\\]`, 'gi')
+    )) {
+      const label = (m[2] || m[1] || '').trim();
+      if (
+        !label ||
+        /^(?:walkthrough|gameplay|controls|getting started|characters|items|weapons|enemies|bosses|appendices|achievements|trophies|table of contents)$/i.test(
+          label
+        )
+      ) {
+        continue;
+      }
+      const key = label.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      chapters.push(label);
+      if (chapters.length >= 120) break;
+    }
+
+    if (chapters.length < 3) return null;
+    return {
+      found: true,
+      unit: 'chapters',
+      source: 'web',
+      sourceLabel: `StrategyWiki · ${cleanTitle}`,
+      note: `Suggested ${chapters.length} chapters from StrategyWiki`,
+      chapters,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Suggests ordered named story chapters/missions (Fandom + StrategyWiki + Wikipedia/web fallback). */
+export async function fetchGameChapterSuggestPayload(
+  rawTitle: string
+): Promise<GameChapterSuggestPayload> {
+  const trimmed = rawTitle.trim();
+  if (trimmed.length < 2) {
+    return { found: false, unit: 'chapters', chapters: [] };
+  }
+
+  const { cleanTitle, wantsDlc } = cleanGameTitleForSearch(trimmed);
+
+  const [fandomHit, swHit] = await Promise.allSettled([
+    discoverFandomGameChapters(trimmed, cleanTitle, wantsDlc),
+    searchStrategyWikiChapters(cleanTitle),
+  ]);
+
+  if (fandomHit.status === 'fulfilled' && fandomHit.value && fandomHit.value.chapters.length >= 3) {
+    return fandomHit.value;
+  }
+  if (swHit.status === 'fulfilled' && swHit.value && swHit.value.chapters.length >= 3) {
+    return swHit.value;
+  }
+
+  const catalogHit = lookupKnownGameChapters(trimmed);
+  if (catalogHit) {
+    const unitSingle = catalogHit.unit === 'missions' ? 'Mission' : catalogHit.unit === 'acts' ? 'Act' : 'Chapter';
+    return {
+      found: true,
+      unit: catalogHit.unit,
+      source: 'catalog',
+      sourceLabel: 'Cue Catalog',
+      note: catalogHit.note,
+      chapters: Array.from({ length: catalogHit.totalChapters }, (_, i) => `${unitSingle} ${i + 1}`),
+    };
+  }
+
+  const wikiHit = await searchWikipediaChapters(cleanTitle);
+  if (wikiHit) {
+    const unitSingle = wikiHit.unit === 'missions' ? 'Mission' : wikiHit.unit === 'acts' ? 'Act' : 'Chapter';
+    return {
+      found: true,
+      unit: wikiHit.unit,
+      source: 'wikipedia',
+      sourceLabel: 'Wikipedia count estimate',
+      note: `${wikiHit.note} · Generic titles — edit or pull names via Google AI Mode`,
+      chapters: Array.from({ length: wikiHit.totalChapters }, (_, i) => `${unitSingle} ${i + 1}`),
+    };
+  }
+
+  const webHit = await searchWebSnippetChapters(cleanTitle);
+  if (webHit) {
+    const unitSingle = webHit.unit === 'missions' ? 'Mission' : webHit.unit === 'acts' ? 'Act' : 'Chapter';
+    return {
+      found: true,
+      unit: webHit.unit,
+      source: 'web',
+      sourceLabel: 'Web count estimate',
+      note: `${webHit.note} · Generic titles — edit or pull names via Google AI Mode`,
+      chapters: Array.from({ length: webHit.totalChapters }, (_, i) => `${unitSingle} ${i + 1}`),
+    };
+  }
+
+  return { found: false, unit: 'chapters', chapters: [] };
+}
+
 export async function GET(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const title = (url.searchParams.get('title') || '').trim();
   if (title.length < 2) {
     return jsonResponse({ found: false, error: 'Missing game title' }, 400);
+  }
+
+  if (url.searchParams.get('mode') === 'suggest') {
+    const suggest = await fetchGameChapterSuggestPayload(title);
+    return jsonResponse(suggest, 200, suggest.found ? 43200 : 1800);
   }
 
   const catalogHit = lookupKnownGameChapters(title);

@@ -484,3 +484,101 @@ export function parseChapterCountFromText(
     unit: unitStr as ChapterUnit,
   };
 }
+
+/** Parses messy text pasted from Google AI Mode, LLMs, or walkthroughs into an ordered list of chapters/missions. */
+export function parsePastedChapterList(rawText: string): {
+  chapters: string[];
+  detectedUnit: ChapterUnit;
+} {
+  if (!rawText || !rawText.trim()) {
+    return { chapters: [], detectedUnit: 'chapters' };
+  }
+
+  let missionSignals = 0;
+  let actSignals = 0;
+  let milestoneSignals = 0;
+  let chapterSignals = 0;
+
+  const lines = rawText.replace(/\r/g, '').split('\n');
+  const chapters: string[] = [];
+  const seen = new Set<string>();
+
+  for (const rawLine of lines) {
+    let line = rawLine.trim();
+    if (!line) continue;
+
+    // Strip markdown links [Label](url) -> Label and formatting markers
+    line = line
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/^#+\s*/, '')
+      .trim();
+
+    if (!line) continue;
+    // Skip conversational headers / section banners / notes
+    if (
+      /^(?:here(?:'s| is)|below is|the main|main story|base game|dlc\b|optional|side\s+(?:missions?|quests?)|twilight missions?|note:|source:|region\s*\d|prologues?\s+and)/i.test(
+        line
+      ) &&
+      /:$/.test(line)
+    ) {
+      if (/\bmissions?\b/i.test(line)) missionSignals += 2;
+      if (/\bacts?\b/i.test(line)) actSignals += 2;
+      if (/\bchapters?\b/i.test(line)) chapterSignals += 2;
+      continue;
+    }
+    if (/^(?:here(?:'s| is)|sure[,!]|below is|notes?:|sources?:|learn more)/i.test(line)) {
+      continue;
+    }
+
+    const hadListMarker =
+      /^(?:\d{1,3}[.):\-]\s+|[-*•+]\s+|(?:chapter|mission|act|episode|part|stage|milestone)\s+\d+)/i.test(
+        line
+      );
+
+    if (/\b(?:mission|quest)\b/i.test(line)) missionSignals += 1;
+    else if (/\b(?:act|prologue|epilogue)\b/i.test(line)) actSignals += 1;
+    else if (/\b(?:boss|milestone)\b/i.test(line)) milestoneSignals += 1;
+    else if (/\b(?:chapter|episode|stage)\b/i.test(line)) chapterSignals += 1;
+
+    // Strip numbering & bullet prefixes
+    line = line
+      .replace(/^[-*•+]\s+/, '')
+      .replace(/^\d{1,3}\s*[.)\-–—:]\s+/, '')
+      .replace(
+        /^(?:chapter|mission|act|episode|part|stage)\s+(?:\d{1,3}|[IVX]+)\s*[:.\-–—]\s*/i,
+        ''
+      )
+      .trim();
+
+    // Strip trailing parenthetical blurbs only if very long or region/level notes cleanly kept short
+    line = line.replace(/\s*\(optional\)\s*$/i, '').trim();
+
+    if (!line || line.length < 2) continue;
+    // Skip trailing category headers ending cleanly with ':'
+    if (/:$/.test(line) && line.length < 48) continue;
+    // Skip paragraph explanations unless explicitly numbered
+    if (!hadListMarker && line.length > 90) continue;
+    if (line.length > 120) {
+      line = line.slice(0, 117).trim() + '…';
+    }
+
+    const key = line.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    chapters.push(line);
+    if (chapters.length >= 120) break;
+  }
+
+  let detectedUnit: ChapterUnit = 'chapters';
+  if (missionSignals > chapterSignals && missionSignals >= actSignals && missionSignals >= milestoneSignals) {
+    detectedUnit = 'missions';
+  } else if (actSignals > chapterSignals && actSignals > missionSignals && chapters.length <= 10) {
+    detectedUnit = 'acts';
+  } else if (milestoneSignals > chapterSignals && milestoneSignals > missionSignals) {
+    detectedUnit = 'milestones';
+  }
+
+  return { chapters, detectedUnit };
+}

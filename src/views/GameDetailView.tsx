@@ -22,6 +22,7 @@ import {
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
 import { FinishedDateRow, formatFinishedDate } from '../components/FinishedDateCard';
+import { GameChapterSuggestSheet } from '../components/GameChapterSuggestSheet';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl } from '../components/RatingControl';
@@ -60,6 +61,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
     advanceGameChapter,
     setGameChapter,
     updateGameChaptersMeta,
+    applyGameChapterList,
     updateGameProgress,
     toggleGameCompleted,
     toggleGamePlatinum,
@@ -93,6 +95,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
   const [chapterNoteText, setChapterNoteText] = useState('');
   const [editingChapterTitle, setEditingChapterTitle] = useState(false);
   const [chapterTitleDraft, setChapterTitleDraft] = useState('');
+  const [suggestOpen, setSuggestOpen] = useState(false);
   const fetchedChaptersRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -302,6 +305,17 @@ export function GameDetailView({ gameId }: { gameId: string }) {
               >
                 <Plus className="w-4 h-4 text-watched" />
                 <span>Log new playthrough (+1)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSuggestOpen(true);
+                  setMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm text-ink hover:bg-white/8 text-left"
+              >
+                <Sparkles className="w-4 h-4 text-play" />
+                <span>{totalChapters > 0 ? 'Suggest / replace story list' : 'Suggest chapters & missions'}</span>
               </button>
               <button
                 type="button"
@@ -534,8 +548,8 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                 />
               </section>
 
-              {/* Simple Accordion Story Chapters List */}
-              {totalChapters > 0 && (
+              {/* Simple Accordion Story Chapters List or Suggest Prompt */}
+              {totalChapters > 0 ? (
                 <section className="pt-2 pb-4 divide-y divide-white/[0.06]">
                   {gameBuckets.map((bucket) => {
                     const totalInBucket = bucket.end - bucket.start + 1;
@@ -691,6 +705,27 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                       </div>
                     );
                   })}
+                </section>
+              ) : (
+                <section className="pt-2 pb-4">
+                  <div className="rounded-[20px] bg-surface border border-white/[0.06] p-4 flex items-center justify-between gap-3 flex-wrap">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-ink">Story chapters &amp; missions</p>
+                      <p className="text-xs text-ink-dim mt-0.5">
+                        {checkingChapters
+                          ? 'Checking game guides for chapter structure…'
+                          : 'Pull a chapter or mission list from wikis or Google AI Mode to track.'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSuggestOpen(true)}
+                      className="px-4 py-2 rounded-full bg-play/18 border border-play/35 text-xs font-semibold text-play hover:bg-play/25 inline-flex items-center gap-1.5 shrink-0 transition-colors"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Suggest chapters &amp; missions</span>
+                    </button>
+                  </div>
                 </section>
               )}
             </>
@@ -1007,17 +1042,27 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                   !checkingChapters &&
                   !editingChapters && (
                     <div className="space-y-2.5 pt-1">
-                      <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
                         <p className="text-xs text-ink-dim">
                           Track chapters, acts, missions, or open-world milestones.
                         </p>
-                        <button
-                          type="button"
-                          onClick={handleOpenChapterEditor}
-                          className="px-3 py-1.5 rounded-full bg-white/8 hover:bg-white/12 text-xs font-semibold text-ink shrink-0"
-                        >
-                          Custom
-                        </button>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => setSuggestOpen(true)}
+                            className="px-3 py-1.5 rounded-full bg-play/18 border border-play/35 hover:bg-play/25 text-xs font-semibold text-play inline-flex items-center gap-1"
+                          >
+                            <Sparkles className="w-3 h-3" />
+                            <span>Suggest</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleOpenChapterEditor}
+                            className="px-3 py-1.5 rounded-full bg-white/8 hover:bg-white/12 text-xs font-semibold text-ink"
+                          >
+                            Custom
+                          </button>
+                        </div>
                       </div>
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <button
@@ -1366,6 +1411,15 @@ export function GameDetailView({ gameId }: { gameId: string }) {
           </div>
         </div>
       )}
+      <GameChapterSuggestSheet
+        open={suggestOpen}
+        gameTitle={game.title}
+        initialUnit={chapterUnit}
+        onClose={() => setSuggestOpen(false)}
+        onConfirm={(chapters, unit, source, note) =>
+          applyGameChapterList(game.id, chapters, unit, source, note)
+        }
+      />
     </div>
   );
 }

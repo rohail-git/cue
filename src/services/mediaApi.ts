@@ -23,7 +23,9 @@ import {
 import {
   type ChapterSource,
   type ChapterUnit,
+  KNOWN_GAME_CHAPTER_TITLES,
   lookupKnownGameChapters,
+  normalizeGameTitleKey,
   parseChapterCountFromText,
 } from '../utils/gameChapters';
 import {
@@ -4015,6 +4017,80 @@ export interface GameChapterLookupResponse {
   unit?: ChapterUnit;
   source?: ChapterSource;
   note?: string;
+}
+
+export interface GameChapterSuggestResponse {
+  found: boolean;
+  unit: ChapterUnit;
+  source?: 'catalog' | 'fandom' | 'wikipedia' | 'web';
+  sourceLabel?: string;
+  note?: string;
+  chapters: string[];
+}
+
+/** Suggests named story chapters/missions for a game from Cue's curated list or live Fandom/StrategyWiki lookup. */
+export async function fetchGameChapterSuggestions(
+  title: string
+): Promise<GameChapterSuggestResponse> {
+  const norm = normalizeGameTitleKey(title);
+  const rawLower = title
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/['’]/g, '')
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const knownTitles =
+    KNOWN_GAME_CHAPTER_TITLES[rawLower] ||
+    KNOWN_GAME_CHAPTER_TITLES[norm] ||
+    Object.entries(KNOWN_GAME_CHAPTER_TITLES).find(
+      ([k]) =>
+        (rawLower.startsWith(`${k} `) || norm.startsWith(`${k} `)) &&
+        !/^(?:\d+|ii|iii|iv|v|vi|x|part|rebirth)\b/i.test(norm.slice(k.length + 1))
+    )?.[1];
+
+  const curated = lookupKnownGameChapters(title);
+  if (knownTitles && knownTitles.length >= 2) {
+    return {
+      found: true,
+      unit: curated?.unit || 'chapters',
+      source: 'catalog',
+      sourceLabel: 'Cue Catalog',
+      note: curated?.note || `${knownTitles.length} official ${curated?.unit || 'chapters'}`,
+      chapters: knownTitles.map((c) => c.title),
+    };
+  }
+
+  try {
+    const res = await fetch(`/api/game-chapters?mode=suggest&title=${encodeURIComponent(title)}`, {
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as GameChapterSuggestResponse;
+      if (data && Array.isArray(data.chapters)) {
+        return data;
+      }
+    }
+  } catch {
+    // fall through
+  }
+
+  if (curated) {
+    const single = curated.unit === 'missions' ? 'Mission' : curated.unit === 'acts' ? 'Act' : 'Chapter';
+    return {
+      found: true,
+      unit: curated.unit,
+      source: 'catalog',
+      sourceLabel: 'Cue Catalog',
+      note: curated.note,
+      chapters: Array.from({ length: curated.totalChapters }, (_, i) => `${single} ${i + 1}`),
+    };
+  }
+
+  return { found: false, unit: 'chapters', chapters: [] };
 }
 
 /** Auto-detects total story chapters/acts/missions for a game via catalog, /api/game-chapters, or Wikipedia CORS fallback. */
