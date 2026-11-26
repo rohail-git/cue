@@ -136,6 +136,84 @@ interface MediaWikiQueryPage {
   categories?: Array<{ title?: string }>;
   categoryinfo?: { pages?: number };
   revisions?: Array<{ '*'?: string }>;
+  imageinfo?: Array<{ url?: string; thumburl?: string }>;
+}
+
+function extractPrimaryCoverFilename(wikitext: string, fallbackPageTitle: string): string {
+  const m = wikitext.match(/\|\s*Image1?\s*=\s*([^\n|]+)/i);
+  if (m && m[1]) {
+    const cleaned = m[1]
+      .replace(/\[\[(?:File|Image):/i, '')
+      .replace(/\]\]/g, '')
+      .replace(/^(?:File|Image):/i, '')
+      .split('|')[0]
+      ?.trim();
+    if (cleaned && /\.(?:jpe?g|png|webp|gif)$/i.test(cleaned)) {
+      return cleaned;
+    }
+  }
+  return `${fallbackPageTitle}.jpg`;
+}
+
+async function resolveWikiFileUrls(
+  wiki: ComicWikiSlug,
+  filenames: string[],
+  width: number,
+  corsOrigin = false
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const unique = Array.from(new Set(filenames.filter(Boolean)));
+  if (unique.length === 0) return out;
+
+  const chunkSize = 40;
+  const chunks: string[][] = [];
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    chunks.push(unique.slice(i, i + chunkSize));
+  }
+
+  const originParam = corsOrigin ? '&origin=*' : '';
+  await Promise.allSettled(
+    chunks.map(async (chunk) => {
+      const res = await fetch(
+        `https://${wiki}.fandom.com/api.php?action=query&titles=${encodeURIComponent(
+          chunk.map((f) => `File:${f}`).join('|')
+        )}&prop=imageinfo&iiprop=url&iiurlwidth=${width}&redirects=1&format=json${originParam}`,
+        { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(5500) }
+      );
+      if (!res.ok) return;
+      const json = (await res.json()) as {
+        query?: {
+          normalized?: Array<{ from: string; to: string }>;
+          redirects?: Array<{ from: string; to: string }>;
+          pages?: Record<string, MediaWikiQueryPage>;
+        };
+      };
+
+      const normMap = new Map<string, string>();
+      for (const n of json.query?.normalized || []) normMap.set(n.from.toLowerCase(), n.to);
+      const redirMap = new Map<string, string>();
+      for (const r of json.query?.redirects || []) redirMap.set(r.from.toLowerCase(), r.to);
+
+      const urlByTitle = new Map<string, string>();
+      for (const p of Object.values(json.query?.pages || {})) {
+        if (!p.title || p.missing !== undefined) continue;
+        const url = p.imageinfo?.[0]?.thumburl || p.imageinfo?.[0]?.url;
+        if (url) urlByTitle.set(p.title.toLowerCase(), url);
+      }
+
+      for (const rawName of chunk) {
+        let cur = `File:${rawName}`;
+        const n1 = normMap.get(cur.toLowerCase());
+        if (n1) cur = n1;
+        const r1 = redirMap.get(cur.toLowerCase());
+        if (r1) cur = r1;
+        const resolved = urlByTitle.get(cur.toLowerCase()) || urlByTitle.get(`file:${rawName.toLowerCase()}`);
+        if (resolved) out.set(rawName.toLowerCase(), resolved);
+      }
+    })
+  );
+
+  return out;
 }
 
 async function queryWikiComicVolumes(
@@ -259,14 +337,23 @@ async function queryWikiComicVolumes(
       }
     }
 
+    const coverFilenames = picked.map((v) => {
+      const i1 = issue1Map.get(`${v} 1`);
+      const txt = i1?.revisions?.[0]?.['*'] || '';
+      return extractPrimaryCoverFilename(txt, `${v} 1`);
+    });
+    const coverAUrlMap = await resolveWikiFileUrls(wiki, coverFilenames, 480);
+
     const results: ComicSeriesSearchItem[] = [];
-    for (const volTitle of picked) {
+    for (let vIdx = 0; vIdx < picked.length; vIdx += 1) {
+      const volTitle = picked[vIdx];
       const volPage = volMap.get(volTitle);
       if (!volPage) continue;
       const issue1 = issue1Map.get(`${volTitle} 1`);
       const volText = volPage.revisions?.[0]?.['*'] || '';
       const issue1Text = issue1?.revisions?.[0]?.['*'] || '';
       const cats = (volPage.categories || []).map((c) => c.title || '');
+      const coverAFile = coverFilenames[vIdx];
 
       const m = volTitle.match(/^(.+?)\s+Vol\s+(\d+)$/i);
       if (!m) continue;
@@ -295,6 +382,7 @@ async function queryWikiComicVolumes(
       const issueCount = Math.max(1, catCount || totalIssuesField || 12);
 
       const coverUrl =
+        coverAUrlMap.get(coverAFile.toLowerCase()) ||
         upscaleFandomThumb(issue1?.thumbnail?.source) ||
         upscaleFandomThumb(volPage.thumbnail?.source) ||
         '';
@@ -486,18 +574,30 @@ export async function fetchComicSeriesIssuesPayload(
         if (p.title) pageByTitle.set(p.title.toLowerCase(), p);
       }
 
-      chunk.forEach((spec, idx) => {
+      const chunkMeta = chunk.map((spec, idx) => {
         const slot = i + idx + 1;
         const resolvedTitle = (normMap.get(spec.pageTitle) || spec.pageTitle).toLowerCase();
         const page = pageByTitle.get(resolvedTitle);
         const wikitext = page?.revisions?.[0]?.['*'] || '';
+        const coverFilename = extractPrimaryCoverFilename(wikitext, spec.pageTitle);
+        return { spec, slot, page, wikitext, coverFilename };
+      });
+
+      const coverAMap = await resolveWikiFileUrls(
+        wiki,
+        chunkMeta.map((m) => m.coverFilename),
+        320
+      );
+
+      for (const { spec, slot, page, wikitext, coverFilename } of chunkMeta) {
         const storyMatch =
           wikitext.match(/\|\s*StoryTitle1\s*=\s*([^\n|]+)/i)?.[1] ||
           wikitext.match(/\|\s*Name\s*=\s*([^\n|]+)/i)?.[1] ||
           '';
         const title = cleanStoryTitle(storyMatch, seriesNorm);
         const releaseDate = formatIssueDate(wikitext);
-        const coverUrl = page?.thumbnail?.source;
+        const coverUrl =
+          coverAMap.get(coverFilename.toLowerCase()) || page?.thumbnail?.source;
         issues[slot] = {
           number: slot,
           issueLabel: `#${spec.rawNum}`,
@@ -505,7 +605,7 @@ export async function fetchComicSeriesIssuesPayload(
           releaseDate,
           coverUrl,
         };
-      });
+      }
     } catch {
       // keep existing fetched chunks
     }

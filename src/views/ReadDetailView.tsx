@@ -143,7 +143,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   useEffect(() => {
     if (!item || item.format !== 'comic') return;
     const total = Math.max(1, item.totalUnits);
-    const detailsKey = `${progress?.editionId || progress?.edition || 'default'}::${total}`;
+    const detailsKey = `${progress?.editionId || progress?.edition || 'default'}::${total}::ca2`;
     if (
       item.issueDetailsKey === detailsKey &&
       item.issueDetails &&

@@ -2294,7 +2294,7 @@ export async function fetchComicEditionsCatalog(
 
 async function searchComicSeries(query: string): Promise<LiveSearchResult[]> {
   try {
-    const res = await fetch(`/api/comic-series?q=${encodeURIComponent(query)}`, {
+    const res = await fetch(`/api/comic-series?q=${encodeURIComponent(query)}&v=2`, {
       signal: AbortSignal.timeout(9000),
     });
     if (!res.ok) return [];
@@ -2358,7 +2358,7 @@ export async function fetchComicSeriesIssues(
     const res = await fetch(
       `/api/comic-series?wiki=${encodeURIComponent(wiki)}&vol=${encodeURIComponent(
         volTitle
-      )}&limit=${Math.max(1, Math.min(75, Math.round(limit)))}`,
+      )}&limit=${Math.max(1, Math.min(75, Math.round(limit)))}&v=2`,
       { signal: AbortSignal.timeout(10000) }
     );
     if (!res.ok) return { totalIssues: 0, issues: {} };
@@ -3412,19 +3412,86 @@ export async function fetchComicIssueDetails(
         if (p.title) pageByTitle.set(p.title.toLowerCase(), p);
       }
 
-      for (const spec of batch) {
+      const batchParsed = batch.map((spec) => {
         let cur = spec.pageTitle;
         if (normMap.has(cur)) cur = normMap.get(cur)!;
         if (redirMap.has(cur)) cur = redirMap.get(cur)!;
 
         const page = pageByTitle.get(cur.toLowerCase()) || pageByTitle.get(spec.pageTitle.toLowerCase());
+        const rawWikitext = page?.revisions?.[0]?.slots?.main?.['*'] || '';
+        const imgMatch = rawWikitext.match(/\|\s*Image1?\s*=\s*([^\n|]+)/i)?.[1];
+        const cleanFile = imgMatch
+          ? imgMatch
+              .replace(/\[\[(?:File|Image):/i, '')
+              .replace(/\]\]/g, '')
+              .replace(/^(?:File|Image):/i, '')
+              .split('|')[0]
+              ?.trim()
+          : '';
+        const coverFilename =
+          cleanFile && /\.(?:jpe?g|png|webp|gif)$/i.test(cleanFile)
+            ? cleanFile
+            : `${spec.pageTitle}.jpg`;
+        return { spec, page, rawWikitext, coverFilename };
+      });
+
+      const coverAUrlMap = new Map<string, string>();
+      try {
+        const coverFiles = Array.from(
+          new Set(batchParsed.filter((x) => x.page && x.page.missing === undefined).map((x) => x.coverFilename))
+        );
+        if (coverFiles.length > 0) {
+          const iiRes = await fetch(
+            `https://${targetWiki}.fandom.com/api.php?action=query&titles=${encodeURIComponent(
+              coverFiles.map((f) => `File:${f}`).join('|')
+            )}&prop=imageinfo&iiprop=url&iiurlwidth=240&redirects=1&format=json&origin=*`
+          );
+          if (iiRes.ok) {
+            const iiJson = (await iiRes.json()) as {
+              query?: {
+                normalized?: Array<{ from: string; to: string }>;
+                redirects?: Array<{ from: string; to: string }>;
+                pages?: Record<
+                  string,
+                  {
+                    missing?: string;
+                    title?: string;
+                    imageinfo?: Array<{ thumburl?: string; url?: string }>;
+                  }
+                >;
+              };
+            };
+            const iiNorm = new Map<string, string>();
+            for (const n of iiJson.query?.normalized || []) iiNorm.set(n.from.toLowerCase(), n.to);
+            const iiRedir = new Map<string, string>();
+            for (const r of iiJson.query?.redirects || []) iiRedir.set(r.from.toLowerCase(), r.to);
+            const urlMap = new Map<string, string>();
+            for (const p of Object.values(iiJson.query?.pages || {})) {
+              if (!p.title || p.missing !== undefined) continue;
+              const u = p.imageinfo?.[0]?.thumburl || p.imageinfo?.[0]?.url;
+              if (u) urlMap.set(p.title.toLowerCase(), u);
+            }
+            for (const f of coverFiles) {
+              let c = `File:${f}`;
+              c = iiNorm.get(c.toLowerCase()) || c;
+              c = iiRedir.get(c.toLowerCase()) || c;
+              const u = urlMap.get(c.toLowerCase()) || urlMap.get(`file:${f.toLowerCase()}`);
+              if (u) coverAUrlMap.set(f.toLowerCase(), u);
+            }
+          }
+        }
+      } catch {
+        // fallback to page.thumbnail
+      }
+
+      for (const { spec, page, rawWikitext, coverFilename } of batchParsed) {
         if (!page || page.missing !== undefined) continue;
 
-        const rawWikitext = page.revisions?.[0]?.slots?.main?.['*'] || '';
         const storyRaw = rawWikitext.match(/\|\s*StoryTitle1\s*=\s*([^\n]+)/i)?.[1];
         const storyTitle = storyRaw ? cleanFandomStoryTitle(storyRaw, seriesNorm) : undefined;
         const releaseDate = rawWikitext ? formatFandomReleaseDate(rawWikitext) : undefined;
-        const coverUrl = page.thumbnail?.source;
+        const coverUrl =
+          coverAUrlMap.get(coverFilename.toLowerCase()) || page.thumbnail?.source;
 
         result[spec.slot] = {
           number: spec.slot,
