@@ -401,6 +401,11 @@ export async function searchLiveMedia(
   const trimmed = query.trim();
   if (trimmed.length < 2) return [];
 
+  const directIsbn = extractIsbnFromInput(trimmed);
+  if (directIsbn) {
+    return searchByIsbn(directIsbn);
+  }
+
   const tasks: Promise<LiveSearchResult[]>[] = [];
   const wantsWatch =
     mediaFilter === 'all' ||
@@ -2406,6 +2411,272 @@ export function resolveOpenLibraryCoverFromIsbn(
   }
 
   return undefined;
+}
+
+function isValidIsbn13Digits(d: string): boolean {
+  if (!/^97[89]\d{10}$/.test(d)) return false;
+  let sum = 0;
+  for (let i = 0; i < 12; i += 1) {
+    sum += Number(d[i]) * (i % 2 === 0 ? 1 : 3);
+  }
+  const check = (10 - (sum % 10)) % 10;
+  return check === Number(d[12]);
+}
+
+function isbn10ToIsbn13(raw10: string): string | null {
+  if (!/^\d{9}[\dX]$/.test(raw10)) return null;
+  let sum = 0;
+  for (let i = 0; i < 9; i += 1) {
+    sum += Number(raw10[i]) * (10 - i);
+  }
+  const lastVal = raw10[9] === 'X' ? 10 : Number(raw10[9]);
+  sum += lastVal;
+  if (sum % 11 !== 0) return null;
+
+  const core12 = `978${raw10.slice(0, 9)}`;
+  let sum13 = 0;
+  for (let i = 0; i < 12; i += 1) {
+    sum13 += Number(core12[i]) * (i % 2 === 0 ? 1 : 3);
+  }
+  const check13 = (10 - (sum13 % 10)) % 10;
+  return `${core12}${check13}`;
+}
+
+/** Validates ISBN-10 / ISBN-13 (with optional hyphens, spaces, or EAN+5 add-on) and returns normalized ISBN-13. */
+export function extractIsbnFromInput(raw: string): string | null {
+  const stripped = raw
+    .trim()
+    .replace(/^isbn(?:-?(?:10|13))?[:\s]*/i, '')
+    .replace(/[\s-]+/g, '')
+    .toUpperCase();
+
+  if (/^97[89]\d{15}$/.test(stripped)) {
+    const candidate = stripped.slice(0, 13);
+    return isValidIsbn13Digits(candidate) ? candidate : null;
+  }
+  if (/^97[89]\d{10}$/.test(stripped)) {
+    return isValidIsbn13Digits(stripped) ? stripped : null;
+  }
+  if (/^\d{9}[\dX]$/.test(stripped)) {
+    return isbn10ToIsbn13(stripped);
+  }
+  return null;
+}
+
+function classifyIsbnMediaType(
+  title: string,
+  publisher: string,
+  subjects: string[]
+): 'manga' | 'comic' | 'novel' {
+  const hay = `${title} ${publisher} ${subjects.join(' ')}`.toLowerCase();
+  if (
+    /\b(manga|shonen|seinen|shojo|josei|tankobon)\b/.test(hay) ||
+    /\b(viz media|viz|kodansha|seven seas|yen press|shueisha|tokyopop|square enix)\b/.test(
+      publisher.toLowerCase()
+    )
+  ) {
+    return 'manga';
+  }
+  if (
+    /\b(dc comics|marvel|image comics|dark horse|idw|boom!? studios|vertigo|valiant|dynamite|graphic novel|comics & graphic novels|omnibus|trade paperback|tpb|compendium)\b/.test(
+      hay
+    ) ||
+    COMIC_WORK_HINTS.some((kw) => hay.includes(kw))
+  ) {
+    return 'comic';
+  }
+  return 'novel';
+}
+
+interface GoogleBooksVolume {
+  id?: string;
+  volumeInfo?: {
+    title?: string;
+    subtitle?: string;
+    authors?: string[];
+    publisher?: string;
+    publishedDate?: string;
+    description?: string;
+    pageCount?: number;
+    categories?: string[];
+    averageRating?: number;
+    imageLinks?: {
+      extraLarge?: string;
+      large?: string;
+      medium?: string;
+      thumbnail?: string;
+      smallThumbnail?: string;
+    };
+  };
+}
+
+interface OpenLibraryBookDataEntry {
+  title?: string;
+  subtitle?: string;
+  authors?: Array<{ name?: string }>;
+  publishers?: Array<{ name?: string }>;
+  publish_date?: string;
+  number_of_pages?: number;
+  subjects?: Array<{ name?: string }>;
+  cover?: {
+    large?: string;
+    medium?: string;
+    small?: string;
+  };
+  notes?: string | { value?: string };
+}
+
+/** Looks up an exact book, manga volume, or collected comic edition by ISBN-10 or ISBN-13. */
+export async function searchByIsbn(rawIsbn: string): Promise<LiveSearchResult[]> {
+  const isbn13 = extractIsbnFromInput(rawIsbn);
+  if (!isbn13) return [];
+
+  const fields =
+    'key,title,subtitle,author_name,first_publish_year,cover_i,number_of_pages_median,subject,publisher,isbn';
+
+  const [gbRes, olDataRes, olSearchRes] = await Promise.allSettled([
+    fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn13}`, {
+      signal: AbortSignal.timeout(7000),
+    }),
+    fetch(
+      `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn13}&format=json&jscmd=data`,
+      { signal: AbortSignal.timeout(7000) }
+    ),
+    fetch(`https://openlibrary.org/search.json?isbn=${isbn13}&limit=3&fields=${fields}`, {
+      signal: AbortSignal.timeout(7000),
+    }),
+  ]);
+
+  let gbVol: GoogleBooksVolume['volumeInfo'] | undefined;
+  if (gbRes.status === 'fulfilled' && gbRes.value.ok) {
+    try {
+      const json = (await gbRes.value.json()) as { items?: GoogleBooksVolume[] };
+      gbVol = json.items?.[0]?.volumeInfo;
+    } catch {
+      // ignore parse failure
+    }
+  }
+
+  let olBook: OpenLibraryBookDataEntry | undefined;
+  if (olDataRes.status === 'fulfilled' && olDataRes.value.ok) {
+    try {
+      const json = (await olDataRes.value.json()) as Record<string, OpenLibraryBookDataEntry>;
+      olBook = json[`ISBN:${isbn13}`];
+    } catch {
+      // ignore
+    }
+  }
+
+  let olDoc: OpenLibraryDoc | undefined;
+  if (olSearchRes.status === 'fulfilled' && olSearchRes.value.ok) {
+    try {
+      const json = (await olSearchRes.value.json()) as { docs?: OpenLibraryDoc[] };
+      olDoc = json.docs?.[0];
+    } catch {
+      // ignore
+    }
+  }
+
+  const rawTitle = (olBook?.title || gbVol?.title || olDoc?.title || '').trim();
+  const rawSubtitle = (olBook?.subtitle || gbVol?.subtitle || olDoc?.subtitle || '').trim();
+  if (!rawTitle) return [];
+
+  const title = formatDisplayTitle(
+    combinedOpenLibraryTitle({ title: rawTitle, subtitle: rawSubtitle })
+  );
+  const author =
+    olBook?.authors?.[0]?.name || gbVol?.authors?.[0] || olDoc?.author_name?.[0] || '';
+  const publisher =
+    olBook?.publishers?.[0]?.name || gbVol?.publisher || olDoc?.publisher?.[0] || '';
+  const subjects = [
+    ...(olBook?.subjects?.map((s) => s.name || '') || []),
+    ...(gbVol?.categories || []),
+    ...(olDoc?.subject || []),
+  ].filter(Boolean);
+
+  const yearStr = `${olBook?.publish_date || ''} ${gbVol?.publishedDate || ''} ${olDoc?.first_publish_year || ''}`;
+  const yearMatch = yearStr.match(/\b(19\d{2}|20\d{2})\b/);
+  const year = yearMatch ? Number(yearMatch[1]) : new Date().getUTCFullYear();
+
+  const pageCount =
+    olBook?.number_of_pages || gbVol?.pageCount || olDoc?.number_of_pages_median || undefined;
+
+  const isPrh = PRH_COMIC_ISBN_PREFIXES.some((p) => isbn13.startsWith(p));
+  const gbThumbRaw =
+    gbVol?.imageLinks?.extraLarge ||
+    gbVol?.imageLinks?.large ||
+    gbVol?.imageLinks?.medium ||
+    gbVol?.imageLinks?.thumbnail ||
+    gbVol?.imageLinks?.smallThumbnail ||
+    '';
+  const gbCover = gbThumbRaw
+    ? gbThumbRaw
+        .replace(/^http:\/\//i, 'https://')
+        .replace(/&edge=curl/gi, '')
+    : '';
+  const olCover =
+    olBook?.cover?.large ||
+    olBook?.cover?.medium ||
+    (olDoc?.cover_i ? `https://covers.openlibrary.org/b/id/${olDoc.cover_i}-L.jpg` : '');
+
+  const posterUrl =
+    (isPrh ? `https://images.penguinrandomhouse.com/cover/${isbn13}` : '') ||
+    olCover ||
+    gbCover ||
+    `https://covers.openlibrary.org/b/isbn/${isbn13}-L.jpg?default=false`;
+
+  const mediaType = classifyIsbnMediaType(
+    `${title} ${rawSubtitle}`,
+    publisher,
+    subjects
+  );
+  const totalUnits =
+    mediaType === 'comic'
+      ? parseCollectedIssueCount(`${rawTitle} ${rawSubtitle}`, pageCount) ?? 6
+      : mediaType === 'manga'
+        ? Math.max(1, Math.round((pageCount || 190) / 18))
+        : Math.max(12, Math.min(80, Math.round((pageCount || 320) / 14)));
+
+  const rawDesc =
+    gbVol?.description ||
+    (typeof olBook?.notes === 'string' ? olBook.notes : olBook?.notes?.value) ||
+    '';
+  const overview =
+    stripHtml(rawDesc) ||
+    `${title}${author ? ` by ${author}` : ''}${publisher ? ` · ${publisher}` : ''} (ISBN ${isbn13}).`;
+
+  const cleanGenres = subjects
+    .map((s) => s.split('/')[0].trim())
+    .filter((s) => s.length >= 3 && s.length <= 28)
+    .slice(0, 3);
+  const fallbackGenre =
+    mediaType === 'comic' ? 'Comics' : mediaType === 'manga' ? 'Manga' : 'Fiction';
+
+  return [
+    {
+      domain: 'read',
+      kind: 'read',
+      id: `isbn-${isbn13}`,
+      source: 'openlibrary',
+      externalId: isbn13,
+      title,
+      subtitle: [author, publisher].filter(Boolean).join(' · ') || `ISBN ${isbn13}`,
+      year,
+      mediaType,
+      comicKind: mediaType === 'comic' ? 'collection' : undefined,
+      comicPublisher: mediaType === 'comic' ? publisher || undefined : undefined,
+      genres: cleanGenres.length > 0 ? cleanGenres : [fallbackGenre],
+      rating:
+        typeof gbVol?.averageRating === 'number' && gbVol.averageRating > 0
+          ? Number(gbVol.averageRating.toFixed(1))
+          : 4.5,
+      posterUrl,
+      backdropUrl: posterUrl,
+      overview,
+      director: author || publisher || 'Author',
+      totalUnits,
+    },
+  ];
 }
 
 function combinedOpenLibraryTitle(d: Pick<OpenLibraryDoc, 'title' | 'subtitle'>): string {

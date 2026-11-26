@@ -7,14 +7,17 @@ import {
   ListPlus,
   Loader2,
   Plus,
+  ScanBarcode,
   Search,
   Star,
   X,
 } from 'lucide-react';
+import { IsbnScannerModal } from '../components/IsbnScannerModal';
 import { MediaImage } from '../components/MediaImage';
 import { getDiscoverCollections, type DiscoverCollection } from '../data/discoverCollections';
 import {
   canonicalReadWorkKey,
+  extractIsbnFromInput,
   fetchAllDiscoverRails,
   fetchDomainDiscoverRails,
   hydrateLiveGameItem,
@@ -22,6 +25,7 @@ import {
   hydrateLiveReadItem,
   hydrateLiveShow,
   normalizeTitleKey,
+  searchByIsbn,
   searchLiveMedia,
   type DiscoverRail,
   type LiveSearchResult,
@@ -108,6 +112,7 @@ export function SearchView() {
   const [expandedRail, setExpandedRail] = useState<DiscoverRail | null>(null);
   const [expandedCollection, setExpandedCollection] = useState<DiscoverCollection | null>(null);
   const [showAllCollections, setShowAllCollections] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   const setScope = (nextScope: DiscoverScope) => {
     sessionDiscoverScope = nextScope;
@@ -321,9 +326,10 @@ export function SearchView() {
     );
     const seenLiveKeys = new Set<string>();
     const filtered: LiveSearchResult[] = [];
+    const isIsbnQuery = Boolean(extractIsbnFromInput(query));
 
     for (const r of liveResults) {
-      if (scope !== 'all' && r.domain !== scope) continue;
+      if (!isIsbnQuery && scope !== 'all' && r.domain !== scope) continue;
       if (localIds.has(r.id)) continue;
       const key =
         r.domain === 'read'
@@ -425,6 +431,26 @@ export function SearchView() {
       if (!andAdd) pushRoute({ view: 'show-detail', showId: show.id });
     } finally {
       setHydratingId(null);
+    }
+  };
+
+  const handleIsbnScanned = async (isbn13: string) => {
+    setScannerOpen(false);
+    setQuery(isbn13);
+    if (scope === 'watch' || scope === 'play') {
+      setScope('all');
+    }
+    setLoadingLive(true);
+    try {
+      const matches = await searchByIsbn(isbn13);
+      setLiveResults(matches);
+      if (matches.length > 0) {
+        await handleOpenLiveResult(matches[0], false);
+      }
+    } catch {
+      setLiveResults([]);
+    } finally {
+      setLoadingLive(false);
     }
   };
 
@@ -557,12 +583,12 @@ export function SearchView() {
             inputMode="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search titles, shows, games…"
+            placeholder="Search titles, games, or ISBN…"
             aria-label="Search all media"
-            className="w-full h-11 rounded-2xl bg-surface border border-white/10 pl-11 pr-20 text-[15px] text-ink placeholder:text-ink-faint outline-none focus:border-brand transition-colors"
+            className="w-full h-11 rounded-2xl bg-surface border border-white/10 pl-11 pr-24 text-[15px] text-ink placeholder:text-ink-faint outline-none focus:border-brand transition-colors"
           />
-          <div className="absolute right-3 flex items-center gap-1.5">
-            {loadingLive && <Loader2 className="w-4 h-4 text-brand animate-spin" />}
+          <div className="absolute right-2.5 flex items-center gap-1">
+            {loadingLive && <Loader2 className="w-4 h-4 text-brand animate-spin mr-1" />}
             {query && (
               <button
                 type="button"
@@ -573,6 +599,15 @@ export function SearchView() {
                 <X className="w-3.5 h-3.5" />
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => setScannerOpen(true)}
+              aria-label="Scan ISBN barcode"
+              title="Scan ISBN barcode"
+              className="h-8 w-8 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/10 flex items-center justify-center text-ink-dim hover:text-ink transition-colors"
+            >
+              <ScanBarcode className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
@@ -973,6 +1008,12 @@ export function SearchView() {
           )}
         </div>
       )}
+
+      <IsbnScannerModal
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onDetected={handleIsbnScanned}
+      />
     </div>
   );
 }
