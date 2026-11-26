@@ -8,20 +8,14 @@ import {
   Compass,
   Flame,
   Gamepad2,
-  HeartPulse,
   Hourglass,
-  Loader2,
-  RefreshCw,
-  ShieldCheck,
   Sparkles,
   Star,
   Sunrise,
   TrendingUp,
   Trophy,
   Tv,
-  Wrench,
 } from 'lucide-react';
-import { useCueStore } from '../store/useCueStore';
 import type { CueStoreState } from '../types';
 import { computeTasteProfile } from '../utils/cueMind';
 import {
@@ -31,13 +25,6 @@ import {
   type JournalStatsScope,
   type TimeBlockCell,
 } from '../utils/journalAnalytics';
-import {
-  fetchLiveHealth,
-  scanAndRepairLibrary,
-  type LibraryRepairProgress,
-  type LibraryRepairSummary,
-  type LiveHealthReport,
-} from '../utils/libraryHeal';
 import { MediaImage } from './MediaImage';
 
 interface JournalAdvancedStatsProps {
@@ -150,7 +137,6 @@ export function JournalAdvancedStats({
   onOpenItem,
   onOpenCueMind,
 }: JournalAdvancedStatsProps) {
-  const { patchMediaMetadata, showToast } = useCueStore();
   const stats = useMemo(() => computeJournalAdvancedStats(state, scope), [state, scope]);
   const taste = useMemo(() => computeTasteProfile(state), [state]);
   const accent = accentTokensForScope(scope);
@@ -162,54 +148,6 @@ export function JournalAdvancedStats({
   const [dailyPaceMinutes, setDailyPaceMinutes] = useState<30 | 60 | 120>(60);
   const [selectedRatingStars, setSelectedRatingStars] = useState<number | null>(null);
   const [selectedDecade, setSelectedDecade] = useState<string | null>(null);
-
-  const [mindHealthOpen, setMindHealthOpen] = useState(false);
-  const [mindHealth, setMindHealth] = useState<LiveHealthReport | null>(null);
-  const [loadingMindHealth, setLoadingMindHealth] = useState(false);
-  const [repairing, setRepairing] = useState(false);
-  const [repairProgress, setRepairProgress] = useState<LibraryRepairProgress | null>(null);
-  const [repairSummary, setRepairSummary] = useState<LibraryRepairSummary | null>(null);
-
-  const handleToggleMindHealth = async () => {
-    const next = !mindHealthOpen;
-    setMindHealthOpen(next);
-    if (next && !mindHealth && !loadingMindHealth) {
-      setLoadingMindHealth(true);
-      const report = await fetchLiveHealth(false);
-      setMindHealth(report);
-      setLoadingMindHealth(false);
-    }
-  };
-
-  const handleRefreshMindHealth = async () => {
-    setLoadingMindHealth(true);
-    const report = await fetchLiveHealth(true);
-    setMindHealth(report);
-    setLoadingMindHealth(false);
-  };
-
-  const handleSelfHeal = async () => {
-    if (repairing) return;
-    setRepairing(true);
-    setRepairSummary(null);
-    setRepairProgress({ done: 0, total: 1, currentTitle: 'Scanning library…' });
-    try {
-      const summary = await scanAndRepairLibrary(state, patchMediaMetadata, (p) => {
-        setRepairProgress(p);
-      });
-      setRepairSummary(summary);
-      if (summary.repaired > 0 || summary.clearedStaleComics > 0) {
-        showToast(
-          `Self-healed ${summary.repaired} covers & ${summary.clearedStaleComics} comic caches`
-        );
-      } else {
-        showToast(`Verified ${summary.scanned} library items — all healthy`);
-      }
-    } finally {
-      setRepairing(false);
-      setRepairProgress(null);
-    }
-  };
 
   const weeklyMax = useMemo(() => {
     const vals = stats.activity.weeklySeries.map((w) =>
@@ -470,93 +408,9 @@ export function JournalAdvancedStats({
               </div>
             )}
 
-            <div className="pt-1 border-t border-white/[0.06] flex items-center justify-between gap-2">
-              <span className="text-[11px] text-ink-faint truncate">{taste.summaryLine}</span>
-              <button
-                type="button"
-                onClick={handleToggleMindHealth}
-                aria-expanded={mindHealthOpen}
-                className="text-[11px] font-semibold text-ink-dim hover:text-ink inline-flex items-center gap-1 shrink-0"
-              >
-                <HeartPulse className="w-3.5 h-3.5 text-[#7AC7A4]" />
-                <span>Catalog Health &amp; Self-Heal</span>
-              </button>
+            <div className="pt-1 border-t border-white/[0.06]">
+              <p className="text-[11px] text-ink-faint">{taste.summaryLine}</p>
             </div>
-
-            {mindHealthOpen && (
-              <div className="pt-2 space-y-2.5 animate-fade-in">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-ink">Upstream Catalog Health</span>
-                  <button
-                    type="button"
-                    onClick={handleRefreshMindHealth}
-                    disabled={loadingMindHealth}
-                    className="text-[11px] text-ink-dim hover:text-ink inline-flex items-center gap-1 disabled:opacity-50"
-                  >
-                    {loadingMindHealth ? (
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                    ) : (
-                      <RefreshCw className="w-3 h-3" />
-                    )}
-                    <span>Re-check</span>
-                  </button>
-                </div>
-
-                {mindHealth && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                    {mindHealth.services.map((svc) => (
-                      <div
-                        key={svc.id}
-                        className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-background/60 border border-white/[0.04] text-xs"
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span
-                            className={`h-2 w-2 rounded-full shrink-0 ${
-                              svc.ok ? 'bg-[#7AC7A4]' : 'bg-red-400'
-                            }`}
-                          />
-                          <span className="text-ink truncate">{svc.name}</span>
-                        </div>
-                        <span className="text-[11px] text-ink-faint tabular-nums shrink-0">
-                          {svc.ok ? `${svc.latencyMs}ms` : svc.note || 'Down'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="rounded-xl bg-background/70 border border-white/[0.05] p-2.5 flex items-center justify-between gap-2 flex-wrap">
-                  <div className="flex items-center gap-1.5">
-                    <ShieldCheck className="w-4 h-4 text-watch" />
-                    <span className="text-xs font-medium text-ink">Library Integrity</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleSelfHeal}
-                    disabled={repairing}
-                    className="px-3 py-1 rounded-full bg-brand text-brand-ink text-[11px] font-semibold inline-flex items-center gap-1 disabled:opacity-50"
-                  >
-                    {repairing ? (
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                    ) : (
-                      <Wrench className="w-3 h-3" />
-                    )}
-                    <span>{repairing ? 'Scanning…' : 'Scan & Self-Heal'}</span>
-                  </button>
-                  {repairProgress && (
-                    <p className="w-full text-[11px] text-ink-dim tabular-nums">
-                      Checking {repairProgress.currentTitle} ({repairProgress.done}/{repairProgress.total})
-                    </p>
-                  )}
-                  {repairSummary && !repairing && (
-                    <p className="w-full text-[11px] text-[#7AC7A4] tabular-nums">
-                      Scanned {repairSummary.scanned} items · {repairSummary.healthy} healthy ·{' '}
-                      {repairSummary.repaired} covers repaired
-                    </p>
-                  )}
-                </div>
-              </div>
-            )}
           </>
         ) : (
           <>

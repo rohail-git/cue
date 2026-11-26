@@ -1,16 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Activity,
   ChevronRight,
   Compass,
   Eye,
-  HeartPulse,
   Loader2,
   Plus,
   RefreshCw,
-  ShieldCheck,
   Sparkles,
-  Wrench,
   X,
 } from 'lucide-react';
 import {
@@ -30,13 +26,7 @@ import {
   type DiscoverMindScope,
   type MindIntent,
 } from '../utils/cueMind';
-import {
-  fetchLiveHealth,
-  scanAndRepairLibrary,
-  type LibraryRepairProgress,
-  type LibraryRepairSummary,
-  type LiveHealthReport,
-} from '../utils/libraryHeal';
+import { scanAndRepairLibrary } from '../utils/libraryHeal';
 import { MediaImage } from './MediaImage';
 
 const INTENT_TABS: Array<{ id: MindIntent; label: string }> = [
@@ -98,14 +88,7 @@ export function CueMindCard({
     () => cachedLiveDiscoverPool?.items || []
   );
   const [busyAction, setBusyAction] = useState<'preview' | 'add' | null>(null);
-
-  const [healthOpen, setHealthOpen] = useState(false);
-  const [health, setHealth] = useState<LiveHealthReport | null>(null);
-  const [loadingHealth, setLoadingHealth] = useState(true);
-
   const [repairing, setRepairing] = useState(false);
-  const [repairProgress, setRepairProgress] = useState<LibraryRepairProgress | null>(null);
-  const [repairSummary, setRepairSummary] = useState<LibraryRepairSummary | null>(null);
 
   useEffect(() => {
     setMindSide(initialSide);
@@ -126,26 +109,6 @@ export function CueMindCard({
   );
   const activeDiscover: CueMindDiscoverPick | null =
     discoverPicks.length > 0 ? discoverPicks[discoverIndex % discoverPicks.length] : null;
-
-  const loadHealth = async (force = false) => {
-    setLoadingHealth(true);
-    const report = await fetchLiveHealth(force);
-    setHealth(report);
-    setLoadingHealth(false);
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchLiveHealth(false).then((report) => {
-      if (!cancelled) {
-        setHealth(report);
-        setLoadingHealth(false);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (
@@ -177,13 +140,8 @@ export function CueMindCard({
   const handleRunSelfHeal = async () => {
     if (repairing) return;
     setRepairing(true);
-    setRepairSummary(null);
-    setRepairProgress({ done: 0, total: 1, currentTitle: 'Scanning library…' });
     try {
-      const summary = await scanAndRepairLibrary(state, patchMediaMetadata, (p) => {
-        setRepairProgress(p);
-      });
-      setRepairSummary(summary);
+      const summary = await scanAndRepairLibrary(state, patchMediaMetadata);
       if (summary.repaired > 0 || summary.clearedStaleComics > 0) {
         showToast(
           `Self-healed ${summary.repaired} covers & ${summary.clearedStaleComics} comic caches`,
@@ -196,13 +154,11 @@ export function CueMindCard({
       }
     } finally {
       setRepairing(false);
-      setRepairProgress(null);
     }
   };
 
   const handleOpenThoughtTarget = (thought: CueMindThought) => {
     if (thought.requiresHeal) {
-      setHealthOpen(true);
       handleRunSelfHeal();
       return;
     }
@@ -285,20 +241,6 @@ export function CueMindCard({
         ? 'bg-read/15 text-read'
         : 'bg-play/15 text-play';
 
-  const statusDotClass = loadingHealth
-    ? 'bg-ink-dim animate-pulse'
-    : health?.status === 'operational'
-      ? 'bg-[#7AC7A4]'
-      : health?.status === 'degraded'
-        ? 'bg-read'
-        : 'bg-red-400';
-
-  const statusText = loadingHealth
-    ? 'Checking APIs…'
-    : health
-      ? `Live · ${health.onlineCount}/${health.totalCount} APIs · ${health.overallLatencyMs}ms`
-      : 'Offline cache';
-
   const showIntroBanner = snapshot.taste.isUnlocked && !state.settings.cueMindIntroDismissed;
 
   return (
@@ -306,7 +248,7 @@ export function CueMindCard({
       aria-label="Cue Mind"
       className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-6 space-y-3"
     >
-      {/* Top Header: Cue Mind + Live Telemetry Toggle */}
+      {/* Top Header: Cue Mind */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-brand">
@@ -315,16 +257,6 @@ export function CueMindCard({
           </span>
           <span className="text-[11px] text-ink-faint">· {snapshot.greeting}</span>
         </div>
-
-        <button
-          type="button"
-          onClick={() => setHealthOpen((v) => !v)}
-          aria-expanded={healthOpen}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-background border border-white/10 hover:border-white/25 text-[11px] font-medium text-ink transition-colors"
-        >
-          <span className={`h-2 w-2 rounded-full shrink-0 ${statusDotClass}`} />
-          <span className="tabular-nums">{statusText}</span>
-        </button>
       </div>
 
       {/* First-Time Unlock Introduction Callout */}
@@ -631,114 +563,6 @@ export function CueMindCard({
           </button>
         )}
       </div>
-
-      {/* Expandable Live System Health & Self-Heal Panel */}
-      {healthOpen && (
-        <div className="pt-3 border-t border-white/[0.06] space-y-3 animate-fade-in">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5">
-              <HeartPulse className="w-3.5 h-3.5 text-[#7AC7A4]" />
-              <span className="text-xs font-semibold text-ink">Upstream Catalog Health</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => loadHealth(true)}
-              disabled={loadingHealth}
-              className="text-[11px] font-medium text-ink-dim hover:text-ink inline-flex items-center gap-1 disabled:opacity-50"
-            >
-              {loadingHealth ? (
-                <Loader2 className="w-3 h-3 animate-spin" />
-              ) : (
-                <RefreshCw className="w-3 h-3" />
-              )}
-              <span>Re-check</span>
-            </button>
-          </div>
-
-          {health && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-              {health.services.map((svc) => (
-                <div
-                  key={svc.id}
-                  className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-background/60 border border-white/[0.04] text-xs"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span
-                      className={`h-2 w-2 rounded-full shrink-0 ${
-                        svc.ok ? 'bg-[#7AC7A4]' : 'bg-red-400'
-                      }`}
-                    />
-                    <span className="text-ink truncate">{svc.name}</span>
-                  </div>
-                  <span className="text-[11px] text-ink-faint tabular-nums shrink-0">
-                    {svc.ok ? `${svc.latencyMs}ms` : svc.note || 'Down'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Self-Healing Bar */}
-          <div className="rounded-xl bg-background/70 border border-white/[0.05] p-3 space-y-2">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div className="flex items-center gap-1.5">
-                <ShieldCheck className="w-4 h-4 text-watch" />
-                <div>
-                  <p className="text-xs font-semibold text-ink">Library Integrity & Self-Heal</p>
-                  <p className="text-[11px] text-ink-dim">
-                    Probes saved covers and refreshes broken URLs or outdated comic caches.
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={handleRunSelfHeal}
-                disabled={repairing}
-                className="px-3 py-1.5 rounded-full bg-brand text-brand-ink text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-50"
-              >
-                {repairing ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Wrench className="w-3.5 h-3.5" />
-                )}
-                <span>{repairing ? 'Scanning…' : 'Scan & Self-Heal'}</span>
-              </button>
-            </div>
-
-            {repairProgress && (
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-[11px] text-ink-dim tabular-nums">
-                  <span className="truncate">Checking {repairProgress.currentTitle}</span>
-                  <span>
-                    {repairProgress.done}/{repairProgress.total}
-                  </span>
-                </div>
-                <div className="h-1 rounded-full bg-white/10 overflow-hidden">
-                  <div
-                    className="h-full bg-watch transition-all duration-200"
-                    style={{
-                      width: `${Math.round(
-                        (repairProgress.done / Math.max(1, repairProgress.total)) * 100
-                      )}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {repairSummary && !repairing && (
-              <p className="text-[11px] text-[#7AC7A4] flex items-center gap-1.5 tabular-nums">
-                <Activity className="w-3.5 h-3.5 shrink-0" />
-                <span>
-                  Scanned {repairSummary.scanned} items · {repairSummary.healthy} healthy ·{' '}
-                  {repairSummary.repaired} covers repaired · {repairSummary.clearedStaleComics}{' '}
-                  comic caches refreshed
-                </span>
-              </p>
-            )}
-          </div>
-        </div>
-      )}
     </section>
   );
 }
