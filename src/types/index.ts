@@ -34,6 +34,11 @@ export interface ComicIssueMeta {
   title?: string;
   releaseDate?: string;
   coverUrl?: string;
+  synopsis?: string;
+  writers?: string;
+  artists?: string;
+  wiki?: 'marvel' | 'dc' | 'imagecomics';
+  pageTitle?: string;
 }
 
 export type GamePlatform = 'PC' | 'PS5' | 'Switch' | 'Xbox' | 'Steam Deck';
@@ -206,6 +211,8 @@ export interface GameProgress {
   hoursPlayed: number;
   completionPct: number;
   currentChapter?: number;
+  chapterRatings?: Record<number, number>;
+  chapterTitles?: Record<number, string>;
   playthroughCount: number;
   platinum: boolean;
   platform: GamePlatform;

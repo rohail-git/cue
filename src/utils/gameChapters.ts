@@ -89,6 +89,271 @@ export function normalizeGameTitleKey(title: string): string {
     .trim();
 }
 
+export interface OfficialGameChapter {
+  title: string;
+  summary?: string;
+}
+
+const FF7_REBIRTH_CHAPTERS: OfficialGameChapter[] = [
+  { title: 'Fall of a Hero', summary: 'Flashback to Nibelheim as Cloud and Sephiroth investigate the mako reactor.' },
+  { title: 'A New Journey Begins', summary: 'Out of Midgar into the Grasslands, Kalm, and the Chocobo Ranch.' },
+  { title: 'Deeper into Darkness', summary: 'Tracking the robed figures through the Mythril Mine toward Junon.' },
+  { title: 'Dawn of a New Era', summary: 'Infiltrating Upper Junon ahead of Rufus Shinra’s parade.' },
+  { title: 'Blood in the Water', summary: 'Aboard the Shinra-8 crossing the sea to Costa del Sol.' },
+  { title: "Fool's Paradise", summary: 'Costa del Sol resort downtime before climbing Mt. Corel.' },
+  { title: 'Those Left Behind', summary: 'Mt. Corel reactor trail leading to North Corel and Barret’s past.' },
+  { title: 'All That Glitters', summary: 'The Gold Saucer and the desert prison beneath Corel.' },
+  { title: 'The Planet Stirs', summary: 'Gongaga Village and Tifa’s encounter in the Lifestream.' },
+  { title: 'Watcher of the Vale', summary: 'Cosmo Canyon, Bugenhagen’s observatory, and the Cave of the Gi.' },
+  { title: 'The Long Shadow of Shinra', summary: 'Returning to Nibelheim and the secret beneath Shinra Manor.' },
+  { title: 'A Golden Key', summary: 'Collecting the Keystone from Don Corneo and the Turks at the Gold Saucer.' },
+  { title: 'Where Angels Fear to Tread', summary: 'Entering the Temple of the Ancients ahead of Shinra forces.' },
+  { title: 'The End of the World', summary: 'The Forgotten Capital and the final confrontation with Sephiroth.' },
+];
+
+const FF7_REMAKE_CHAPTERS: OfficialGameChapter[] = [
+  { title: 'The Destruction of Mako Reactor 1' },
+  { title: 'Fateful Encounters' },
+  { title: 'Home Sweet Slum' },
+  { title: 'Mad Dash' },
+  { title: 'Dogged Pursuit' },
+  { title: 'Light the Way' },
+  { title: 'A Trap Is Sprung' },
+  { title: 'Budding Bodyguard' },
+  { title: 'The Town That Never Sleeps' },
+  { title: 'Rough Waters' },
+  { title: 'Haunted' },
+  { title: 'Fight for Survival' },
+  { title: 'A Broken World' },
+  { title: 'In Search of Hope' },
+  { title: 'The Day Midgar Stood Still' },
+  { title: 'The Belly of the Beast' },
+  { title: 'Deliverance from Chaos' },
+  { title: "Destiny's Crossroads" },
+];
+
+const TLOU1_CHAPTERS: OfficialGameChapter[] = [
+  { title: 'Hometown', summary: 'Outbreak Night in Austin, Texas.' },
+  { title: 'The Quarantine Zone', summary: 'Twenty years later in the Boston QZ with Tess.' },
+  { title: 'The Outskirts', summary: 'Smuggling Ellie past the Capitol building.' },
+  { title: "Bill's Town", summary: 'Sourcing a working battery in Lincoln.' },
+  { title: 'Pittsburgh', summary: 'Ambushed by Hunters and teaming up with Henry and Sam.' },
+  { title: 'The Suburbs', summary: 'Escaping through the sewers and suburban streets.' },
+  { title: "Tommy's Dam", summary: 'Reuniting with Tommy at the hydroelectric plant in Wyoming.' },
+  { title: 'The University', summary: 'Searching the Eastern Colorado campus for the Fireflies.' },
+  { title: 'Lakeside Resort', summary: 'Winter survival in Silver Lake.' },
+  { title: 'Bus Depot', summary: 'Spring arrives on the outskirts of Salt Lake City.' },
+  { title: 'The Firefly Lab', summary: 'St. Mary’s Hospital.' },
+  { title: 'Jackson', summary: 'Epilogue on the overlook above Tommy’s settlement.' },
+];
+
+const RE4_CHAPTERS: OfficialGameChapter[] = [
+  { title: 'Village Square', summary: 'Leon arrives at the Spanish countryside in search of Ashley.' },
+  { title: 'Village Chief’s Manor', summary: 'Detained at the abandoned factory and infiltrating Méndez’s manor.' },
+  { title: 'The Lake & Church', summary: 'Crossing the church grounds and facing Del Lago.' },
+  { title: 'El Gigante & Mural', summary: 'Collecting the Apostate’s and Blasphemer’s Heads around the lake.' },
+  { title: 'Villa Siege', summary: 'Extracting Ashley and defending the farmstead cabin with Luis.' },
+  { title: 'Checkpoint & Slaughterhouse', summary: 'Escaping the valley past the Bella Sisters and Bitores Méndez.' },
+  { title: 'The Castle Gate', summary: 'Entering Salazar’s fortress and unlocking the Treasury.' },
+  { title: 'Wine Cellar & Ramparts', summary: 'Separated in the battlements as Ada makes contact.' },
+  { title: 'Grand Hall & Courtyard', summary: 'Maze gardens and the three statues in the Grand Hall.' },
+  { title: 'Ballroom & Depths', summary: 'Novistador hive, twin Garradors, and the underground Verdugo.' },
+  { title: 'Mines & Hive', summary: 'Teaming up with Luis in the rail carts against Krauser.' },
+  { title: 'Clock Tower', summary: 'Ascending the Clock Tower to confront Ramón Salazar.' },
+  { title: 'Island Wharf', summary: 'Infiltrating the military facility and discovering Regeneradors.' },
+  { title: 'Cargo Depot & Ruins', summary: 'Amber storeroom and the final duel with Krauser.' },
+  { title: 'Fortress Summit', summary: 'Fighting through anti-air emplacements to reach the Sanctuary.' },
+  { title: 'Final Confrontation', summary: 'Removing the Plaga, facing Osmund Saddler, and escaping the island.' },
+];
+
+const ALAN_WAKE_2_CHAPTERS: OfficialGameChapter[] = [
+  { title: 'Invitation (Return 1)' },
+  { title: 'The Heart (Return 2)' },
+  { title: 'Late Night (Initiation 1)' },
+  { title: 'Casey (Initiation 2)' },
+  { title: 'Haunting (Initiation 3)' },
+  { title: 'Local Girl (Return 3)' },
+  { title: 'We Sing (Initiation 4)' },
+  { title: 'Room 665 (Initiation 5)' },
+  { title: 'No Chance (Return 4)' },
+  { title: 'Return (Initiation 6)' },
+  { title: 'Old Gods (Return 5)' },
+  { title: 'Masks (Initiation 7)' },
+  { title: "Zane's Film (Initiation 8)" },
+  { title: 'Scratch (Return 6)' },
+  { title: 'Gone (Initiation 9)' },
+  { title: 'Summoning (Return 7)' },
+  { title: 'Deerfest (Return 8)' },
+  { title: 'Come Home (Return 9)' },
+  { title: 'Final Draft (Endgame)' },
+];
+
+export const KNOWN_GAME_CHAPTER_TITLES: Record<string, OfficialGameChapter[]> = {
+  'final fantasy vii rebirth': FF7_REBIRTH_CHAPTERS,
+  'final fantasy 7 rebirth': FF7_REBIRTH_CHAPTERS,
+  'final fantasy vii remake': FF7_REMAKE_CHAPTERS,
+  'final fantasy 7 remake': FF7_REMAKE_CHAPTERS,
+  'the last of us': TLOU1_CHAPTERS,
+  'the last of us part i': TLOU1_CHAPTERS,
+  'the last of us part ii': [
+    { title: 'Jackson' },
+    { title: 'Seattle Day 1 (Ellie)' },
+    { title: 'Seattle Day 2 (Ellie)' },
+    { title: 'Seattle Day 3 (Ellie)' },
+    { title: 'The Park' },
+    { title: 'Seattle Day 1 (Abby)' },
+    { title: 'Seattle Day 2 (Abby)' },
+    { title: 'Seattle Day 3 (Abby)' },
+    { title: 'The Theater' },
+    { title: 'The Farm' },
+    { title: 'Santa Barbara' },
+  ],
+  'red dead redemption 2': [
+    { title: 'Colter', summary: 'Snowbound camp in the Grizzlies after Blackwater.' },
+    { title: 'Horseshoe Overlook', summary: 'New camp overlooking the Heartlands near Valentine.' },
+    { title: 'Clemens Point', summary: 'Scarlett Meadows near Rhodes and Flat Iron Lake.' },
+    { title: 'Shady Belle', summary: 'Lemoyne swamps outside Saint Denis.' },
+    { title: 'Guarma', summary: 'Shipwrecked on the Caribbean island.' },
+    { title: 'Beaver Hollow', summary: 'Roanoke Ridge and the gang’s final stretch.' },
+    { title: 'Epilogue, Part I: Pronghorn Ranch' },
+    { title: 'Epilogue, Part II: Beecher’s Hope' },
+  ],
+  'god of war ragnarok': [
+    { title: 'Surviving Fimbulwinter' },
+    { title: 'The Quest for Tyr' },
+    { title: 'Old Friends' },
+    { title: "Groa's Secret" },
+    { title: 'The Lost Sanctuary' },
+    { title: 'The Reckoning' },
+    { title: 'The Runaway' },
+    { title: 'Into the Fire' },
+    { title: 'The Word of Fate' },
+    { title: 'Forging Destiny' },
+    { title: 'Unleashing Hel' },
+    { title: 'Reunion' },
+    { title: 'Creatures of Prophecy' },
+    { title: 'Unlocking the Mask' },
+    { title: 'Hunting for Solace' },
+    { title: 'The Summoning' },
+    { title: 'The Realms at War' },
+    { title: 'Beyond Ragnarok' },
+  ],
+  'resident evil 4': RE4_CHAPTERS,
+  'resident evil 4 remake': RE4_CHAPTERS,
+  'black myth wukong': [
+    { title: 'Black Cloud, Red Fire', summary: 'Black Wind Mountain' },
+    { title: 'Yellow Sand, Desolate Dusk', summary: 'Yellow Wind Ridge' },
+    { title: 'White Snow, Ice Cold', summary: 'The New West' },
+    { title: 'Rosy Cheeks, Gray Hair', summary: 'Webbed Hollow' },
+    { title: 'Golden Child, Crimson Blood', summary: 'Flaming Mountains' },
+    { title: 'Unfinished', summary: 'Mount Huaguo' },
+  ],
+  'baldurs gate 3': [
+    { title: 'Act 1: Wilderness, Underdark & Mountain Pass' },
+    { title: 'Act 2: Shadow-Cursed Lands & Moonrise Towers' },
+    { title: "Act 3: Rivington, Lower City & Elder Brain" },
+  ],
+  'baldurs gate iii': [
+    { title: 'Act 1: Wilderness, Underdark & Mountain Pass' },
+    { title: 'Act 2: Shadow-Cursed Lands & Moonrise Towers' },
+    { title: "Act 3: Rivington, Lower City & Elder Brain" },
+  ],
+  'ghost of tsushima': [
+    { title: 'Shadow of the Samurai', summary: 'Izuhara & Castle Kaneda' },
+    { title: 'Rise of the Ghost', summary: 'Toyotama & Castle Shimura' },
+    { title: 'Kill the Khan', summary: 'Kamiagata & Port Izumi' },
+  ],
+  'cyberpunk 2077': [
+    { title: 'Act 1: The Heist', summary: 'Watson lockdown & Konpeki Plaza' },
+    { title: 'Act 2: Night City Open World', summary: 'Tracking down the Relic’s creators' },
+    { title: 'Act 3: Nocturne Op55N1', summary: 'Mikoshi & Endgame Epilogues' },
+  ],
+  'clair obscur expedition 33': [
+    { title: 'Act 1: Gustave' },
+    { title: 'Act 2: Verso' },
+    { title: 'Act 3: Maelle' },
+  ],
+  'alan wake 2': ALAN_WAKE_2_CHAPTERS,
+  'alan wake ii': ALAN_WAKE_2_CHAPTERS,
+  'death stranding': [
+    { title: 'Prologue: Porter' },
+    { title: 'Episode 1: Bridget' },
+    { title: 'Episode 2: Amelie' },
+    { title: 'Episode 3: Fragile' },
+    { title: 'Episode 4: Unger' },
+    { title: 'Episode 5: Mama' },
+    { title: 'Episode 6: Deadman' },
+    { title: 'Episode 7: Clifford' },
+    { title: 'Episode 8: Heartman' },
+    { title: 'Episode 9: Higgs' },
+    { title: 'Episode 10: Die-Hardman' },
+    { title: 'Episode 11: Clifford Unger' },
+    { title: 'Episode 12: Bridges' },
+    { title: 'Episode 13: Sam Strand' },
+    { title: 'Episode 14: Lou' },
+  ],
+  celeste: [
+    { title: 'Forsaken City' },
+    { title: 'Old Site' },
+    { title: 'Celestial Resort' },
+    { title: 'Golden Ridge' },
+    { title: 'Mirror Temple' },
+    { title: 'Reflection' },
+    { title: 'The Summit' },
+    { title: 'Core' },
+    { title: 'Farewell' },
+  ],
+  'it takes two': [
+    { title: 'The Shed' },
+    { title: 'The Tree' },
+    { title: "Rose's Room" },
+    { title: 'Cuckoo Clock' },
+    { title: 'Snow Globe' },
+    { title: 'Garden' },
+    { title: 'The Attic' },
+  ],
+  'split fiction': [
+    { title: 'Rader Publishing' },
+    { title: 'Neon Revenge' },
+    { title: 'Hopes of Spring' },
+    { title: 'Final Dawn' },
+    { title: 'Rise of the Dragon Realm' },
+    { title: 'Isolation' },
+    { title: 'The Hollow' },
+    { title: 'Split' },
+  ],
+};
+
+export function getOfficialGameChapter(
+  title: string,
+  chapterNumber: number
+): OfficialGameChapter | null {
+  if (!title || chapterNumber < 1) return null;
+  const norm = normalizeGameTitleKey(title);
+  const rawWithRemake = title
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/['’]/g, '')
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const exact = KNOWN_GAME_CHAPTER_TITLES[rawWithRemake] || KNOWN_GAME_CHAPTER_TITLES[norm];
+  const list =
+    exact ||
+    Object.entries(KNOWN_GAME_CHAPTER_TITLES).find(([k]) => {
+      const checkSuffix = (str: string) =>
+        str.startsWith(`${k} `) &&
+        !/^(?:\d+|ii|iii|iv|v|vi|x|part|rebirth)\b/i.test(str.slice(k.length + 1));
+      return checkSuffix(rawWithRemake) || checkSuffix(norm);
+    })?.[1];
+
+  if (!list) return null;
+  return list[chapterNumber - 1] || null;
+}
+
 export function lookupKnownGameChapters(title: string): GameChapterLookupResult | null {
   const norm = normalizeGameTitleKey(title);
   if (!norm) return null;

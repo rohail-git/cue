@@ -253,6 +253,11 @@ interface CueContextValue {
     detailsKey: string,
     resolvedTotalUnits?: number
   ) => void;
+  patchReadIssueMeta: (
+    readId: string,
+    unitNumber: number,
+    patch: Partial<ComicIssueMeta>
+  ) => void;
   updateReadEditionCovers: (
     readId: string,
     editionCovers: Partial<Record<ComicEditionId, string>>,
@@ -290,6 +295,8 @@ interface CueContextValue {
   incrementGamePlaythrough: (gameId: string, delta: number) => void;
   toggleGameBookmark: (gameId: string) => void;
   rateGame: (gameId: string, rating: number | undefined) => void;
+  rateGameChapter: (gameId: string, chapter: number, rating: number | undefined) => void;
+  setGameChapterTitle: (gameId: string, chapter: number, title: string) => void;
   setGameMood: (gameId: string, mood: PersonalMood | undefined) => void;
   resetGameProgress: (gameId: string) => void;
 
@@ -2264,6 +2271,35 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const patchReadIssueMeta = useCallback(
+    (readId: string, unitNumber: number, patch: Partial<ComicIssueMeta>) => {
+      if (!patch || Object.keys(patch).length === 0) return;
+      commitState((prev) => {
+        const item = prev.readItems[readId];
+        if (!item) return prev;
+        const existingDetails = item.issueDetails || {};
+        const prevMeta = existingDetails[unitNumber] || { number: unitNumber };
+        return {
+          ...prev,
+          readItems: {
+            ...prev.readItems,
+            [readId]: {
+              ...item,
+              issueDetails: {
+                ...existingDetails,
+                [unitNumber]: {
+                  ...prevMeta,
+                  ...patch,
+                },
+              },
+            },
+          },
+        };
+      });
+    },
+    []
+  );
+
   const updateReadEditionCovers = useCallback(
     (
       readId: string,
@@ -2871,6 +2907,75 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       };
     });
   }, []);
+
+  const rateGameChapter = useCallback(
+    (gameId: string, chapter: number, rating: number | undefined) => {
+      commitState((prev) => {
+        const game = prev.games[gameId];
+        if (!game) return prev;
+        const existing = prev.gameProgress[gameId];
+        const nextRatings = { ...(existing?.chapterRatings || {}) };
+        if (rating === undefined) {
+          delete nextRatings[chapter];
+        } else {
+          nextRatings[chapter] = rating;
+        }
+        return {
+          ...prev,
+          gameProgress: {
+            ...prev.gameProgress,
+            [gameId]: {
+              ...(existing || {}),
+              status: existing?.status || 'playing',
+              hoursPlayed: existing?.hoursPlayed || 0,
+              completionPct: existing?.completionPct || 0,
+              playthroughCount: existing?.playthroughCount || 0,
+              platinum: existing?.platinum ?? false,
+              platform: existing?.platform || game.platforms[0] || 'PC',
+              bookmarked: existing?.bookmarked ?? true,
+              chapterRatings: nextRatings,
+            },
+          },
+        };
+      });
+    },
+    []
+  );
+
+  const setGameChapterTitle = useCallback(
+    (gameId: string, chapter: number, title: string) => {
+      const cleanTitle = title.trim();
+      commitState((prev) => {
+        const game = prev.games[gameId];
+        if (!game) return prev;
+        const existing = prev.gameProgress[gameId];
+        const nextTitles = { ...(existing?.chapterTitles || {}) };
+        if (!cleanTitle) {
+          delete nextTitles[chapter];
+        } else {
+          nextTitles[chapter] = cleanTitle;
+        }
+        return {
+          ...prev,
+          gameProgress: {
+            ...prev.gameProgress,
+            [gameId]: {
+              ...(existing || {}),
+              status: existing?.status || 'playing',
+              hoursPlayed: existing?.hoursPlayed || 0,
+              completionPct: existing?.completionPct || 0,
+              playthroughCount: existing?.playthroughCount || 0,
+              platinum: existing?.platinum ?? false,
+              platform: existing?.platform || game.platforms[0] || 'PC',
+              bookmarked: existing?.bookmarked ?? true,
+              chapterTitles: nextTitles,
+            },
+          },
+        };
+      });
+    },
+    []
+  );
 
   const setGameMood = useCallback((gameId: string, mood: PersonalMood | undefined) => {
     commitState((prev) => {
@@ -3969,6 +4074,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         selectComicEdition,
         updateReadEditionsCatalog,
         updateReadIssueDetails,
+        patchReadIssueMeta,
         updateReadEditionCovers,
         updateReadTotalUnits,
         updateReadFormat,
@@ -3984,6 +4090,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         incrementGamePlaythrough,
         toggleGameBookmark,
         rateGame,
+        rateGameChapter,
+        setGameChapterTitle,
         setGameMood,
         resetGameProgress,
         rateCollection,

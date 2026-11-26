@@ -16,6 +16,7 @@ import {
   Sparkles,
   Star,
   Trophy,
+  X,
 } from 'lucide-react';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
@@ -25,7 +26,7 @@ import { HeroRatingCard, RatingControl } from '../components/RatingControl';
 import { fetchGameChapterInfo } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode, GameChapterUnit, GamePlatform } from '../types';
-import { lookupKnownGameChapters } from '../utils/gameChapters';
+import { getOfficialGameChapter, lookupKnownGameChapters } from '../utils/gameChapters';
 import { formatRating } from '../utils/ratings';
 import { cleanDisplayGenres, formatGameMeta } from '../utils/stats';
 
@@ -63,8 +64,11 @@ export function GameDetailView({ gameId }: { gameId: string }) {
     incrementGamePlaythrough,
     toggleGameBookmark,
     rateGame,
+    rateGameChapter,
+    setGameChapterTitle,
     setGameMood,
     resetGameProgress,
+    addJournalEntry,
     toggleItemInList,
     createCustomList,
   } = useCueStore();
@@ -82,11 +86,18 @@ export function GameDetailView({ gameId }: { gameId: string }) {
   const [editingChapters, setEditingChapters] = useState(false);
   const [chapterDraft, setChapterDraft] = useState('');
   const [unitDraft, setUnitDraft] = useState<GameChapterUnit>('chapters');
+  const [activeChapterDrawer, setActiveChapterDrawer] = useState<number | null>(null);
+  const [chapterNoteText, setChapterNoteText] = useState('');
+  const [editingChapterTitle, setEditingChapterTitle] = useState(false);
+  const [chapterTitleDraft, setChapterTitleDraft] = useState('');
   const fetchedChaptersRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setDetailMode(sessionDetailModeByGameId.get(gameId) || state.settings.detailMode || 'simple');
     setExpandedBuckets({ 0: true });
+    setActiveChapterDrawer(null);
+    setChapterNoteText('');
+    setEditingChapterTitle(false);
   }, [gameId, state.settings.detailMode]);
 
   const handleDetailModeChange = (nextMode: DetailCardMode) => {
@@ -593,31 +604,68 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                           <div className="divide-y divide-white/[0.06] pt-1">
                             {chapNums.map((n) => {
                               const done = n <= currentChapter;
+                              const official = getOfficialGameChapter(game.title, n);
+                              const customTitle = progress?.chapterTitles?.[n];
+                              const resolvedName = customTitle || official?.title;
+                              const displayTitle = resolvedName || `${chapterSingleCap} ${n}`;
+                              const chapRating = progress?.chapterRatings?.[n];
                               return (
                                 <div
                                   key={n}
                                   role="button"
                                   tabIndex={0}
-                                  onClick={() =>
-                                    setGameChapter(game.id, n === currentChapter ? n - 1 : n)
-                                  }
+                                  onClick={() => {
+                                    setChapterNoteText('');
+                                    setEditingChapterTitle(false);
+                                    setActiveChapterDrawer(n);
+                                  }}
                                   onKeyDown={(e) => {
                                     if (e.key === 'Enter' || e.key === ' ') {
                                       e.preventDefault();
-                                      setGameChapter(game.id, n === currentChapter ? n - 1 : n);
+                                      setChapterNoteText('');
+                                      setEditingChapterTitle(false);
+                                      setActiveChapterDrawer(n);
                                     }
                                   }}
                                   className="py-2.5 flex items-center justify-between gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors"
                                 >
                                   <div className="min-w-0">
                                     <p className="text-[14px] font-medium text-ink truncate">
-                                      {chapterSingleCap} {n}
+                                      {displayTitle}
                                     </p>
-                                    {done && (
-                                      <p className="text-[11.5px] text-watched">Done</p>
+                                    {(resolvedName || done || (typeof chapRating === 'number' && chapRating > 0)) && (
+                                      <p className="text-[11.5px] text-ink-dim tabular-nums flex items-center gap-1.5 mt-0.5 truncate">
+                                        {resolvedName && (
+                                          <span>
+                                            {chapterSingleCap} {n}
+                                          </span>
+                                        )}
+                                        {done && (
+                                          <span className="text-watched font-medium">
+                                            {resolvedName ? '· Done' : 'Done'}
+                                          </span>
+                                        )}
+                                        {typeof chapRating === 'number' && chapRating > 0 && (
+                                          <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-brand">
+                                            {resolvedName || done ? '· ' : ''}
+                                            <Star className="w-3 h-3 fill-brand" />
+                                            {formatRating(chapRating)}
+                                          </span>
+                                        )}
+                                      </p>
                                     )}
                                   </div>
-                                  <span
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setGameChapter(game.id, n === currentChapter ? n - 1 : n);
+                                    }}
+                                    aria-label={
+                                      done
+                                        ? `Unmark ${displayTitle} completed`
+                                        : `Mark ${displayTitle} completed`
+                                    }
                                     className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 transition-colors ${
                                       done
                                         ? 'text-watched'
@@ -625,7 +673,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                                     }`}
                                   >
                                     <Check className="w-[17px] h-[17px]" strokeWidth={2.5} />
-                                  </span>
+                                  </button>
                                 </div>
                               );
                             })}
@@ -1019,6 +1067,208 @@ export function GameDetailView({ gameId }: { gameId: string }) {
         subtitle={`${game.developer} · ${game.year}`}
         onClose={() => setLightboxOpen(false)}
       />
+
+      {/* Game Chapter Log Drawer */}
+      {activeChapterDrawer !== null && (() => {
+        const n = activeChapterDrawer;
+        const done = n <= currentChapter;
+        const official = getOfficialGameChapter(game.title, n);
+        const customTitle = progress?.chapterTitles?.[n];
+        const displayTitle = customTitle || official?.title || `${chapterSingleCap} ${n}`;
+        const chapRating = progress?.chapterRatings?.[n];
+        const unitShortPrefix =
+          chapterSingle === 'act'
+            ? 'Act'
+            : chapterSingle === 'mission'
+              ? 'Mission'
+              : chapterSingle === 'milestone'
+                ? 'Milestone'
+                : 'Ch.';
+        const chapterContextLabel =
+          unitShortPrefix === 'Ch.'
+            ? `Ch. ${String(n).padStart(2, '0')}`
+            : `${unitShortPrefix} ${n}`;
+        const savedChapNotes = state.journalEntries.filter(
+          (entry) => entry.mediaId === game.id && entry.contextLabel === chapterContextLabel
+        );
+
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/75 backdrop-blur-sm p-0 md:p-4"
+            onClick={() => setActiveChapterDrawer(null)}
+          >
+            <div
+              className="w-full md:max-w-md max-h-[88dvh] overflow-y-auto bg-surface-raised border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl space-y-4 animate-sheet-up"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-play tabular-nums">
+                    {chapterSingleCap} {n}
+                  </p>
+                  {editingChapterTitle ? (
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        setGameChapterTitle(game.id, n, chapterTitleDraft);
+                        setEditingChapterTitle(false);
+                      }}
+                      className="flex items-center gap-2 mt-1.5"
+                    >
+                      <input
+                        autoFocus
+                        value={chapterTitleDraft}
+                        onChange={(e) => setChapterTitleDraft(e.target.value)}
+                        placeholder={official?.title || `${chapterSingleCap} ${n}`}
+                        className="flex-1 min-w-0 rounded-xl bg-surface border border-white/15 px-3 py-1.5 text-sm text-ink outline-none focus:border-play"
+                      />
+                      <button
+                        type="submit"
+                        className="px-3 py-1.5 rounded-xl bg-play text-[#161224] text-xs font-semibold shrink-0"
+                      >
+                        Save
+                      </button>
+                    </form>
+                  ) : (
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <h3 className="font-display font-bold text-lg text-ink leading-snug truncate">
+                        {displayTitle}
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setChapterTitleDraft(customTitle || official?.title || '');
+                          setEditingChapterTitle(true);
+                        }}
+                        aria-label="Rename chapter"
+                        className="h-6 w-6 rounded-full bg-white/8 flex items-center justify-center text-ink-dim hover:text-ink shrink-0"
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )}
+                  <p className="text-xs text-ink-dim mt-0.5 truncate">{game.title}</p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveChapterDrawer(null)}
+                  aria-label="Close chapter log"
+                  className="h-8 w-8 rounded-full bg-white/8 flex items-center justify-center text-ink-dim shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {official?.summary && (
+                <p className="text-xs text-ink-dim leading-relaxed rounded-2xl bg-surface border border-white/[0.06] p-3">
+                  {official.summary}
+                </p>
+              )}
+
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-surface border border-white/8">
+                <span className="text-sm font-medium text-ink">Status</span>
+                <button
+                  type="button"
+                  onClick={() => setGameChapter(game.id, done ? n - 1 : n)}
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border inline-flex items-center gap-1.5 transition-colors ${
+                    done
+                      ? 'border-watched bg-watched/15 text-watched'
+                      : 'border-white/12 bg-background text-ink-dim hover:text-ink'
+                  }`}
+                >
+                  <Check className="w-3.5 h-3.5" strokeWidth={2.5} />
+                  <span>{done ? 'Completed' : 'Mark completed'}</span>
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-surface border border-white/8">
+                <div>
+                  <span className="text-sm font-medium text-ink">Playtime</span>
+                  <p className="text-[11px] text-ink-dim tabular-nums">{hours}h total logged</p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => logGameSession(game.id, 0.5)}
+                    className="px-2.5 py-1 rounded-full bg-white/8 text-ink text-xs font-semibold hover:bg-white/14"
+                  >
+                    +30m
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => logGameSession(game.id, 1)}
+                    className="px-2.5 py-1 rounded-full bg-play/20 text-play text-xs font-semibold hover:bg-play/30"
+                  >
+                    +1h
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-surface border border-white/8">
+                <span className="text-sm font-medium text-ink">Chapter rating</span>
+                <RatingControl
+                  value={chapRating}
+                  onChange={(r) => rateGameChapter(game.id, n, r)}
+                  labelPrefix={`Rate ${displayTitle}`}
+                  allowClear
+                />
+              </div>
+
+              {savedChapNotes.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-faint">
+                    Your {chapterContextLabel} notes
+                  </p>
+                  {savedChapNotes.slice(0, 3).map((note) => (
+                    <div
+                      key={note.id}
+                      className="rounded-xl bg-surface border border-white/[0.06] px-3 py-2 text-xs text-ink leading-relaxed"
+                    >
+                      {note.text}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!chapterNoteText.trim()) return;
+                  addJournalEntry({
+                    domain: 'play',
+                    mediaKind: 'game',
+                    mediaId: game.id,
+                    mediaTitle: game.title,
+                    mediaPoster: game.coverUrl,
+                    contextLabel: chapterContextLabel,
+                    text: chapterNoteText.trim(),
+                    rating: chapRating ?? progress?.rating,
+                    mood: progress?.mood,
+                  });
+                  setChapterNoteText('');
+                }}
+                className="space-y-2.5"
+              >
+                <textarea
+                  rows={2}
+                  value={chapterNoteText}
+                  onChange={(e) => setChapterNoteText(e.target.value)}
+                  placeholder={`Log story beats, bosses, or notes for ${displayTitle}…`}
+                  className="w-full rounded-xl bg-surface border border-white/10 p-3 text-sm text-ink outline-none focus:border-play resize-none"
+                />
+                <button
+                  type="submit"
+                  disabled={!chapterNoteText.trim()}
+                  className="w-full py-2.5 rounded-full bg-play text-[#161224] text-sm font-semibold disabled:opacity-40"
+                >
+                  Save {chapterSingle} note
+                </button>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
 
       {listPickerOpen && (
         <div

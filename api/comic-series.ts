@@ -24,6 +24,11 @@ export interface ComicSeriesIssueItem {
   title?: string;
   releaseDate?: string;
   coverUrl?: string;
+  synopsis?: string;
+  writers?: string;
+  artists?: string;
+  wiki?: ComicWikiSlug;
+  pageTitle?: string;
 }
 
 const UA_HEADER = 'CueMediaTracker/1.0 (+https://cue-three-theta.vercel.app)';
@@ -65,13 +70,47 @@ function normTitle(s: string): string {
 function cleanWikitext(raw?: string): string {
   if (!raw) return '';
   return raw
+    .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
+    .replace(/<ref[^/]*\/>/gi, '')
     .replace(/\[\[([^|\]]+)\|([^\]]+)\]\]/g, '$2')
     .replace(/\[\[([^\]]+)\]\]/g, '$1')
+    .replace(/\[\[([^\]]+)/g, '$1')
+    .replace(/\]\]/g, '')
     .replace(/\{\{[^}]*\}\}/g, '')
     .replace(/<[^>]+>/g, '')
-    .replace(/;/g, ',')
+    .replace(/'{2,3}/g, '')
+    .replace(/;/g, ', ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function extractWikitextField(wikitext: string, fieldPattern: string): string | undefined {
+  const m = wikitext.match(new RegExp(`\\|\\s*(?:${fieldPattern})\\s*=[^\\S\\r\\n]*([^\\n]+)`, 'i'));
+  if (!m?.[1]) return undefined;
+  const cleaned = cleanWikitext(m[1]).replace(/,\s*$/, '').trim();
+  return cleaned.length >= 2 && !/^\|/.test(cleaned) ? cleaned : undefined;
+}
+
+function extractIssueSynopsis(wikitext: string): string | undefined {
+  if (!wikitext) return undefined;
+  let raw = '';
+  const fieldMatch = wikitext.match(
+    /\|\s*(?:Solicit|Synopsis1?)\s*=[^\S\r\n]*([\s\S]*?)(?=\n\s*\||\n\s*\}\})/i
+  );
+  if (fieldMatch?.[1]) {
+    raw = fieldMatch[1];
+  } else {
+    const secMatch = wikitext.match(
+      /==+\s*(?:Solicit|Synopsis[^=]*)\s*==+\s*\n([\s\S]*?)(?=\n==|$)/i
+    );
+    if (secMatch?.[1]) raw = secMatch[1];
+  }
+  const cleaned = cleanWikitext(raw);
+  if (!cleaned || cleaned.length < 25 || /^no synopsis/i.test(cleaned)) return undefined;
+  if (cleaned.length <= 420) return cleaned;
+  const slice = cleaned.slice(0, 420);
+  const lastSpace = slice.lastIndexOf(' ');
+  return `${(lastSpace > 260 ? slice.slice(0, lastSpace) : slice).trim()}…`;
 }
 
 function parseQueryAndYear(rawQuery: string): { baseQuery: string; targetYear?: number } {
@@ -591,19 +630,27 @@ export async function fetchComicSeriesIssuesPayload(
 
       for (const { spec, slot, page, wikitext, coverFilename } of chunkMeta) {
         const storyMatch =
-          wikitext.match(/\|\s*StoryTitle1\s*=\s*([^\n|]+)/i)?.[1] ||
-          wikitext.match(/\|\s*Name\s*=\s*([^\n|]+)/i)?.[1] ||
+          wikitext.match(/\|\s*StoryTitle1\s*=[^\S\r\n]*([^\n]+)/i)?.[1] ||
+          wikitext.match(/\|\s*Name\s*=[^\S\r\n]*([^\n]+)/i)?.[1] ||
           '';
         const title = cleanStoryTitle(storyMatch, seriesNorm);
         const releaseDate = formatIssueDate(wikitext);
         const coverUrl =
           coverAMap.get(coverFilename.toLowerCase()) || page?.thumbnail?.source;
+        const writers = extractWikitextField(wikitext, 'Writers?1|Writers');
+        const artists = extractWikitextField(wikitext, 'Pencillers?1|Pencillers?|Artists?1|Artists');
+        const synopsis = extractIssueSynopsis(wikitext);
         issues[slot] = {
           number: slot,
           issueLabel: `#${spec.rawNum}`,
           title,
           releaseDate,
           coverUrl,
+          synopsis,
+          writers,
+          artists,
+          wiki,
+          pageTitle: spec.pageTitle,
         };
       }
     } catch {

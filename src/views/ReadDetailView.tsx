@@ -16,6 +16,7 @@ import {
   Plus,
   RotateCcw,
   Star,
+  X,
 } from 'lucide-react';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
@@ -26,6 +27,7 @@ import {
   fetchComicEditionMetadata,
   fetchComicIssueDetails,
   fetchComicSeriesIssues,
+  fetchSingleComicIssueDetail,
   formatDisplayTitle,
 } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
@@ -62,9 +64,11 @@ export function ReadDetailView({ readId }: { readId: string }) {
     setReadMood,
     updateReadEditionCovers,
     updateReadIssueDetails,
+    patchReadIssueMeta,
     updateReadTotalUnits,
     updateReadFormat,
     resetReadProgress,
+    addJournalEntry,
     toggleItemInList,
     createCustomList,
   } = useCueStore();
@@ -83,16 +87,22 @@ export function ReadDetailView({ readId }: { readId: string }) {
   } | null>(null);
   const [selectedUnit, setSelectedUnit] = useState<number>(1);
   const [unitPageStart, setUnitPageStart] = useState<number>(1);
+  const [activeUnitDrawer, setActiveUnitDrawer] = useState<number | null>(null);
+  const [unitNoteText, setUnitNoteText] = useState('');
+  const [loadingUnitDetail, setLoadingUnitDetail] = useState(false);
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
     () => sessionDetailModeByReadId.get(readId) || state.settings.detailMode || 'simple'
   );
   const [expandedBuckets, setExpandedBuckets] = useState<Record<number, boolean>>({ 0: true });
   const fetchedCoversRef = useRef<Set<string>>(new Set());
   const fetchedIssueKeyRef = useRef<Set<string>>(new Set());
+  const fetchedSingleIssueRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setDetailMode(sessionDetailModeByReadId.get(readId) || state.settings.detailMode || 'simple');
     setExpandedBuckets({ 0: true });
+    setActiveUnitDrawer(null);
+    setUnitNoteText('');
   }, [readId, state.settings.detailMode]);
 
   const handleDetailModeChange = (nextMode: DetailCardMode) => {
@@ -143,7 +153,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   useEffect(() => {
     if (!item || item.format !== 'comic') return;
     const total = Math.max(1, item.totalUnits);
-    const detailsKey = `${progress?.editionId || progress?.edition || 'default'}::${total}::ca5`;
+    const detailsKey = `${progress?.editionId || progress?.edition || 'default'}::${total}::ca6`;
     if (
       item.issueDetailsKey === detailsKey &&
       item.issueDetails &&
@@ -201,6 +211,38 @@ export function ReadDetailView({ readId }: { readId: string }) {
       cancelled = true;
     };
   }, [item, progress?.edition, progress?.editionId, updateReadIssueDetails]);
+
+  useEffect(() => {
+    if (activeUnitDrawer === null || !item || item.format !== 'comic') {
+      setLoadingUnitDetail(false);
+      return;
+    }
+    const meta = item.issueDetails?.[activeUnitDrawer];
+    if (!meta?.wiki || !meta?.pageTitle || meta.synopsis) {
+      setLoadingUnitDetail(false);
+      return;
+    }
+    const singleKey = `${item.id}::${activeUnitDrawer}::${meta.pageTitle}`;
+    if (fetchedSingleIssueRef.current.has(singleKey)) return;
+
+    let cancelled = false;
+    setLoadingUnitDetail(true);
+    fetchSingleComicIssueDetail(meta.wiki, meta.pageTitle)
+      .then((patch) => {
+        if (cancelled) return;
+        fetchedSingleIssueRef.current.add(singleKey);
+        if (Object.keys(patch).length > 0) {
+          patchReadIssueMeta(item.id, activeUnitDrawer, patch);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingUnitDetail(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeUnitDrawer, item, patchReadIssueMeta]);
 
   if (!item) {
     return (
@@ -610,17 +652,22 @@ export function ReadDetailView({ readId }: { readId: string }) {
                                     .join(' · ')
                                 : '';
                             const issueThumb = meta?.coverUrl || activeCover;
+                            const unitRating = progress?.unitRatings?.[u];
 
                             return (
                               <div
                                 key={u}
                                 role="button"
                                 tabIndex={0}
-                                onClick={() => toggleReadUnit(item.id, u)}
+                                onClick={() => {
+                                  setUnitNoteText('');
+                                  setActiveUnitDrawer(u);
+                                }}
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter' || e.key === ' ') {
                                     e.preventDefault();
-                                    toggleReadUnit(item.id, u);
+                                    setUnitNoteText('');
+                                    setActiveUnitDrawer(u);
                                   }
                                 }}
                                 className="py-2.5 flex items-center gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors"
@@ -660,16 +707,47 @@ export function ReadDetailView({ readId }: { readId: string }) {
                                     {primaryTitle}
                                   </p>
                                   {item.format === 'comic' ? (
-                                    <p className="text-[12px] text-ink-dim tabular-nums mt-0.5 truncate">
-                                      <span>{issueSub}</span>
-                                      {done && <span className="text-watched font-medium"> · Read</span>}
+                                    <p className="text-[12px] text-ink-dim tabular-nums mt-0.5 truncate flex items-center gap-1.5">
+                                      <span className="truncate">{issueSub}</span>
+                                      {done && (
+                                        <span className="text-watched font-medium shrink-0">
+                                          · Read
+                                        </span>
+                                      )}
+                                      {typeof unitRating === 'number' && unitRating > 0 && (
+                                        <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-brand shrink-0">
+                                          · <Star className="w-3 h-3 fill-brand" />
+                                          {formatRating(unitRating)}
+                                        </span>
+                                      )}
                                     </p>
                                   ) : (
-                                    done && <p className="text-[11.5px] text-watched">Read</p>
+                                    (done || (typeof unitRating === 'number' && unitRating > 0)) && (
+                                      <p className="text-[11.5px] text-ink-dim tabular-nums flex items-center gap-1.5 mt-0.5">
+                                        {done && <span className="text-watched">Read</span>}
+                                        {typeof unitRating === 'number' && unitRating > 0 && (
+                                          <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-brand">
+                                            {done ? '· ' : ''}
+                                            <Star className="w-3 h-3 fill-brand" />
+                                            {formatRating(unitRating)}
+                                          </span>
+                                        )}
+                                      </p>
+                                    )
                                   )}
                                 </div>
 
-                                <span
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleReadUnit(item.id, u);
+                                  }}
+                                  aria-label={
+                                    done
+                                      ? `Unmark ${primaryTitle} read`
+                                      : `Mark ${primaryTitle} read`
+                                  }
                                   className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 transition-colors ${
                                     done
                                       ? 'text-watched'
@@ -677,7 +755,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
                                   }`}
                                 >
                                   <Check className="w-[17px] h-[17px]" strokeWidth={2.5} />
-                                </span>
+                                </button>
                               </div>
                             );
                           })}
@@ -1073,13 +1151,25 @@ export function ReadDetailView({ readId }: { readId: string }) {
                   </button>
                 </div>
 
-                <RatingControl
-                  size="sm"
-                  value={progress?.unitRatings?.[safeSelectedUnit]}
-                  onChange={(r) => rateReadUnit(item.id, safeSelectedUnit, r)}
-                  labelPrefix={`Rate ${item.unit === 'issues' ? `Issue #${safeSelectedUnit}` : `Chapter ${safeSelectedUnit}`}`}
-                  allowClear
-                />
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <RatingControl
+                    size="sm"
+                    value={progress?.unitRatings?.[safeSelectedUnit]}
+                    onChange={(r) => rateReadUnit(item.id, safeSelectedUnit, r)}
+                    labelPrefix={`Rate ${item.unit === 'issues' ? `Issue #${safeSelectedUnit}` : `Chapter ${safeSelectedUnit}`}`}
+                    allowClear
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUnitNoteText('');
+                      setActiveUnitDrawer(safeSelectedUnit);
+                    }}
+                    className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-white/12 bg-surface text-ink-dim hover:text-ink transition-colors"
+                  >
+                    Details & notes
+                  </button>
+                </div>
               </div>
             </section>
           )}
@@ -1186,6 +1276,202 @@ export function ReadDetailView({ readId }: { readId: string }) {
           setLightboxOverride(null);
         }}
       />
+
+      {/* Issue / Chapter Detail Drawer */}
+      {activeUnitDrawer !== null && (() => {
+        const u = activeUnitDrawer;
+        const done = completedSet.has(u);
+        const meta = item.format === 'comic' ? item.issueDetails?.[u] : undefined;
+        const unitLabel = item.unit === 'issues' ? `Issue #${u}` : `Chapter ${u}`;
+        const unitContextLabel = item.unit === 'issues' ? `Issue #${u}` : `Ch. ${u}`;
+        const displayTitle =
+          item.format === 'comic'
+            ? meta?.title || (meta?.issueLabel ? `${item.title} ${meta.issueLabel}` : unitLabel)
+            : unitLabel;
+        const issueSub = [
+          meta?.issueLabel || (item.format === 'comic' ? `Issue #${u}` : undefined),
+          meta?.releaseDate,
+          item.comicPublisher,
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        const issueThumb = meta?.coverUrl || activeCover;
+        const unitRating = progress?.unitRatings?.[u];
+        const savedUnitNotes = state.journalEntries.filter(
+          (entry) => entry.mediaId === item.id && entry.contextLabel === unitContextLabel
+        );
+
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/75 backdrop-blur-sm p-0 md:p-4"
+            onClick={() => setActiveUnitDrawer(null)}
+          >
+            <div
+              className="w-full md:max-w-md max-h-[88dvh] overflow-y-auto bg-surface-raised border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl space-y-4 animate-sheet-up"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3 min-w-0">
+                  {item.format === 'comic' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLightboxOverride({
+                          src: issueThumb,
+                          title: displayTitle,
+                          subtitle: [item.title, meta?.issueLabel || `Issue #${u}`, meta?.releaseDate]
+                            .filter(Boolean)
+                            .join(' · '),
+                        });
+                        setLightboxOpen(true);
+                      }}
+                      aria-label={`View ${displayTitle} cover fullscreen`}
+                      className="w-20 sm:w-24 aspect-[2/3] rounded-xl overflow-hidden bg-surface border border-white/10 shrink-0 cursor-zoom-in"
+                    >
+                      <MediaImage
+                        src={issueThumb}
+                        fallbackSrc={activeCover}
+                        alt={displayTitle}
+                        className="w-full h-full object-cover"
+                      />
+                    </button>
+                  )}
+
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-read tabular-nums">
+                      {meta?.issueLabel || unitLabel}
+                    </p>
+                    <h3 className="font-display font-bold text-lg text-ink leading-snug mt-0.5">
+                      {displayTitle}
+                    </h3>
+                    {issueSub && (
+                      <p className="text-xs text-ink-dim mt-1">{issueSub}</p>
+                    )}
+                    {item.format !== 'comic' && (
+                      <p className="text-xs text-ink-dim mt-1">{item.title}</p>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveUnitDrawer(null)}
+                  aria-label="Close details"
+                  className="h-8 w-8 rounded-full bg-white/8 flex items-center justify-center text-ink-dim shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {item.format === 'comic' &&
+                (meta?.writers || meta?.artists || meta?.synopsis || loadingUnitDetail) && (
+                  <div className="rounded-2xl bg-surface border border-white/[0.06] p-3.5 space-y-2">
+                    {(meta?.writers || meta?.artists) && (
+                      <div className="space-y-1 text-xs">
+                        {meta.writers && (
+                          <p className="text-ink-dim">
+                            <span className="text-ink-faint font-semibold">Writer: </span>
+                            <span className="text-ink">{meta.writers}</span>
+                          </p>
+                        )}
+                        {meta.artists && (
+                          <p className="text-ink-dim">
+                            <span className="text-ink-faint font-semibold">Artist: </span>
+                            <span className="text-ink">{meta.artists}</span>
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {meta?.synopsis ? (
+                      <p className="text-xs text-ink-dim leading-relaxed">{meta.synopsis}</p>
+                    ) : loadingUnitDetail ? (
+                      <p className="text-xs text-ink-faint">Loading issue details…</p>
+                    ) : null}
+                  </div>
+                )}
+
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-surface border border-white/8">
+                <span className="text-sm font-medium text-ink">Status</span>
+                <button
+                  type="button"
+                  onClick={() => toggleReadUnit(item.id, u)}
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border inline-flex items-center gap-1.5 transition-colors ${
+                    done
+                      ? 'border-watched bg-watched/15 text-watched'
+                      : 'border-white/12 bg-background text-ink-dim hover:text-ink'
+                  }`}
+                >
+                  <Check className="w-3.5 h-3.5" strokeWidth={2.5} />
+                  <span>{done ? 'Read' : 'Mark as read'}</span>
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-surface border border-white/8">
+                <span className="text-sm font-medium text-ink">
+                  {item.unit === 'issues' ? 'Issue rating' : 'Chapter rating'}
+                </span>
+                <RatingControl
+                  value={unitRating}
+                  onChange={(r) => rateReadUnit(item.id, u, r)}
+                  labelPrefix={`Rate ${unitLabel}`}
+                  allowClear
+                />
+              </div>
+
+              {savedUnitNotes.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-faint">
+                    Your {unitContextLabel} notes
+                  </p>
+                  {savedUnitNotes.slice(0, 3).map((note) => (
+                    <div
+                      key={note.id}
+                      className="rounded-xl bg-surface border border-white/[0.06] px-3 py-2 text-xs text-ink leading-relaxed"
+                    >
+                      {note.text}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!unitNoteText.trim()) return;
+                  addJournalEntry({
+                    domain: 'read',
+                    mediaKind: item.format,
+                    mediaId: item.id,
+                    mediaTitle: item.title,
+                    mediaPoster: issueThumb,
+                    contextLabel: unitContextLabel,
+                    text: unitNoteText.trim(),
+                    rating: unitRating ?? progress?.rating,
+                    mood: progress?.mood,
+                  });
+                  setUnitNoteText('');
+                }}
+                className="space-y-2.5"
+              >
+                <textarea
+                  rows={2}
+                  value={unitNoteText}
+                  onChange={(e) => setUnitNoteText(e.target.value)}
+                  placeholder={`Write a private note about ${unitContextLabel}…`}
+                  className="w-full rounded-xl bg-surface border border-white/10 p-3 text-sm text-ink outline-none focus:border-read resize-none"
+                />
+                <button
+                  type="submit"
+                  disabled={!unitNoteText.trim()}
+                  className="w-full py-2.5 rounded-full bg-read text-[#1E1608] text-sm font-semibold disabled:opacity-40"
+                >
+                  Save {item.unit === 'issues' ? 'issue' : 'chapter'} note
+                </button>
+              </form>
+            </div>
+          </div>
+        );
+      })()}
 
       {listPickerOpen && (
         <div

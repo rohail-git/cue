@@ -269,9 +269,15 @@ export function ShowDetailView({ showId }: { showId: string }) {
                 key={ep.id}
                 role="button"
                 tabIndex={0}
-                onClick={() => setActiveEpisodeDrawer(ep)}
+                onClick={() => {
+                  setEpNoteText('');
+                  setActiveEpisodeDrawer(ep);
+                }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') setActiveEpisodeDrawer(ep);
+                  if (e.key === 'Enter') {
+                    setEpNoteText('');
+                    setActiveEpisodeDrawer(ep);
+                  }
                 }}
                 className="py-2.5 flex items-center gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors"
               >
@@ -687,17 +693,22 @@ export function ShowDetailView({ showId }: { showId: string }) {
                           {season.episodes.map((ep) => {
                             const epKey = getEpisodeKey(ep.season, ep.number);
                             const count = progress?.episodeCounts?.[epKey] || 0;
+                            const epRating = progress?.episodeRatings?.[epKey];
                             const isWatched = count > 0;
                             return (
                               <div
                                 key={ep.id}
                                 role="button"
                                 tabIndex={0}
-                                onClick={() => toggleEpisodeWatched(show.id, ep.season, ep.number)}
+                                onClick={() => {
+                                  setEpNoteText('');
+                                  setActiveEpisodeDrawer(ep);
+                                }}
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter' || e.key === ' ') {
                                     e.preventDefault();
-                                    toggleEpisodeWatched(show.id, ep.season, ep.number);
+                                    setEpNoteText('');
+                                    setActiveEpisodeDrawer(ep);
                                   }
                                 }}
                                 className="py-2.5 flex items-center gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors"
@@ -713,8 +724,16 @@ export function ShowDetailView({ showId }: { showId: string }) {
                                   <p className="text-[14px] font-medium text-ink truncate leading-snug">
                                     {ep.title}
                                   </p>
-                                  <p className="text-[12px] text-ink-dim tabular-nums mt-0.5">
-                                    E{pad2(ep.number)} · {formatAirDate(ep.airdate)}
+                                  <p className="text-[12px] text-ink-dim tabular-nums mt-0.5 flex items-center gap-1.5">
+                                    <span>
+                                      E{pad2(ep.number)} · {formatAirDate(ep.airdate)}
+                                    </span>
+                                    {typeof epRating === 'number' && epRating > 0 && (
+                                      <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-brand">
+                                        · <Star className="w-3 h-3 fill-brand" />
+                                        {formatRating(epRating)}
+                                      </span>
+                                    )}
                                   </p>
                                 </div>
                                 <button
@@ -949,144 +968,173 @@ export function ShowDetailView({ showId }: { showId: string }) {
       />
 
       {/* Private Episode Note & Rewatch Drawer */}
-      {activeEpisodeDrawer && (
-        <div
-          className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/75 backdrop-blur-sm p-0 md:p-4"
-          onClick={() => setActiveEpisodeDrawer(null)}
-        >
+      {activeEpisodeDrawer && (() => {
+        const epCode = formatEpisodeCode(
+          activeEpisodeDrawer.season,
+          activeEpisodeDrawer.number
+        );
+        const savedEpNotes = state.journalEntries.filter(
+          (entry) => entry.mediaId === show.id && entry.contextLabel === epCode
+        );
+        return (
           <div
-            className="w-full md:max-w-md bg-surface-raised border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl space-y-4 animate-sheet-up"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/75 backdrop-blur-sm p-0 md:p-4"
+            onClick={() => setActiveEpisodeDrawer(null)}
           >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold text-brand tabular-nums">
-                  {formatEpisodeCode(activeEpisodeDrawer.season, activeEpisodeDrawer.number)}
-                </p>
-                <h3 className="font-display font-bold text-lg text-ink">
-                  {activeEpisodeDrawer.title}
-                </h3>
-                <p className="text-xs text-ink-dim mt-0.5">
-                  {formatAirDate(activeEpisodeDrawer.airdate)} · {activeEpisodeDrawer.runtime}m
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveEpisodeDrawer(null)}
-                className="h-8 w-8 rounded-full bg-white/8 flex items-center justify-center text-ink-dim"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {activeEpisodeDrawer.overview && (
-              <p className="text-xs text-ink-dim leading-relaxed">{activeEpisodeDrawer.overview}</p>
-            )}
-
-            <div className="flex items-center justify-between p-3 rounded-2xl bg-surface border border-white/8">
-              <span className="text-sm font-medium text-ink">Watches logged</span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() =>
-                    incrementEpisodeRewatch(
-                      show.id,
-                      activeEpisodeDrawer.season,
-                      activeEpisodeDrawer.number,
-                      -1
-                    )
-                  }
-                  className="w-8 h-8 rounded-full bg-white/8 flex items-center justify-center text-ink"
-                >
-                  <Minus className="w-4 h-4" />
-                </button>
-                <span className="font-display font-bold text-base text-watched tabular-nums min-w-[2.2rem] text-center">
-                  x
-                  {progress?.episodeCounts?.[
-                    getEpisodeKey(activeEpisodeDrawer.season, activeEpisodeDrawer.number)
-                  ] || 0}
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    incrementEpisodeRewatch(
-                      show.id,
-                      activeEpisodeDrawer.season,
-                      activeEpisodeDrawer.number,
-                      1
-                    )
-                  }
-                  className="w-8 h-8 rounded-full bg-watched/20 text-watched flex items-center justify-center"
-                >
-                  <Plus className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between p-3 rounded-2xl bg-surface border border-white/8">
-              <span className="text-sm font-medium text-ink">Episode rating</span>
-              <RatingControl
-                value={
-                  progress?.episodeRatings?.[
-                    getEpisodeKey(activeEpisodeDrawer.season, activeEpisodeDrawer.number)
-                  ]
-                }
-                onChange={(r) =>
-                  rateEpisode(show.id, activeEpisodeDrawer.season, activeEpisodeDrawer.number, r)
-                }
-                labelPrefix="Rate episode"
-                allowClear
-              />
-            </div>
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!epNoteText.trim()) return;
-                const epRate =
-                  progress?.episodeRatings?.[
-                    getEpisodeKey(activeEpisodeDrawer.season, activeEpisodeDrawer.number)
-                  ];
-                addJournalEntry({
-                  domain: 'watch',
-                  mediaKind: 'show',
-                  mediaId: show.id,
-                  mediaTitle: show.title,
-                  mediaPoster: show.posterUrl,
-                  contextLabel: formatEpisodeCode(
-                    activeEpisodeDrawer.season,
-                    activeEpisodeDrawer.number
-                  ),
-                  text: epNoteText.trim(),
-                  rating: epRate ?? progress?.rating,
-                  mood: progress?.mood,
-                });
-                setEpNoteText('');
-                setActiveEpisodeDrawer(null);
-              }}
-              className="space-y-2.5"
+            <div
+              className="w-full md:max-w-md max-h-[88dvh] overflow-y-auto bg-surface-raised border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 shadow-2xl space-y-4 animate-sheet-up"
+              onClick={(e) => e.stopPropagation()}
             >
-              <textarea
-                rows={2}
-                value={epNoteText}
-                onChange={(e) => setEpNoteText(e.target.value)}
-                placeholder={`Write a private note about ${formatEpisodeCode(
-                  activeEpisodeDrawer.season,
-                  activeEpisodeDrawer.number
-                )}…`}
-                className="w-full rounded-xl bg-surface border border-white/10 p-3 text-sm text-ink outline-none focus:border-brand resize-none"
-              />
-              <button
-                type="submit"
-                disabled={!epNoteText.trim()}
-                className="w-full py-2.5 rounded-full bg-brand text-brand-ink text-sm font-semibold disabled:opacity-40"
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-brand tabular-nums">{epCode}</p>
+                  <h3 className="font-display font-bold text-lg text-ink leading-snug">
+                    {activeEpisodeDrawer.title}
+                  </h3>
+                  <p className="text-xs text-ink-dim mt-0.5">
+                    {formatAirDate(activeEpisodeDrawer.airdate)} · {activeEpisodeDrawer.runtime}m
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveEpisodeDrawer(null)}
+                  aria-label="Close episode details"
+                  className="h-8 w-8 rounded-full bg-white/8 flex items-center justify-center text-ink-dim shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {activeEpisodeDrawer.stillUrl && (
+                <div className="aspect-video w-full rounded-2xl overflow-hidden bg-surface border border-white/[0.06]">
+                  <MediaImage
+                    src={activeEpisodeDrawer.stillUrl}
+                    alt={activeEpisodeDrawer.title}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              )}
+
+              {activeEpisodeDrawer.overview && (
+                <p className="text-xs text-ink-dim leading-relaxed">
+                  {activeEpisodeDrawer.overview}
+                </p>
+              )}
+
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-surface border border-white/8">
+                <span className="text-sm font-medium text-ink">Watches logged</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      incrementEpisodeRewatch(
+                        show.id,
+                        activeEpisodeDrawer.season,
+                        activeEpisodeDrawer.number,
+                        -1
+                      )
+                    }
+                    className="w-8 h-8 rounded-full bg-white/8 flex items-center justify-center text-ink"
+                  >
+                    <Minus className="w-4 h-4" />
+                  </button>
+                  <span className="font-display font-bold text-base text-watched tabular-nums min-w-[2.2rem] text-center">
+                    x
+                    {progress?.episodeCounts?.[
+                      getEpisodeKey(activeEpisodeDrawer.season, activeEpisodeDrawer.number)
+                    ] || 0}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      incrementEpisodeRewatch(
+                        show.id,
+                        activeEpisodeDrawer.season,
+                        activeEpisodeDrawer.number,
+                        1
+                      )
+                    }
+                    className="w-8 h-8 rounded-full bg-watched/20 text-watched flex items-center justify-center"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-surface border border-white/8">
+                <span className="text-sm font-medium text-ink">Episode rating</span>
+                <RatingControl
+                  value={
+                    progress?.episodeRatings?.[
+                      getEpisodeKey(activeEpisodeDrawer.season, activeEpisodeDrawer.number)
+                    ]
+                  }
+                  onChange={(r) =>
+                    rateEpisode(show.id, activeEpisodeDrawer.season, activeEpisodeDrawer.number, r)
+                  }
+                  labelPrefix="Rate episode"
+                  allowClear
+                />
+              </div>
+
+              {savedEpNotes.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-faint">
+                    Your {epCode} notes
+                  </p>
+                  {savedEpNotes.slice(0, 3).map((note) => (
+                    <div
+                      key={note.id}
+                      className="rounded-xl bg-surface border border-white/[0.06] px-3 py-2 text-xs text-ink leading-relaxed"
+                    >
+                      {note.text}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!epNoteText.trim()) return;
+                  const epRate =
+                    progress?.episodeRatings?.[
+                      getEpisodeKey(activeEpisodeDrawer.season, activeEpisodeDrawer.number)
+                    ];
+                  addJournalEntry({
+                    domain: 'watch',
+                    mediaKind: 'show',
+                    mediaId: show.id,
+                    mediaTitle: show.title,
+                    mediaPoster: show.posterUrl,
+                    contextLabel: epCode,
+                    text: epNoteText.trim(),
+                    rating: epRate ?? progress?.rating,
+                    mood: progress?.mood,
+                  });
+                  setEpNoteText('');
+                }}
+                className="space-y-2.5"
               >
-                Save episode note
-              </button>
-            </form>
+                <textarea
+                  rows={2}
+                  value={epNoteText}
+                  onChange={(e) => setEpNoteText(e.target.value)}
+                  placeholder={`Write a private note about ${epCode}…`}
+                  className="w-full rounded-xl bg-surface border border-white/10 p-3 text-sm text-ink outline-none focus:border-brand resize-none"
+                />
+                <button
+                  type="submit"
+                  disabled={!epNoteText.trim()}
+                  className="w-full py-2.5 rounded-full bg-brand text-brand-ink text-sm font-semibold disabled:opacity-40"
+                >
+                  Save episode note
+                </button>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Add to Custom List Modal */}
       {listPickerOpen && (

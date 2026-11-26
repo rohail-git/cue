@@ -3544,7 +3544,7 @@ export async function fetchComicSeriesIssues(
     const res = await fetch(
       `/api/comic-series?wiki=${encodeURIComponent(wiki)}&vol=${encodeURIComponent(
         volTitle
-      )}&limit=${Math.max(1, Math.min(75, Math.round(limit)))}&v=2`,
+      )}&limit=${Math.max(1, Math.min(75, Math.round(limit)))}&v=3`,
       { signal: AbortSignal.timeout(10000) }
     );
     if (!res.ok) return { totalIssues: 0, issues: {} };
@@ -4440,19 +4440,59 @@ const MONTH_ABBR = [
   'Dec',
 ];
 
-function cleanFandomStoryTitle(raw: string, seriesNorm: string): string | undefined {
-  if (/^\s*\|/.test(raw)) return undefined;
-  let s = raw
+function cleanFandomIssueText(raw: string): string {
+  return raw
+    .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
+    .replace(/<ref[^/]*\/>/gi, '')
     .replace(/\[\[([^|\]]+)\|([^\]]+)\]\]/g, '$2')
     .replace(/\[\[([^\]]+)/g, '$1')
     .replace(/\]\]/g, '')
     .replace(/\{\{[^}]*\}\}/g, '')
     .replace(/<[^>]+>/g, '')
+    .replace(/'{2,3}/g, '')
+    .replace(/;/g, ', ')
+    .replace(/\s+/g, ' ')
     .trim();
+}
+
+function cleanFandomStoryTitle(raw: string, seriesNorm: string): string | undefined {
+  if (/^\s*\|/.test(raw)) return undefined;
+  let s = cleanFandomIssueText(raw);
   s = s.replace(/^["'“”]+|["'“”]+$/g, '').trim();
   if (!s || s.length < 2 || /^\|/.test(s)) return undefined;
   if (normalizeTitleKey(s) === seriesNorm) return undefined;
   return s;
+}
+
+function extractFandomIssueField(wikitext: string, fieldPattern: string): string | undefined {
+  const m = wikitext.match(
+    new RegExp(`\\|\\s*(?:${fieldPattern})\\s*=[^\\S\\r\\n]*([^\\n|]+)`, 'i')
+  );
+  if (!m?.[1]) return undefined;
+  const cleaned = cleanFandomIssueText(m[1]).replace(/,\s*$/, '').trim();
+  return cleaned.length >= 2 && !/^\|/.test(cleaned) ? cleaned : undefined;
+}
+
+function extractFandomIssueSynopsis(wikitext: string): string | undefined {
+  if (!wikitext) return undefined;
+  let raw = '';
+  const fieldMatch = wikitext.match(
+    /\|\s*(?:Solicit|Synopsis1?)\s*=[^\S\r\n]*([\s\S]*?)(?=\n\s*\||\n\s*\}\})/i
+  );
+  if (fieldMatch?.[1]) {
+    raw = fieldMatch[1];
+  } else {
+    const secMatch = wikitext.match(
+      /==+\s*(?:Solicit|Synopsis[^=]*)\s*==+\s*\n([\s\S]*?)(?=\n==|$)/i
+    );
+    if (secMatch?.[1]) raw = secMatch[1];
+  }
+  const cleaned = cleanFandomIssueText(raw);
+  if (!cleaned || cleaned.length < 25 || /^no synopsis/i.test(cleaned)) return undefined;
+  if (cleaned.length <= 420) return cleaned;
+  const slice = cleaned.slice(0, 420);
+  const lastSpace = slice.lastIndexOf(' ');
+  return `${(lastSpace > 260 ? slice.slice(0, lastSpace) : slice).trim()}…`;
 }
 
 function formatFandomReleaseDate(rawWikitext: string): string | undefined {
@@ -4693,6 +4733,13 @@ export async function fetchComicIssueDetails(
         const releaseDate = rawWikitext ? formatFandomReleaseDate(rawWikitext) : undefined;
         const coverUrl =
           coverAUrlMap.get(coverFilename.toLowerCase()) || page.thumbnail?.source;
+        const writers = rawWikitext
+          ? extractFandomIssueField(rawWikitext, 'Writers?1|Writers')
+          : undefined;
+        const artists = rawWikitext
+          ? extractFandomIssueField(rawWikitext, 'Pencillers?1|Pencillers?|Artists?1|Artists')
+          : undefined;
+        const synopsis = rawWikitext ? extractFandomIssueSynopsis(rawWikitext) : undefined;
 
         result[spec.slot] = {
           number: spec.slot,
@@ -4700,6 +4747,11 @@ export async function fetchComicIssueDetails(
           title: storyTitle,
           releaseDate,
           coverUrl,
+          synopsis,
+          writers,
+          artists,
+          wiki: targetWiki,
+          pageTitle: spec.pageTitle,
         };
       }
     } catch {
@@ -4708,6 +4760,51 @@ export async function fetchComicIssueDetails(
   }
 
   return result;
+}
+
+/** Fetches full wikitext synopsis and credits for a single comic issue page on demand. */
+export async function fetchSingleComicIssueDetail(
+  wiki: 'marvel' | 'dc' | 'imagecomics',
+  pageTitle: string
+): Promise<Partial<ComicIssueMeta>> {
+  if (!pageTitle) return {};
+  try {
+    const res = await fetch(
+      `https://${wiki}.fandom.com/api.php?action=query&titles=${encodeURIComponent(
+        pageTitle
+      )}&prop=revisions&rvprop=content&rvslots=main&redirects=1&format=json&origin=*`,
+      { signal: AbortSignal.timeout(6000) }
+    );
+    if (!res.ok) return {};
+    const json = (await res.json()) as {
+      query?: {
+        pages?: Record<
+          string,
+          {
+            missing?: string;
+            revisions?: Array<{ slots?: { main?: { '*'?: string } }; '*'?: string }>;
+          }
+        >;
+      };
+    };
+    const page = Object.values(json.query?.pages || {}).find((p) => p.missing === undefined);
+    const wikitext =
+      page?.revisions?.[0]?.slots?.main?.['*'] || page?.revisions?.[0]?.['*'] || '';
+    if (!wikitext) return {};
+    const writers = extractFandomIssueField(wikitext, 'Writers?1|Writers');
+    const artists = extractFandomIssueField(
+      wikitext,
+      'Pencillers?1|Pencillers?|Artists?1|Artists'
+    );
+    const synopsis = extractFandomIssueSynopsis(wikitext);
+    return {
+      ...(writers ? { writers } : {}),
+      ...(artists ? { artists } : {}),
+      ...(synopsis ? { synopsis } : {}),
+    };
+  } catch {
+    return {};
+  }
 }
 
 async function hydrateTvMazeShow(item: LiveSearchResult): Promise<Show> {
