@@ -2,6 +2,11 @@ import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { fetchTrendingGamesPayload } from './api/trending-games.ts'
+import {
+  type ComicWikiSlug,
+  fetchComicSeriesIssuesPayload,
+  searchComicSeriesPayload,
+} from './api/comic-series.ts'
 
 function imdbResolveDevPlugin(): Plugin {
   return {
@@ -147,6 +152,59 @@ function trendingGamesDevPlugin(): Plugin {
   };
 }
 
+function comicSeriesDevPlugin(): Plugin {
+  return {
+    name: 'cue-comic-series-dev',
+    configureServer(server) {
+      server.middlewares.use('/api/comic-series', async (req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== 'GET') {
+          next();
+          return;
+        }
+        try {
+          const url = new URL(req.url || '/', 'http://localhost');
+          const wiki = url.searchParams.get('wiki') as ComicWikiSlug | null;
+          const vol = url.searchParams.get('vol');
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 200;
+          if (
+            wiki &&
+            (wiki === 'marvel' || wiki === 'dc' || wiki === 'imagecomics') &&
+            vol
+          ) {
+            const limitParam = Number(url.searchParams.get('limit') || '60');
+            const payload = await fetchComicSeriesIssuesPayload(
+              wiki,
+              vol,
+              Number.isFinite(limitParam) ? limitParam : 60
+            );
+            res.end(JSON.stringify(payload));
+            return;
+          }
+          const q = (url.searchParams.get('q') || '').trim();
+          const payload = await searchComicSeriesPayload(q);
+          res.end(JSON.stringify(payload));
+        } catch {
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 200;
+          res.end(JSON.stringify({ items: [] }));
+        }
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss(), imdbResolveDevPlugin(), trendingGamesDevPlugin()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    imdbResolveDevPlugin(),
+    trendingGamesDevPlugin(),
+    comicSeriesDevPlugin(),
+  ],
 })

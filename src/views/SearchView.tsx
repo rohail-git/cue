@@ -227,6 +227,7 @@ export function SearchView() {
       title: string;
       year: number;
       badge: string;
+      comicKind?: 'series' | 'collection';
       genres: string[];
       rating: number;
       posterUrl: string;
@@ -284,6 +285,7 @@ export function SearchView() {
         if (filter !== 'all' && r.format !== filter) continue;
         if (
           q &&
+          !matchesQ(`${r.title} ${r.year} ${r.comicRunLabel || ''}`) &&
           !matchesQ(r.title) &&
           !matchesQ(r.creator) &&
           !r.genres.some((g) => g.toLowerCase().includes(q))
@@ -297,6 +299,7 @@ export function SearchView() {
           title: r.title,
           year: r.year,
           badge: r.format,
+          comicKind: r.comicKind,
           genres: r.genres,
           rating: r.rating,
           posterUrl: resolveComicEditionCover(
@@ -344,7 +347,11 @@ export function SearchView() {
     const localWorkKeys = new Set(
       localMatches.map((m) =>
         m.domain === 'read'
-          ? `read:${canonicalReadWorkKey(m.title)}`
+          ? m.comicKind === 'series'
+            ? `read:series:${canonicalReadWorkKey(m.title)}:${m.year}`
+            : m.mediaType === 'comic'
+              ? `read:collection:${canonicalReadWorkKey(m.title)}`
+              : `read:${canonicalReadWorkKey(m.title)}`
           : m.kind === 'show'
             ? `watch:show:${normalizeTitleKey(m.title)}`
             : `${m.domain}:${m.kind}:${normalizeTitleKey(m.title)}`
@@ -358,7 +365,11 @@ export function SearchView() {
       if (localIds.has(r.id)) continue;
       const key =
         r.domain === 'read'
-          ? `read:${canonicalReadWorkKey(r.title)}`
+          ? r.comicKind === 'series'
+            ? `read:series:${canonicalReadWorkKey(r.title)}:${r.year}`
+            : r.mediaType === 'comic'
+              ? `read:collection:${canonicalReadWorkKey(r.title)}`
+              : `read:${canonicalReadWorkKey(r.title)}`
           : r.kind === 'show'
             ? `watch:show:${normalizeTitleKey(r.title)}`
             : `${r.domain}:${r.kind}:${normalizeTitleKey(r.title)}`;
@@ -766,11 +777,23 @@ export function SearchView() {
                           >
                             {item.mediaType === 'tv' ? 'Show' : item.mediaType}
                           </span>
+                          {item.comicKind === 'series' ? (
+                            <span className="text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-[2px] rounded border border-read/35 bg-read/10 text-read shrink-0 leading-none">
+                              Series
+                            </span>
+                          ) : item.mediaType === 'comic' && item.comicKind === 'collection' ? (
+                            <span className="text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-[2px] rounded bg-white/[0.06] text-ink-dim shrink-0 leading-none">
+                              Edition
+                            </span>
+                          ) : null}
                           <p className="text-xs text-ink-dim truncate">
-                            {item.year} ·{' '}
-                            {item.subtitle ||
-                              cleanDisplayGenres(item.genres).slice(0, 2).join(' · ') ||
-                              item.mediaType}
+                            {item.comicKind === 'series' && item.subtitle
+                              ? item.subtitle
+                              : `${item.year} · ${
+                                  item.subtitle ||
+                                  cleanDisplayGenres(item.genres).slice(0, 2).join(' · ') ||
+                                  item.mediaType
+                                }`}
                           </p>
                         </div>
                         {item.overview && (

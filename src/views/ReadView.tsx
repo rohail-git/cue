@@ -146,6 +146,16 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     const displayCover = resolveComicEditionCover(item, prog?.edition, prog);
     const editionLabel =
       item.format === 'comic' ? getComicEditionLabel(prog?.edition, item, prog) : '';
+    const nextIssueLabel =
+      item.format === 'comic' && item.issueDetails?.[stats.nextUnit]?.issueLabel
+        ? `Issue ${item.issueDetails[stats.nextUnit].issueLabel}`
+        : stats.nextUnitShort;
+    const secondaryMeta = [
+      item.comicPublisher || item.creator,
+      editionLabel || item.comicRunLabel || null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
 
     if (isPosterLayout) {
       return (
@@ -208,9 +218,9 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
         primaryLine={
           stats.isFinished
             ? `${stats.total}/${stats.total} ${stats.unitLabel}`
-            : `${stats.nextUnitShort} · ${stats.current}/${stats.total} ${stats.unitLabel}`
+            : `${nextIssueLabel} · ${stats.current}/${stats.total} ${stats.unitLabel}`
         }
-        secondaryLine={editionLabel ? `${item.creator} · ${editionLabel}` : item.creator}
+        secondaryLine={secondaryMeta}
         progressRatio={stats.ratio}
         showProgress={state.settings.showPosterProgress && stats.current > 0}
         isFlashing={flash}

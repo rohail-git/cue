@@ -25,6 +25,7 @@ import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../compone
 import {
   fetchComicEditionMetadata,
   fetchComicIssueDetails,
+  fetchComicSeriesIssues,
   formatDisplayTitle,
 } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
@@ -103,7 +104,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const progress = state.readProgress[readId];
 
   useEffect(() => {
-    if (!item || item.format !== 'comic') return;
+    if (!item || item.format !== 'comic' || item.comicKind === 'series') return;
     if (fetchedCoversRef.current.has(item.id)) return;
     const uniqueCoverCount = item.editionCovers ? new Set(Object.values(item.editionCovers)).size : 0;
     const needsCounts = !item.editionIssueCounts;
@@ -154,15 +155,38 @@ export function ReadDetailView({ readId }: { readId: string }) {
     if (fetchedIssueKeyRef.current.has(cacheKey)) return;
 
     let cancelled = false;
-    fetchComicIssueDetails(item.title, total, item.creator, progress?.editionId).then(
-      (details) => {
+    if (
+      item.comicSeriesWiki &&
+      item.comicSeriesVolTitle &&
+      (!progress?.edition || progress.edition === 'digital')
+    ) {
+      fetchComicSeriesIssues(
+        item.comicSeriesWiki,
+        item.comicSeriesVolTitle,
+        Math.max(60, total)
+      ).then(({ issues, totalIssues }) => {
         if (cancelled) return;
         fetchedIssueKeyRef.current.add(cacheKey);
-        if (Object.keys(details).length > 0) {
-          updateReadIssueDetails(item.id, details, detailsKey);
+        if (Object.keys(issues).length > 0) {
+          updateReadIssueDetails(
+            item.id,
+            issues,
+            detailsKey,
+            totalIssues > 0 ? totalIssues : undefined
+          );
         }
-      }
-    );
+      });
+    } else {
+      fetchComicIssueDetails(item.title, total, item.creator, progress?.editionId).then(
+        (details) => {
+          if (cancelled) return;
+          fetchedIssueKeyRef.current.add(cacheKey);
+          if (Object.keys(details).length > 0) {
+            updateReadIssueDetails(item.id, details, detailsKey);
+          }
+        }
+      );
+    }
     return () => {
       cancelled = true;
     };
@@ -341,6 +365,11 @@ export function ReadDetailView({ readId }: { readId: string }) {
               <span className="inline-block text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-brand/20 text-brand">
                 {formatLabel}
               </span>
+              {item.comicKind === 'series' && (
+                <span className="inline-block text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-read/35 bg-read/12 text-read">
+                  Series
+                </span>
+              )}
               {editionLabel && (
                 <span className="inline-block text-[10px] font-semibold tracking-wide px-2.5 py-0.5 rounded-full bg-surface-raised border border-white/10 text-ink-dim">
                   {editionLabel}
@@ -351,7 +380,9 @@ export function ReadDetailView({ readId }: { readId: string }) {
               {item.title}
             </h1>
             <p className="text-sm text-ink-dim mt-1">
-              {item.creator} · {item.year}
+              {[item.comicPublisher || item.creator, item.comicRunLabel || item.year]
+                .filter(Boolean)
+                .join(' · ')}
             </p>
           </div>
         </div>
@@ -411,10 +442,10 @@ export function ReadDetailView({ readId }: { readId: string }) {
               <section className="pb-4 border-b border-white/[0.08]">
                 <p className="text-[13px] text-ink-dim tabular-nums">
                   {[
-                    formatLabel,
+                    item.comicKind === 'series' ? `${formatLabel} Series` : formatLabel,
                     editionLabel || null,
-                    item.year,
-                    item.creator,
+                    item.comicRunLabel || item.year,
+                    item.comicPublisher || item.creator,
                     `${stats.total} ${stats.unitLabel}`,
                   ]
                     .filter(Boolean)
@@ -792,7 +823,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
                   </div>
                 </div>
                 <span className="px-3 py-1.5 rounded-full bg-surface-raised border border-white/10 text-xs font-semibold text-ink inline-flex items-center gap-1 shrink-0">
-                  <span>Browse editions</span>
+                  <span>{item.comicKind === 'series' ? 'Volumes & editions' : 'Browse editions'}</span>
                   <ChevronRight className="w-3.5 h-3.5 text-read" />
                 </span>
               </button>

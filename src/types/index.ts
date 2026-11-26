@@ -125,6 +125,11 @@ export interface ReadItem {
   issueDetails?: Record<number, ComicIssueMeta>;
   issueDetailsKey?: string;
   baseTotalUnits?: number;
+  comicKind?: 'series' | 'collection';
+  comicRunLabel?: string;
+  comicPublisher?: string;
+  comicSeriesWiki?: 'marvel' | 'dc' | 'imagecomics';
+  comicSeriesVolTitle?: string;
 }
 
 export type GameChapterUnit = 'chapters' | 'acts' | 'missions' | 'milestones';

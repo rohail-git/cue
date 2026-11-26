@@ -250,7 +250,8 @@ interface CueContextValue {
   updateReadIssueDetails: (
     readId: string,
     issueDetails: Record<number, ComicIssueMeta>,
-    detailsKey: string
+    detailsKey: string,
+    resolvedTotalUnits?: number
   ) => void;
   updateReadEditionCovers: (
     readId: string,
@@ -2215,16 +2216,33 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   );
 
   const updateReadIssueDetails = useCallback(
-    (readId: string, issueDetails: Record<number, ComicIssueMeta>, detailsKey: string) => {
+    (
+      readId: string,
+      issueDetails: Record<number, ComicIssueMeta>,
+      detailsKey: string,
+      resolvedTotalUnits?: number
+    ) => {
       commitState((prev) => {
         const item = prev.readItems[readId];
         if (!item) return prev;
+        const prog = prev.readProgress[readId];
+        const isDefaultSeriesEdition =
+          item.comicKind === 'series' && (!prog?.edition || prog.edition === 'digital');
+        const nextTotal =
+          isDefaultSeriesEdition && resolvedTotalUnits && resolvedTotalUnits > item.totalUnits
+            ? resolvedTotalUnits
+            : item.totalUnits;
         return {
           ...prev,
           readItems: {
             ...prev.readItems,
             [readId]: {
               ...item,
+              totalUnits: nextTotal,
+              baseTotalUnits:
+                isDefaultSeriesEdition && nextTotal > (item.baseTotalUnits || 0)
+                  ? nextTotal
+                  : item.baseTotalUnits,
               issueDetails,
               issueDetailsKey: detailsKey,
             },

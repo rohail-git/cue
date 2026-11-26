@@ -174,6 +174,16 @@ export function QueueView() {
         const displayCover = resolveComicEditionCover(item, prog.edition, prog);
         const editionLabel =
           item.format === 'comic' ? getComicEditionLabel(prog.edition, item, prog) : '';
+        const nextIssueLabel =
+          item.format === 'comic' && item.issueDetails?.[st.nextUnit]?.issueLabel
+            ? `Issue ${item.issueDetails[st.nextUnit].issueLabel}`
+            : st.nextUnitShort;
+        const secondaryMeta = [
+          item.comicPublisher || item.creator,
+          editionLabel || item.comicRunLabel || null,
+        ]
+          .filter(Boolean)
+          .join(' · ');
         const formatBadge =
           item.format === 'manga' ? 'Manga' : item.format === 'comic' ? 'Comic' : 'Novel';
         const row: UnifiedQueueRow = {
@@ -185,8 +195,8 @@ export function QueueView() {
           badgeLabel: formatBadge,
           badgeClassName: 'bg-read/15 text-read',
           posterUrl: displayCover,
-          primaryLine: `${st.nextUnitShort} · ${st.current}/${st.total} ${st.unitLabel}`,
-          secondaryLine: editionLabel ? `${item.creator} · ${editionLabel}` : item.creator,
+          primaryLine: `${nextIssueLabel} · ${st.current}/${st.total} ${st.unitLabel}`,
+          secondaryLine: secondaryMeta,
           progressRatio: st.ratio,
           actionContent: (
             <span className="inline-flex items-center text-xs font-bold tabular-nums px-0.5">

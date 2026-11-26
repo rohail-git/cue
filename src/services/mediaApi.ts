@@ -50,7 +50,15 @@ export interface LiveSearchResult {
   domain: 'watch' | 'read' | 'play';
   kind: 'show' | 'movie' | 'read' | 'game';
   id: string;
-  source: 'tvmaze' | 'itunes' | 'tmdb' | 'openlibrary' | 'anilist' | 'cheapshark' | 'wikipedia';
+  source:
+    | 'tvmaze'
+    | 'itunes'
+    | 'tmdb'
+    | 'openlibrary'
+    | 'anilist'
+    | 'cheapshark'
+    | 'wikipedia'
+    | 'comicseries';
   externalId: number | string;
   title: string;
   subtitle?: string;
@@ -64,6 +72,11 @@ export interface LiveSearchResult {
   director?: string;
   runtime?: number;
   totalUnits?: number;
+  comicKind?: 'series' | 'collection';
+  comicRunLabel?: string;
+  comicPublisher?: string;
+  comicSeriesWiki?: 'marvel' | 'dc' | 'imagecomics';
+  comicSeriesVolTitle?: string;
   editionCovers?: Partial<Record<ComicEditionId, string>>;
   editionIssueCounts?: Partial<Record<ComicEditionId, number>>;
   editionVariants?: Partial<Record<GeneralizedComicEditionId, string[]>>;
@@ -236,11 +249,35 @@ const COMIC_WORK_HINTS = [
   'frank miller',
 ];
 
+function extractQueryYear(query: string): { baseQuery: string; targetYear?: number } {
+  const trimmed = query.replace(/\s+/g, ' ').trim();
+  const matches = [...trimmed.matchAll(/\b(19\d{2}|20\d{2})\b/g)];
+  if (matches.length > 0) {
+    const last = matches[matches.length - 1];
+    const without = trimmed.replace(last[0], '').replace(/\s+/g, ' ').trim();
+    if (without.length >= 2) {
+      return { baseQuery: without, targetYear: Number(last[1]) };
+    }
+  }
+  return { baseQuery: trimmed };
+}
+
+function comicRunSpansYear(runLabel: string | undefined, targetYear: number): boolean {
+  if (!runLabel) return false;
+  const years = [...runLabel.matchAll(/\b(19\d{2}|20\d{2})\b/g)].map((m) => Number(m[1]));
+  if (years.length === 0) return false;
+  const start = years[0];
+  const end = /present/i.test(runLabel) ? 9999 : (years[1] ?? start);
+  return targetYear >= start && targetYear <= end;
+}
+
 function scoreResult(item: LiveSearchResult, query: string): number {
-  const qNorm = normalizeTitleKey(query);
+  const { baseQuery, targetYear } = extractQueryYear(query);
+  const effectiveQuery = baseQuery || query;
+  const qNorm = normalizeTitleKey(effectiveQuery);
   const tNorm = normalizeTitleKey(item.title);
   const qWords = qNorm.split(' ').filter(Boolean);
-  const queryIsLatin = !hasNonLatinScript(query);
+  const queryIsLatin = !hasNonLatinScript(effectiveQuery);
   const escapedQ = qNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const hasWholePhraseMatch =
     Boolean(escapedQ) && new RegExp(`(?:^|\\s)${escapedQ}(?:$|\\s)`).test(tNorm);
@@ -263,6 +300,13 @@ function scoreResult(item: LiveSearchResult, query: string): number {
   }
 
   let score = relScore + computePopularityScore(item) * 1.15;
+
+  if (targetYear) {
+    if (item.year === targetYear) score += 65;
+    else if (item.comicKind === 'series' && comicRunSpansYear(item.comicRunLabel, targetYear)) {
+      score += 28;
+    }
+  }
 
   if (queryIsLatin) {
     if (hasNonLatinScript(item.title)) score -= 80;
@@ -323,7 +367,11 @@ function rankAndDedupeLiveResults(results: LiveSearchResult[], query: string): L
 
     const workKey =
       item.domain === 'read'
-        ? `read:${canonicalReadWorkKey(item.title)}`
+        ? item.comicKind === 'series'
+          ? `read:series:${canonicalReadWorkKey(item.title)}:${item.year}`
+          : item.mediaType === 'comic'
+            ? `read:collection:${canonicalReadWorkKey(item.title)}`
+            : `read:${canonicalReadWorkKey(item.title)}`
         : item.kind === 'show'
           ? `watch:show:${normalizeTitleKey(item.title)}`
           : `${item.domain}:${item.kind}:${normalizeTitleKey(item.title)}`;
@@ -379,11 +427,15 @@ export async function searchLiveMedia(
   }
 
   if (wantsRead) {
-    if (mediaFilter === 'all' || mediaFilter === 'comic' || mediaFilter === 'novel') {
-      tasks.push(searchOpenLibrary(trimmed));
+    const { baseQuery } = extractQueryYear(trimmed);
+    if (mediaFilter === 'all' || mediaFilter === 'comic') {
+      tasks.push(searchComicSeries(trimmed));
+      tasks.push(searchOpenLibrary(baseQuery || trimmed));
+    } else if (mediaFilter === 'novel') {
+      tasks.push(searchOpenLibrary(baseQuery || trimmed));
     }
     if (mediaFilter === 'all' || mediaFilter === 'manga' || mediaFilter === 'novel') {
-      tasks.push(searchAniListManga(trimmed));
+      tasks.push(searchAniListManga(baseQuery || trimmed));
     }
   }
 
@@ -1688,6 +1740,7 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
         subtitle: authorName,
         year: earliestYear,
         mediaType: isComic ? ('comic' as const) : ('novel' as const),
+        comicKind: isComic ? ('collection' as const) : undefined,
         genres: (primary.subject || []).slice(0, 2).length
           ? (primary.subject || []).slice(0, 2)
           : [isComic ? 'Comics' : 'Novel'],
@@ -1937,14 +1990,66 @@ export async function fetchComicEditionsCatalog(
   try {
     const fields =
       'key,title,subtitle,author_name,first_publish_year,cover_i,number_of_pages_median,isbn,publisher';
-    const [mainRes, compactRes] = await Promise.allSettled([
+    const [mainRes, compactRes, appleRes] = await Promise.allSettled([
       fetch(
         `https://openlibrary.org/search.json?q=${encodeURIComponent(mainQ)}&language=eng&limit=25&fields=${fields}`
       ),
       fetch(
         `https://openlibrary.org/search.json?q=${encodeURIComponent(`${cleanQuery} compact`)}&language=eng&limit=8&fields=${fields}`
       ),
+      fetch(
+        `https://itunes.apple.com/search?term=${encodeURIComponent(cleanQuery)}&media=ebook&limit=12`
+      ),
     ]);
+
+    if (appleRes.status === 'fulfilled' && appleRes.value.ok) {
+      try {
+        const itJson = (await appleRes.value.json()) as {
+          results?: Array<{
+            trackId?: number;
+            trackName?: string;
+            artistName?: string;
+            releaseDate?: string;
+            artworkUrl100?: string;
+            primaryGenreName?: string;
+            genres?: string[];
+          }>;
+        };
+        for (const book of itJson.results || []) {
+          const bTitle = (book.trackName || '').trim();
+          const genresAll = [book.primaryGenreName || '', ...(book.genres || [])].join(' ');
+          if (!bTitle || !/comic|graphic novel/i.test(genresAll)) continue;
+          const baseKey = canonicalReadWorkKey(bTitle);
+          if (baseKey !== targetKey && !normalizeTitleKey(bTitle).includes(targetKey)) continue;
+          if (!/\b(vol\.?|volume|omnibus|compact|deluxe|absolute|tpb|hardcover|book\s+\d+)\b/i.test(bTitle)) {
+            continue;
+          }
+          const pubYear = book.releaseDate ? Number(book.releaseDate.slice(0, 4)) : undefined;
+          const classified = classifyDetailedComicEdition(
+            bTitle,
+            undefined,
+            pubYear,
+            pubYear || 2020,
+            isDc
+          );
+          const coverUrl = book.artworkUrl100 ? upscaleAppleArtwork(book.artworkUrl100) : undefined;
+          liveRecords.push({
+            id: `itunes-tpb-${book.trackId || bTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+            format: classified.format,
+            category: classified.category,
+            title: formatDisplayTitle(bTitle),
+            shortLabel: buildShortEditionLabel(classified.format, bTitle, undefined, isDc),
+            subtitle: book.artistName || undefined,
+            issueCount: classified.format === 'omnibus' ? 30 : 6,
+            coverUrl,
+            year: pubYear,
+            source: 'openlibrary',
+          });
+        }
+      } catch {
+        // ignore iTunes ebook parse errors
+      }
+    }
 
     const rawDocs: OpenLibraryDoc[] = [];
     for (const r of [mainRes, compactRes]) {
@@ -2185,6 +2290,89 @@ export async function fetchComicEditionsCatalog(
     );
   }
   return combined;
+}
+
+async function searchComicSeries(query: string): Promise<LiveSearchResult[]> {
+  try {
+    const res = await fetch(`/api/comic-series?q=${encodeURIComponent(query)}`, {
+      signal: AbortSignal.timeout(9000),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      items?: Array<{
+        id: string;
+        wiki: 'marvel' | 'dc' | 'imagecomics';
+        volTitle: string;
+        volNumber: number;
+        title: string;
+        publisher: string;
+        startYear: number;
+        isOngoing: boolean;
+        runLabel: string;
+        issueCount: number;
+        coverUrl: string;
+        creator: string;
+        genres: string[];
+        overview: string;
+      }>;
+    };
+    return (data.items || [])
+      .filter((it) => it.title && it.coverUrl)
+      .map((it) => ({
+        domain: 'read' as const,
+        kind: 'read' as const,
+        id: it.id,
+        source: 'comicseries' as const,
+        externalId: it.volTitle,
+        title: it.title,
+        subtitle: `${it.runLabel} · ${it.publisher} · ${it.issueCount} ${
+          it.issueCount === 1 ? 'issue' : 'issues'
+        }`,
+        year: it.startYear,
+        mediaType: 'comic' as const,
+        comicKind: 'series' as const,
+        comicRunLabel: it.runLabel,
+        comicPublisher: it.publisher,
+        comicSeriesWiki: it.wiki,
+        comicSeriesVolTitle: it.volTitle,
+        genres: it.genres.length > 0 ? it.genres : ['Superhero'],
+        rating: 4.7,
+        posterUrl: it.coverUrl,
+        backdropUrl: it.coverUrl,
+        overview: it.overview,
+        director: it.creator || it.publisher,
+        totalUnits: it.issueCount,
+        popularityScore: it.isOngoing ? 90 : 82,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchComicSeriesIssues(
+  wiki: 'marvel' | 'dc' | 'imagecomics',
+  volTitle: string,
+  limit = 60
+): Promise<{ totalIssues: number; issues: Record<number, ComicIssueMeta> }> {
+  try {
+    const res = await fetch(
+      `/api/comic-series?wiki=${encodeURIComponent(wiki)}&vol=${encodeURIComponent(
+        volTitle
+      )}&limit=${Math.max(1, Math.min(75, Math.round(limit)))}`,
+      { signal: AbortSignal.timeout(10000) }
+    );
+    if (!res.ok) return { totalIssues: 0, issues: {} };
+    const data = (await res.json()) as {
+      totalIssues?: number;
+      issues?: Record<number, ComicIssueMeta>;
+    };
+    return {
+      totalIssues: data.totalIssues || Object.keys(data.issues || {}).length,
+      issues: data.issues || {},
+    };
+  } catch {
+    return { totalIssues: 0, issues: {} };
+  }
 }
 
 async function searchAniListManga(query: string): Promise<LiveSearchResult[]> {
@@ -3489,6 +3677,11 @@ export function hydrateLiveReadItem(item: LiveSearchResult): ReadItem {
     editionCovers: item.editionCovers,
     editionIssueCounts: item.editionIssueCounts,
     editionVariants: item.editionVariants,
+    comicKind: item.comicKind,
+    comicRunLabel: item.comicRunLabel,
+    comicPublisher: item.comicPublisher,
+    comicSeriesWiki: item.comicSeriesWiki,
+    comicSeriesVolTitle: item.comicSeriesVolTitle,
   };
 }
 
