@@ -374,7 +374,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
   return (
     <div className="min-h-dvh pb-20 bg-background">
       {/* Flat Dark Hero (no gradient) */}
-      <div className="relative h-[270px] sm:h-[340px] md:h-[380px] w-full overflow-hidden border-b border-white/[0.06]">
+      <div className="relative h-[270px] sm:h-[340px] w-full overflow-hidden border-b border-white/[0.06]">
         <button
           type="button"
           onClick={() => setLightboxOpen(true)}
@@ -384,9 +384,9 @@ export function ShowDetailView({ showId }: { showId: string }) {
           <MediaImage
             src={show.backdropUrl || show.posterUrl}
             alt={show.title}
-            className="w-full h-full object-cover object-center opacity-55"
+            className="w-full h-full object-cover object-center blur-[3px] scale-105 opacity-30"
           />
-          <div className="absolute inset-0 bg-[#131519]/50" />
+          <div className="absolute inset-0 bg-[#131519]/65" />
         </button>
 
         <button
@@ -475,41 +475,32 @@ export function ShowDetailView({ showId }: { showId: string }) {
           )}
         </div>
 
-        {detailMode === 'simple' ? (
-          <div className="pointer-events-none absolute bottom-5 inset-x-0 px-6 max-w-3xl mx-auto text-center">
-            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-ink-dim mb-1">
-              {show.mediaType === 'anime' ? 'Anime' : 'Series'} · {show.year}
-            </p>
+        <div className="pointer-events-none absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto flex items-end gap-4">
+          <button
+            type="button"
+            onClick={() => setLightboxOpen(true)}
+            aria-label="View cover fullscreen"
+            className="pointer-events-auto group relative w-24 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface cursor-zoom-in"
+          >
+            <MediaImage src={show.posterUrl} alt={show.title} className="w-full h-full object-cover" />
+            <span className="absolute bottom-1.5 right-1.5 h-6 w-6 rounded-full bg-black/70 border border-white/15 flex items-center justify-center text-white opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+              <Maximize2 className="w-3 h-3" />
+            </span>
+          </button>
+          <div className="min-w-0 pb-1">
+            <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
+              <span className="inline-block text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-brand/20 text-brand">
+                {show.mediaType === 'anime' ? 'Anime' : 'Series'}
+              </span>
+            </div>
             <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-ink tracking-tight leading-tight">
               {show.title}
             </h1>
-            <span className="pointer-events-auto inline-flex items-center justify-center mt-2 h-6 w-6 rounded-full bg-black/55 border border-white/15 text-ink-dim">
-              <Maximize2 className="w-3 h-3" />
-            </span>
+            <p className="text-sm text-ink-dim mt-1">
+              {[show.network, show.year].filter(Boolean).join(' · ')}
+            </p>
           </div>
-        ) : (
-          <div className="pointer-events-none absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto flex items-end gap-4">
-            <button
-              type="button"
-              onClick={() => setLightboxOpen(true)}
-              aria-label="View cover fullscreen"
-              className="pointer-events-auto group relative w-20 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface cursor-zoom-in"
-            >
-              <MediaImage src={show.posterUrl} alt={show.title} className="w-full h-full object-cover" />
-              <span className="absolute bottom-1.5 right-1.5 h-6 w-6 rounded-full bg-black/70 border border-white/15 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                <Maximize2 className="w-3 h-3" />
-              </span>
-            </button>
-            <div className="min-w-0 pb-1">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-brand mb-1">
-                {show.mediaType === 'anime' ? 'Anime' : 'Series'} · {show.year}
-              </p>
-              <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-ink tracking-tight leading-tight">
-                {show.title}
-              </h1>
-            </div>
-          </div>
-        )}
+        </div>
       </div>
 
       {/* Main Content */}

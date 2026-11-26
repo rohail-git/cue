@@ -3,7 +3,6 @@ import {
   Bookmark,
   Check,
   ChevronLeft,
-  Clock,
   ListPlus,
   Maximize2,
   Minus,
@@ -92,9 +91,9 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
           <MediaImage
             src={movie.backdropUrl || movie.posterUrl}
             alt={movie.title}
-            className="w-full h-full object-cover object-center blur-[2px] scale-105 opacity-40"
+            className="w-full h-full object-cover object-center blur-[3px] scale-105 opacity-30"
           />
-          <div className="absolute inset-0 bg-[#131519]/60" />
+          <div className="absolute inset-0 bg-[#131519]/65" />
         </button>
 
         <button
@@ -115,52 +114,32 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
           <ListPlus className="w-4 h-4" />
         </button>
 
-        {detailMode === 'simple' ? (
-          <div className="pointer-events-none absolute bottom-5 inset-x-0 px-6 max-w-3xl mx-auto text-center">
-            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-ink-dim mb-1">
-              Movie · {movie.year}
-            </p>
+        <div className="pointer-events-none absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto flex items-end gap-4">
+          <button
+            type="button"
+            onClick={() => setLightboxOpen(true)}
+            aria-label="View cover fullscreen"
+            className="pointer-events-auto group relative w-24 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface cursor-zoom-in"
+          >
+            <MediaImage src={movie.posterUrl} alt={movie.title} className="w-full h-full object-cover" />
+            <span className="absolute bottom-1.5 right-1.5 h-6 w-6 rounded-full bg-black/70 border border-white/15 flex items-center justify-center text-white opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+              <Maximize2 className="w-3 h-3" />
+            </span>
+          </button>
+          <div className="min-w-0 pb-1">
+            <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
+              <span className="inline-block text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-brand/20 text-brand">
+                Movie
+              </span>
+            </div>
             <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-ink tracking-tight leading-tight">
               {movie.title}
             </h1>
-            <span className="inline-flex items-center justify-center mt-2 h-6 w-6 rounded-full bg-black/55 border border-white/15 text-ink-dim">
-              <Maximize2 className="w-3 h-3" />
-            </span>
+            <p className="text-sm text-ink-dim mt-1">
+              {[movie.director, movie.year].filter(Boolean).join(' · ')}
+            </p>
           </div>
-        ) : (
-          <div className="pointer-events-none absolute bottom-5 inset-x-0 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto flex items-end gap-4">
-            <button
-              type="button"
-              onClick={() => setLightboxOpen(true)}
-              aria-label="View cover fullscreen"
-              className="pointer-events-auto group relative w-24 sm:w-28 aspect-[2/3] rounded-2xl overflow-hidden border border-white/15 shadow-2xl shrink-0 bg-surface cursor-zoom-in"
-            >
-              <MediaImage src={movie.posterUrl} alt={movie.title} className="w-full h-full object-cover" />
-              <span className="absolute bottom-1.5 right-1.5 h-6 w-6 rounded-full bg-black/70 border border-white/15 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                <Maximize2 className="w-3 h-3" />
-              </span>
-            </button>
-            <div className="min-w-0 pb-1">
-              <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-ink tracking-tight leading-tight">
-                {movie.title}
-              </h1>
-              <p className="text-sm text-ink-dim mt-1 flex items-center gap-2 flex-wrap">
-                <span>{movie.year}</span>
-                <span>·</span>
-                <span className="inline-flex items-center gap-1">
-                  <Clock className="w-3.5 h-3.5" />
-                  {movie.runtime}m
-                </span>
-                <span>·</span>
-                <span className="inline-flex items-center gap-1 text-brand">
-                  <Star className="w-3.5 h-3.5 fill-brand" />
-                  {movie.rating.toFixed(1)}
-                </span>
-              </p>
-              <p className="text-xs text-ink-faint mt-1">Directed by {movie.director}</p>
-            </div>
-          </div>
-        )}
+        </div>
       </div>
 
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 pt-3.5">
