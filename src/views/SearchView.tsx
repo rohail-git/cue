@@ -237,7 +237,7 @@ export function SearchView() {
     if (filter === 'all' || filter === 'tv' || filter === 'anime') {
       for (const id of state.showOrder) {
         const s = state.shows[id];
-        if (!s) continue;
+        if (!s || !state.showProgress[s.id]?.bookmarked) continue;
         if (filter === 'tv' && s.mediaType !== 'tv') continue;
         if (filter === 'anime' && s.mediaType !== 'anime') continue;
         if (q && !matchesQ(s.title) && !s.genres.some((g) => g.toLowerCase().includes(q))) continue;
@@ -252,7 +252,7 @@ export function SearchView() {
           genres: s.genres,
           rating: s.rating,
           posterUrl: s.posterUrl,
-          inLibrary: Boolean(state.showProgress[s.id]?.bookmarked),
+          inLibrary: true,
         });
       }
     }
@@ -260,7 +260,7 @@ export function SearchView() {
     if (filter === 'all' || filter === 'movie') {
       for (const id of state.movieOrder) {
         const m = state.movies[id];
-        if (!m) continue;
+        if (!m || !state.movieProgress[m.id]) continue;
         if (q && !matchesQ(m.title) && !m.genres.some((g) => g.toLowerCase().includes(q))) continue;
         items.push({
           domain: 'watch',
@@ -273,7 +273,7 @@ export function SearchView() {
           genres: m.genres,
           rating: m.rating,
           posterUrl: m.posterUrl,
-          inLibrary: Boolean(state.movieProgress[m.id]),
+          inLibrary: true,
         });
       }
     }
@@ -281,7 +281,7 @@ export function SearchView() {
     if (filter === 'all' || filter === 'manga' || filter === 'comic' || filter === 'novel') {
       for (const id of state.readOrder) {
         const r = state.readItems[id];
-        if (!r) continue;
+        if (!r || !state.readProgress[r.id]?.bookmarked) continue;
         if (filter !== 'all' && r.format !== filter) continue;
         if (
           q &&
@@ -307,7 +307,7 @@ export function SearchView() {
             state.readProgress[r.id]?.edition,
             state.readProgress[r.id]
           ),
-          inLibrary: Boolean(state.readProgress[r.id]?.bookmarked),
+          inLibrary: true,
         });
       }
     }
@@ -315,7 +315,7 @@ export function SearchView() {
     if (filter === 'all' || filter === 'game') {
       for (const id of state.gameOrder) {
         const g = state.games[id];
-        if (!g) continue;
+        if (!g || !state.gameProgress[g.id]?.bookmarked) continue;
         if (
           q &&
           !matchesQ(g.title) &&
@@ -334,7 +334,7 @@ export function SearchView() {
           genres: g.genres,
           rating: g.rating,
           posterUrl: g.coverUrl,
-          inLibrary: Boolean(state.gameProgress[g.id]?.bookmarked),
+          inLibrary: true,
         });
       }
     }
@@ -431,16 +431,15 @@ export function SearchView() {
     </div>
   );
 
-  const isLiveItemInStore = (item: LiveSearchResult): boolean =>
-    Boolean(
-      state.shows[item.id] ||
-        state.movies[item.id] ||
-        state.readItems[item.id] ||
-        state.games[item.id]
-    );
+  const isLiveItemInLibrary = (item: LiveSearchResult): boolean => {
+    if (item.kind === 'show') return Boolean(state.showProgress[item.id]?.bookmarked);
+    if (item.kind === 'movie') return Boolean(state.movieProgress[item.id]);
+    if (item.kind === 'read') return Boolean(state.readProgress[item.id]?.bookmarked);
+    return Boolean(state.gameProgress[item.id]?.bookmarked);
+  };
 
   const renderTrendingPosterCard = (item: LiveSearchResult) => {
-    const inStore = isLiveItemInStore(item);
+    const inLibrary = isLiveItemInLibrary(item);
     const isHydrating = hydratingId === item.id;
     const badgeLabel =
       item.mediaType === 'tv'
@@ -501,16 +500,16 @@ export function SearchView() {
               e.stopPropagation();
               handleOpenLiveResult(item, true);
             }}
-            aria-label={inStore ? `${item.title} in library` : `Add ${item.title}`}
+            aria-label={inLibrary ? `Remove ${item.title} from library` : `Add ${item.title}`}
             className={`absolute top-1.5 right-1.5 h-7 w-7 rounded-full bg-[#0F1318]/85 border flex items-center justify-center transition-colors ${
-              inStore
+              inLibrary
                 ? addActiveClass
                 : 'border-white/20 text-ink hover:border-brand hover:text-brand'
             }`}
           >
             {isHydrating ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : inStore ? (
+            ) : inLibrary ? (
               <Check className="w-3.5 h-3.5" />
             ) : (
               <Plus className="w-3.5 h-3.5" />
@@ -527,15 +526,27 @@ export function SearchView() {
 
   const handleOpenLiveResult = async (item: LiveSearchResult, andAdd = false) => {
     if (item.kind === 'movie') {
+      if (andAdd && state.movieProgress[item.id]) {
+        toggleMovieWatchlist(item.id);
+        return;
+      }
       const movie = hydrateLiveMovie(item);
-      if (andAdd || !state.movies[movie.id]) addLiveMovieToStore(movie, 'watchlist');
+      if (andAdd) {
+        addLiveMovieToStore(state.movies[movie.id] || movie, 'watchlist', true);
+      } else if (!state.movies[movie.id]) {
+        addLiveMovieToStore(movie, 'watchlist', false);
+      }
       if (!andAdd) pushRoute({ view: 'movie-detail', movieId: movie.id });
       return;
     }
     if (item.kind === 'read') {
+      if (andAdd && state.readProgress[item.id]?.bookmarked) {
+        toggleReadBookmark(item.id);
+        return;
+      }
       const readItem = hydrateLiveReadItem(item);
-      if (andAdd || !state.readItems[readItem.id]) {
-        addLiveReadToStore(readItem, 'want_to_read');
+      if (!state.readItems[readItem.id]) {
+        addLiveReadToStore(readItem, 'want_to_read', andAdd);
       } else {
         updateReadEditionCovers(
           readItem.id,
@@ -544,14 +555,38 @@ export function SearchView() {
           readItem.editionIssueCounts,
           readItem.editionVariants
         );
+        if (andAdd) {
+          addLiveReadToStore(state.readItems[readItem.id], 'want_to_read', true);
+        }
       }
       if (!andAdd) pushRoute({ view: 'read-detail', readId: readItem.id });
       return;
     }
     if (item.kind === 'game') {
+      if (andAdd && state.gameProgress[item.id]?.bookmarked) {
+        toggleGameBookmark(item.id);
+        return;
+      }
       const game = hydrateLiveGameItem(item);
-      if (andAdd || !state.games[game.id]) addLiveGameToStore(game, 'backlog');
+      if (!state.games[game.id]) {
+        addLiveGameToStore(game, 'backlog', andAdd);
+      } else if (andAdd) {
+        addLiveGameToStore(state.games[game.id], 'backlog', true);
+      }
       if (!andAdd) pushRoute({ view: 'game-detail', gameId: game.id });
+      return;
+    }
+
+    if (andAdd && state.showProgress[item.id]?.bookmarked) {
+      toggleShowBookmark(item.id);
+      return;
+    }
+    if (state.shows[item.id]) {
+      if (andAdd) {
+        addLiveShowToStore(state.shows[item.id], true);
+      } else {
+        pushRoute({ view: 'show-detail', showId: item.id });
+      }
       return;
     }
 
@@ -736,12 +771,7 @@ export function SearchView() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {dedupedLive.map((item) => {
                   const isHydrating = hydratingId === item.id;
-                  const alreadyInStore = Boolean(
-                    state.shows[item.id] ||
-                      state.movies[item.id] ||
-                      state.readItems[item.id] ||
-                      state.games[item.id]
-                  );
+                  const inLibrary = isLiveItemInLibrary(item);
                   return (
                     <div
                       key={item.id}
@@ -807,9 +837,9 @@ export function SearchView() {
                             e.stopPropagation();
                             handleOpenLiveResult(item, true);
                           }}
-                          aria-label={`Add ${item.title}`}
+                          aria-label={inLibrary ? `Remove ${item.title} from library` : `Add ${item.title}`}
                           className={`h-9 w-9 rounded-full border flex items-center justify-center transition-colors ${
-                            alreadyInStore
+                            inLibrary
                               ? item.domain === 'watch'
                                 ? 'border-watch/60 bg-watch/15 text-watch'
                                 : item.domain === 'read'
@@ -820,7 +850,7 @@ export function SearchView() {
                         >
                           {isHydrating ? (
                             <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : alreadyInStore ? (
+                          ) : inLibrary ? (
                             <Check className="w-4 h-4" />
                           ) : (
                             <Plus className="w-4 h-4" />

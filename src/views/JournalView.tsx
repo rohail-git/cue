@@ -181,34 +181,42 @@ export function JournalView() {
   const domainSelectableItems = useMemo(() => {
     if (draftDomain === 'watch') {
       return [
-        ...state.showOrder.map((id) => ({
-          id,
-          kind: 'show' as const,
-          title: state.shows[id]?.title || id,
-          poster: state.shows[id]?.posterUrl || '',
-        })),
-        ...state.movieOrder.map((id) => ({
-          id,
-          kind: 'movie' as const,
-          title: state.movies[id]?.title || id,
-          poster: state.movies[id]?.posterUrl || '',
-        })),
+        ...state.showOrder
+          .filter((id) => Boolean(state.shows[id]) && Boolean(state.showProgress[id]?.bookmarked))
+          .map((id) => ({
+            id,
+            kind: 'show' as const,
+            title: state.shows[id]?.title || id,
+            poster: state.shows[id]?.posterUrl || '',
+          })),
+        ...state.movieOrder
+          .filter((id) => Boolean(state.movies[id]) && Boolean(state.movieProgress[id]))
+          .map((id) => ({
+            id,
+            kind: 'movie' as const,
+            title: state.movies[id]?.title || id,
+            poster: state.movies[id]?.posterUrl || '',
+          })),
       ];
     }
     if (draftDomain === 'read') {
-      return state.readOrder.map((id) => ({
-        id,
-        kind: (state.readItems[id]?.format || 'novel') as 'novel' | 'manga' | 'comic',
-        title: state.readItems[id]?.title || id,
-        poster: state.readItems[id]?.coverUrl || '',
-      }));
+      return state.readOrder
+        .filter((id) => Boolean(state.readItems[id]) && Boolean(state.readProgress[id]?.bookmarked))
+        .map((id) => ({
+          id,
+          kind: (state.readItems[id]?.format || 'novel') as 'novel' | 'manga' | 'comic',
+          title: state.readItems[id]?.title || id,
+          poster: state.readItems[id]?.coverUrl || '',
+        }));
     }
-    return state.gameOrder.map((id) => ({
-      id,
-      kind: 'game' as const,
-      title: state.games[id]?.title || id,
-      poster: state.games[id]?.coverUrl || '',
-    }));
+    return state.gameOrder
+      .filter((id) => Boolean(state.games[id]) && Boolean(state.gameProgress[id]?.bookmarked))
+      .map((id) => ({
+        id,
+        kind: 'game' as const,
+        title: state.games[id]?.title || id,
+        poster: state.games[id]?.coverUrl || '',
+      }));
   }, [draftDomain, state]);
 
   const handleComposeSubmit = (e: React.FormEvent) => {
@@ -814,10 +822,11 @@ export function JournalView() {
                     setDraftDomain(dom);
                     const first =
                       dom === 'watch'
-                        ? state.showOrder[0]
+                        ? state.showOrder.find((id) => state.showProgress[id]?.bookmarked) ||
+                          state.movieOrder.find((id) => Boolean(state.movieProgress[id]))
                         : dom === 'read'
-                          ? state.readOrder[0]
-                          : state.gameOrder[0];
+                          ? state.readOrder.find((id) => state.readProgress[id]?.bookmarked)
+                          : state.gameOrder.find((id) => state.gameProgress[id]?.bookmarked);
                     if (first) setDraftMediaId(first);
                   }}
                   className={`py-2 rounded-xl border text-xs font-semibold capitalize ${

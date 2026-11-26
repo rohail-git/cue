@@ -304,9 +304,9 @@ interface CueContextValue {
 
   // Live catalog additions
   addLiveShowToStore: (show: Show, andBookmark?: boolean) => void;
-  addLiveMovieToStore: (movie: Movie, status?: MovieWatchStatus) => void;
-  addLiveReadToStore: (item: ReadItem, status?: ReadWatchStatus) => void;
-  addLiveGameToStore: (game: GameItem, status?: GameWatchStatus) => void;
+  addLiveMovieToStore: (movie: Movie, status?: MovieWatchStatus, andBookmark?: boolean) => void;
+  addLiveReadToStore: (item: ReadItem, status?: ReadWatchStatus, andBookmark?: boolean) => void;
+  addLiveGameToStore: (game: GameItem, status?: GameWatchStatus, andBookmark?: boolean) => void;
 
   // Private Journal & Lists
   addJournalEntry: (input: Omit<JournalEntry, 'id' | 'createdAt'>) => void;
@@ -2966,6 +2966,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     (show: Show, andBookmark = true) => {
       commitState((prev) => {
         const exists = Boolean(prev.shows[show.id]);
+        const existingProgress = prev.showProgress[show.id];
         return {
           ...prev,
           shows: { ...prev.shows, [show.id]: show },
@@ -2973,12 +2974,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           showProgress: andBookmark
             ? {
                 ...prev.showProgress,
-                [show.id]: prev.showProgress[show.id] || {
-                  status: 'not_started',
-                  episodeCounts: {},
-                  bookmarked: true,
-                  notifications: true,
-                },
+                [show.id]: existingProgress
+                  ? { ...existingProgress, bookmarked: true }
+                  : {
+                      status: 'not_started',
+                      episodeCounts: {},
+                      bookmarked: true,
+                      notifications: true,
+                    },
               }
             : prev.showProgress,
         };
@@ -2995,62 +2998,73 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   );
 
   const addLiveMovieToStore = useCallback(
-    (movie: Movie, status: MovieWatchStatus = 'watchlist') => {
+    (movie: Movie, status: MovieWatchStatus = 'watchlist', andBookmark = true) => {
       commitState((prev) => {
         const exists = Boolean(prev.movies[movie.id]);
         return {
           ...prev,
           movies: { ...prev.movies, [movie.id]: movie },
           movieOrder: exists ? prev.movieOrder : [movie.id, ...prev.movieOrder],
-          movieProgress: {
-            ...prev.movieProgress,
-            [movie.id]: prev.movieProgress[movie.id] || {
-              status,
-              watchCount: status === 'watched' ? 1 : 0,
-              watchedAt: status === 'watched' ? new Date().toISOString() : undefined,
-            },
-          },
+          movieProgress: andBookmark
+            ? {
+                ...prev.movieProgress,
+                [movie.id]: prev.movieProgress[movie.id] || {
+                  status,
+                  watchCount: status === 'watched' ? 1 : 0,
+                  watchedAt: status === 'watched' ? new Date().toISOString() : undefined,
+                },
+              }
+            : prev.movieProgress,
         };
       });
-      showToast(movie.title, undefined, undefined, {
-        domain: 'watch',
-        subtitle: 'Added to Watch',
-        posterUrl: movie.posterUrl,
-      });
+      if (andBookmark) {
+        showToast(movie.title, undefined, undefined, {
+          domain: 'watch',
+          subtitle: 'Added to Watch',
+          posterUrl: movie.posterUrl,
+        });
+      }
     },
     [showToast]
   );
 
   const addLiveReadToStore = useCallback(
-    (item: ReadItem, status: ReadWatchStatus = 'want_to_read') => {
+    (item: ReadItem, status: ReadWatchStatus = 'want_to_read', andBookmark = true) => {
       commitState((prev) => {
         const exists = Boolean(prev.readItems[item.id]);
+        const existingProgress = prev.readProgress[item.id];
         return {
           ...prev,
           readItems: { ...prev.readItems, [item.id]: item },
           readOrder: exists ? prev.readOrder : [item.id, ...prev.readOrder],
-          readProgress: {
-            ...prev.readProgress,
-            [item.id]: prev.readProgress[item.id] || {
-              status,
-              currentUnit: 0,
-              rereadCount: 0,
-              bookmarked: true,
-            },
-          },
+          readProgress: andBookmark
+            ? {
+                ...prev.readProgress,
+                [item.id]: existingProgress
+                  ? { ...existingProgress, bookmarked: true }
+                  : {
+                      status,
+                      currentUnit: 0,
+                      rereadCount: 0,
+                      bookmarked: true,
+                    },
+              }
+            : prev.readProgress,
         };
       });
-      showToast(item.title, undefined, undefined, {
-        domain: 'read',
-        subtitle: 'Added to Read',
-        posterUrl: item.coverUrl,
-      });
+      if (andBookmark) {
+        showToast(item.title, undefined, undefined, {
+          domain: 'read',
+          subtitle: 'Added to Read',
+          posterUrl: item.coverUrl,
+        });
+      }
     },
     [showToast]
   );
 
   const addLiveGameToStore = useCallback(
-    (game: GameItem, status: GameWatchStatus = 'backlog') => {
+    (game: GameItem, status: GameWatchStatus = 'backlog', andBookmark = true) => {
       const known = !game.totalChapters ? lookupKnownGameChapters(game.title) : null;
       const enrichedGame: GameItem = known
         ? {
@@ -3063,30 +3077,37 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         : game;
       commitState((prev) => {
         const exists = Boolean(prev.games[enrichedGame.id]);
+        const existingProgress = prev.gameProgress[enrichedGame.id];
         return {
           ...prev,
           games: { ...prev.games, [enrichedGame.id]: enrichedGame },
           gameOrder: exists ? prev.gameOrder : [enrichedGame.id, ...prev.gameOrder],
-          gameProgress: {
-            ...prev.gameProgress,
-            [enrichedGame.id]: prev.gameProgress[enrichedGame.id] || {
-              status,
-              hoursPlayed: 0,
-              completionPct: 0,
-              currentChapter: 0,
-              playthroughCount: 0,
-              platinum: false,
-              platform: enrichedGame.platforms[0] || 'PC',
-              bookmarked: true,
-            },
-          },
+          gameProgress: andBookmark
+            ? {
+                ...prev.gameProgress,
+                [enrichedGame.id]: existingProgress
+                  ? { ...existingProgress, bookmarked: true }
+                  : {
+                      status,
+                      hoursPlayed: 0,
+                      completionPct: 0,
+                      currentChapter: 0,
+                      playthroughCount: 0,
+                      platinum: false,
+                      platform: enrichedGame.platforms[0] || 'PC',
+                      bookmarked: true,
+                    },
+              }
+            : prev.gameProgress,
         };
       });
-      showToast(enrichedGame.title, undefined, undefined, {
-        domain: 'play',
-        subtitle: 'Added to Play',
-        posterUrl: enrichedGame.coverUrl,
-      });
+      if (andBookmark) {
+        showToast(enrichedGame.title, undefined, undefined, {
+          domain: 'play',
+          subtitle: 'Added to Play',
+          posterUrl: enrichedGame.coverUrl,
+        });
+      }
     },
     [showToast]
   );
