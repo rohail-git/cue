@@ -4354,14 +4354,18 @@ export async function hydrateLiveShow(item: LiveSearchResult, tmdbApiKey?: strin
             stillUrl: fallbackStill,
             overview: '',
           }));
+    const genres = [...(item.genres || [])];
+    if (!genres.some((g) => g.toLowerCase() === 'anime')) {
+      genres.unshift('Anime');
+    }
     return {
       id: item.id,
       anilistId,
       title: item.title,
       year: item.year,
-      genres: item.genres,
+      genres,
       rating: item.rating,
-      mediaType: 'anime',
+      mediaType: 'tv',
       posterUrl: item.posterUrl,
       backdropUrl: fallbackStill,
       overview: item.overview,

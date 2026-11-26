@@ -35,7 +35,7 @@ import {
   fetchSingleComicIssueDetail,
   formatDisplayTitle,
 } from '../services/mediaApi';
-import { useCueStore } from '../store/useCueStore';
+import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { DetailCardMode } from '../types';
 import {
   extractReadItemIsbn,
@@ -110,6 +110,8 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const [activeUnitDrawer, setActiveUnitDrawer] = useState<number | null>(null);
   const [unitNoteText, setUnitNoteText] = useState('');
   const [loadingUnitDetail, setLoadingUnitDetail] = useState(false);
+
+  useModalBackHandler(activeUnitDrawer !== null, () => setActiveUnitDrawer(null));
   const [hydratingIssues, setHydratingIssues] = useState(false);
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
     () => sessionDetailModeByReadId.get(readId) || state.settings.detailMode || 'simple'

@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useCueStore } from '../store/useCueStore';
+import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 
 /** Bottom sheet prompting to catch up skipped prior atoms when marking a non-adjacent atom finished. */
 export function CatchUpPromptSheet() {
@@ -9,6 +9,8 @@ export function CatchUpPromptSheet() {
     neverAskCatchUpPrompt,
     dismissCatchUpPrompt,
   } = useCueStore();
+
+  useModalBackHandler(Boolean(catchUpPrompt), dismissCatchUpPrompt);
 
   useEffect(() => {
     if (!catchUpPrompt) return;

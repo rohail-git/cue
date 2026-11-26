@@ -1297,6 +1297,32 @@ export function parseImportFile(rawText: string, fileName = ''): ParsedImportBat
   };
 }
 
+export function canonicalImportReadKey(rawTitle: string): string {
+  let s = rawTitle
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\[[^\]]*\]/g, ' ');
+
+  const colonIdx = s.indexOf(':');
+  if (colonIdx > 4) {
+    const afterColon = s.slice(colonIdx + 1);
+    const volSuffix = afterColon.match(/\b(?:vol(?:ume)?\.?\s*\d+|book\s+\d+|#\d+)\b/i);
+    s = volSuffix ? `${s.slice(0, colonIdx)} ${volSuffix[0]}` : s.slice(0, colonIdx);
+  }
+
+  return s
+    .replace(/\b(?:volume)\b/g, 'vol')
+    .replace(
+      /\b(?:omnibus|compendium|complete collection|epic collection|deluxe edition|collector'?s? edition|trade paperback|tpb|hardcover|hc|paperback|box set|edition|printing)\b/g,
+      ' '
+    )
+    .replace(/[:\-–—_.,!?'"]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function annotateImportDuplicates(
   candidates: ImportCandidate[],
   state: CueStoreState
@@ -1328,11 +1354,20 @@ export function annotateImportDuplicates(
   }
 
   const readByTitle = new Map<string, { id: string; title: string }>();
+  const readByCanonical = new Map<string, { id: string; title: string }>();
+  const readByIsbn = new Map<string, { id: string; title: string }>();
   for (const id of state.readOrder) {
     const r = state.readItems[id];
     if (!r) continue;
     const norm = normalizeImportTitle(r.title);
     if (norm && !readByTitle.has(norm)) readByTitle.set(norm, { id, title: r.title });
+    const canon = canonicalImportReadKey(r.title);
+    if (canon && !readByCanonical.has(canon)) readByCanonical.set(canon, { id, title: r.title });
+    const isbnFromField = r.isbn ? extractCleanIsbn(r.isbn) : '';
+    const isbnFromId = extractCleanIsbn(id.match(/(97[89]\d{10}|\d{9}[0-9Xx])/)?.[1] || '');
+    for (const code of [isbnFromField, isbnFromId]) {
+      if (code && !readByIsbn.has(code)) readByIsbn.set(code, { id, title: r.title });
+    }
   }
 
   const gameByTitle = new Map<string, { id: string; title: string }>();
@@ -1355,6 +1390,13 @@ export function annotateImportDuplicates(
       if (idMatch) {
         return { ...c, existingId: idMatch.id, existingTitle: idMatch.title };
       }
+      if (c.kind === 'read') {
+        const candIsbn = extractCleanIsbn(c.externalConst || '');
+        const isbnMatch = candIsbn ? readByIsbn.get(candIsbn) : undefined;
+        if (isbnMatch) {
+          return { ...c, existingId: isbnMatch.id, existingTitle: isbnMatch.title };
+        }
+      }
     }
 
     if (c.needsResolution) return c;
@@ -1369,7 +1411,8 @@ export function annotateImportDuplicates(
       return match ? { ...c, existingId: match.id, existingTitle: match.title } : c;
     }
     if (c.kind === 'read') {
-      const match = readByTitle.get(cNorm);
+      const match =
+        readByTitle.get(cNorm) || readByCanonical.get(canonicalImportReadKey(c.title));
       return match ? { ...c, existingId: match.id, existingTitle: match.title } : c;
     }
     const match = gameByTitle.get(cNorm);
@@ -1381,13 +1424,17 @@ export function buildFallbackShow(c: ImportCandidate): Show {
   const id = slugifyImportId('imp-show', c.title, c.externalConst);
   const runtime = c.runtime || 45;
   const poster = c.posterUrl || '';
+  const baseGenres = c.genres.length > 0 ? [...c.genres] : [c.mediaType === 'anime' ? 'Anime' : 'Drama'];
+  if (c.mediaType === 'anime' && !baseGenres.some((g) => g.toLowerCase() === 'anime')) {
+    baseGenres.unshift('Anime');
+  }
   return {
     id,
     title: c.title,
     year: c.year,
-    genres: c.genres.length > 0 ? c.genres : [c.mediaType === 'anime' ? 'Anime' : 'Drama'],
+    genres: baseGenres,
     rating: c.communityRating || 7.8,
-    mediaType: c.mediaType === 'anime' ? 'anime' : 'tv',
+    mediaType: 'tv',
     posterUrl: poster,
     backdropUrl: poster,
     overview: c.overview || `${c.title} (${c.year}).`,
@@ -1439,6 +1486,7 @@ export function buildFallbackReadItem(c: ImportCandidate): ReadItem {
   const format = c.mediaType === 'manga' ? 'manga' : c.mediaType === 'comic' ? 'comic' : 'novel';
   const totalUnits = c.totalUnits || (format === 'comic' ? 12 : format === 'manga' ? 100 : 24);
   const cover = c.posterUrl || '';
+  const cleanIsbn = c.externalConst ? extractCleanIsbn(c.externalConst) : '';
   return {
     id,
     format,
@@ -1453,6 +1501,7 @@ export function buildFallbackReadItem(c: ImportCandidate): ReadItem {
     coverUrl: cover,
     backdropUrl: cover,
     overview: c.overview || `${c.title} by ${c.creator || 'Author'}.`,
+    ...(cleanIsbn ? { isbn: cleanIsbn } : {}),
   };
 }
 

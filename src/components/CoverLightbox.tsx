@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+import { useModalBackHandler } from '../store/useCueStore';
 
 export function upgradeToHqCoverUrl(url: string): string {
   if (!url) return '';
@@ -36,6 +37,8 @@ interface CoverLightboxProps {
 
 export function CoverLightbox({ open, src, title, subtitle, onClose }: CoverLightboxProps) {
   const [fallbackToBase, setFallbackToBase] = useState(false);
+
+  useModalBackHandler(open, onClose);
 
   useEffect(() => {
     setFallbackToBase(false);

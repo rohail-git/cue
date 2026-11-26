@@ -11,6 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import { fetchGameChapterSuggestions } from '../services/mediaApi';
+import { useModalBackHandler } from '../store/useCueStore';
 import type { GameChapterSource, GameChapterUnit } from '../types';
 import { parsePastedChapterList } from '../utils/gameChapters';
 
@@ -51,6 +52,8 @@ export function GameChapterSuggestSheet({
   const [copied, setCopied] = useState(false);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+
+  useModalBackHandler(open, () => onCloseRef.current());
 
   useEffect(() => {
     if (!open) return;

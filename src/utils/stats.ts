@@ -54,11 +54,35 @@ export function isEpisodeReleased(
     const ts = Date.parse(ep.airstamp);
     if (!Number.isNaN(ts)) return ts <= now.getTime();
   }
-  if (!ep.airdate) {
+  const raw = (ep.airdate || '').trim();
+  if (!raw || /^(?:tba|tbd|unknown|n\/a|none|null|unannounced)$/i.test(raw)) {
     return !showHasRealAirdates;
   }
-  if (/^\d{4}-\d{2}-\d{2}/.test(ep.airdate)) {
-    return ep.airdate.slice(0, 10) <= getTodayLocalYmd(now);
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    return raw.slice(0, 10) <= getTodayLocalYmd(now);
+  }
+  const ym = raw.match(/^(\d{4})-(\d{2})$/);
+  if (ym) {
+    return `${ym[1]}-${ym[2]}` <= getTodayLocalYmd(now).slice(0, 7);
+  }
+  const yrOnly = raw.match(/^(\d{4})$/);
+  if (yrOnly) {
+    return Number(yrOnly[1]) <= now.getFullYear();
+  }
+  const mdy = raw.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (mdy) {
+    const m1 = parseMonthAbbrOrName(mdy[1]);
+    if (m1) return `${mdy[3]}-${pad2(m1)}-${pad2(Number(mdy[2]))}` <= getTodayLocalYmd(now);
+  }
+  const dmy = raw.match(/^(\d{1,2})\s+([A-Za-z]+),?\s+(\d{4})$/);
+  if (dmy) {
+    const m1 = parseMonthAbbrOrName(dmy[2]);
+    if (m1) return `${dmy[3]}-${pad2(m1)}-${pad2(Number(dmy[1]))}` <= getTodayLocalYmd(now);
+  }
+  const moYr = raw.match(/^([A-Za-z]+)\s+(\d{4})$/);
+  if (moYr) {
+    const m1 = parseMonthAbbrOrName(moYr[1]);
+    if (m1) return `${moYr[2]}-${pad2(m1)}` <= getTodayLocalYmd(now).slice(0, 7);
   }
   return true;
 }
@@ -73,6 +97,10 @@ export function parseComicIssueReleaseYmd(meta?: ComicIssueMeta): string | null 
   if (/^\d{4}-\d{2}-\d{2}/.test(rel)) {
     return rel.slice(0, 10);
   }
+  const ym = rel.match(/^(\d{4})-(\d{2})$/);
+  if (ym) {
+    return `${ym[1]}-${ym[2]}-01`;
+  }
   const mdy = rel.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/);
   if (mdy) {
     const m1 = parseMonthAbbrOrName(mdy[1]);
@@ -84,14 +112,31 @@ export function parseComicIssueReleaseYmd(meta?: ComicIssueMeta): string | null 
     if (m1) return `${dmy[3]}-${pad2(m1)}-${pad2(Number(dmy[1]))}`;
   }
   const moYr = rel.match(/^([A-Za-z]+)\s+(\d{4})$/);
-  if (moYr && meta.wiki !== 'dc') {
+  if (moYr) {
     const m1 = parseMonthAbbrOrName(moYr[1]);
-    if (m1) return `${moYr[2]}-${pad2(m1)}-01`;
+    if (m1) {
+      if (meta.wiki === 'dc') {
+        const d = new Date(Date.UTC(Number(moYr[2]), m1 - 3, 1));
+        return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-01`;
+      }
+      return `${moYr[2]}-${pad2(m1)}-01`;
+    }
   }
   return null;
 }
 
 export function isComicIssueReleased(meta?: ComicIssueMeta, now = new Date()): boolean {
+  if (!meta) return true;
+  if (!meta.releaseDateIso) {
+    const rel = (meta.releaseDate || '').trim();
+    if (/^(?:tba|tbd|unknown|n\/a|unannounced|solicit)/i.test(rel)) {
+      return false;
+    }
+    const yrOnly = rel.match(/^(\d{4})$/);
+    if (yrOnly) {
+      return Number(yrOnly[1]) <= now.getFullYear();
+    }
+  }
   const ymd = parseComicIssueReleaseYmd(meta);
   if (!ymd) return true;
   return ymd <= getTodayLocalYmd(now);

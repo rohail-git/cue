@@ -27,7 +27,7 @@ import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl } from '../components/RatingControl';
 import { fetchGameChapterInfo } from '../services/mediaApi';
-import { useCueStore } from '../store/useCueStore';
+import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { DetailCardMode, GameChapterUnit, GamePlatform } from '../types';
 import { getOfficialGameChapter, lookupKnownGameChapters } from '../utils/gameChapters';
 import { formatRating } from '../utils/ratings';
@@ -97,6 +97,8 @@ export function GameDetailView({ gameId }: { gameId: string }) {
   const [chapterTitleDraft, setChapterTitleDraft] = useState('');
   const [suggestOpen, setSuggestOpen] = useState(false);
   const fetchedChaptersRef = useRef<Set<string>>(new Set());
+
+  useModalBackHandler(activeChapterDrawer !== null, () => setActiveChapterDrawer(null));
 
   useEffect(() => {
     setDetailMode(sessionDetailModeByGameId.get(gameId) || state.settings.detailMode || 'simple');

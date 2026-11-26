@@ -179,7 +179,7 @@ export function SmartImportModal() {
     setResolveProgress({ done: 0, total: slice.length, skippedEpisodes: 0 });
 
     let working = targetBatch;
-    const chunkSize = 35;
+    const chunkSize = 15;
 
     try {
       for (let i = 0; i < slice.length; i += chunkSize) {

@@ -25,7 +25,7 @@ import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import { fetchAnimeEpisodeDetails } from '../services/mediaApi';
-import { useCueStore } from '../store/useCueStore';
+import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { DetailCardMode, Episode, Season } from '../types';
 import {
   formatRating,
@@ -88,6 +88,8 @@ export function ShowDetailView({ showId }: { showId: string }) {
   const [activeEpisodeDrawer, setActiveEpisodeDrawer] = useState<Episode | null>(null);
   const [epNoteText, setEpNoteText] = useState('');
   const [lightboxOpen, setLightboxOpen] = useState(false);
+
+  useModalBackHandler(Boolean(activeEpisodeDrawer), () => setActiveEpisodeDrawer(null));
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
     () => sessionDetailModeByShowId.get(showId) || state.settings.detailMode || 'simple'
   );

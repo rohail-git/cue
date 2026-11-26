@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Camera, Flashlight, Loader2, ScanBarcode, X } from 'lucide-react';
 import { extractIsbnFromInput } from '../services/mediaApi';
+import { useModalBackHandler } from '../store/useCueStore';
 
 interface IsbnScannerModalProps {
   open: boolean;
@@ -23,6 +24,10 @@ export function IsbnScannerModal({ open, onClose, onDetected }: IsbnScannerModal
   const zxingControlsRef = useRef<{ stop: () => void } | null>(null);
   const rafRef = useRef<number | null>(null);
   const detectedRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const onDetectedRef = useRef(onDetected);
+  onDetectedRef.current = onDetected;
 
   const [cameraState, setCameraState] = useState<'starting' | 'active' | 'error'>('starting');
   const [cameraMessage, setCameraMessage] = useState('');
@@ -62,8 +67,10 @@ export function IsbnScannerModal({ open, onClose, onDetected }: IsbnScannerModal
 
   const handleClose = useCallback(() => {
     stopCamera();
-    onClose();
-  }, [stopCamera, onClose]);
+    onCloseRef.current();
+  }, [stopCamera]);
+
+  useModalBackHandler(open, handleClose);
 
   const handleDecodedValue = useCallback(
     (rawValue: string) => {
@@ -79,12 +86,12 @@ export function IsbnScannerModal({ open, onClose, onDetected }: IsbnScannerModal
           }
         }
         stopCamera();
-        onDetected(isbn13);
+        onDetectedRef.current(isbn13);
       } else {
         setHint('Hold over the 978 / 979 ISBN barcode on the back cover.');
       }
     },
-    [onDetected, stopCamera]
+    [stopCamera]
   );
 
   useEffect(() => {
@@ -104,6 +111,20 @@ export function IsbnScannerModal({ open, onClose, onDetected }: IsbnScannerModal
     if (!open) return;
 
     let cancelled = false;
+    let acquiredStream: MediaStream | null = null;
+    const stopAcquired = () => {
+      if (acquiredStream) {
+        for (const track of acquiredStream.getTracks()) {
+          try {
+            track.stop();
+          } catch {
+            // ignore
+          }
+        }
+        acquiredStream = null;
+      }
+    };
+
     detectedRef.current = false;
     setCameraState('starting');
     setCameraMessage('');
@@ -128,22 +149,28 @@ export function IsbnScannerModal({ open, onClose, onDetected }: IsbnScannerModal
           },
           audio: false,
         });
+        acquiredStream = stream;
 
         if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
+          stopAcquired();
           return;
         }
 
         streamRef.current = stream;
         const videoEl = videoRef.current;
         if (!videoEl) {
-          stream.getTracks().forEach((t) => t.stop());
+          stopCamera();
+          stopAcquired();
           return;
         }
 
         videoEl.srcObject = stream;
         await videoEl.play().catch(() => undefined);
-        if (cancelled) return;
+        if (cancelled) {
+          stopCamera();
+          stopAcquired();
+          return;
+        }
 
         const videoTrack = stream.getVideoTracks()[0];
         const caps = videoTrack?.getCapabilities?.() as { torch?: boolean } | undefined;
@@ -164,6 +191,11 @@ export function IsbnScannerModal({ open, onClose, onDetected }: IsbnScannerModal
           } catch {
             useNative = false;
           }
+        }
+        if (cancelled) {
+          stopCamera();
+          stopAcquired();
+          return;
         }
 
         if (useNative && DetectorCtor) {
@@ -194,7 +226,11 @@ export function IsbnScannerModal({ open, onClose, onDetected }: IsbnScannerModal
         }
 
         const { BrowserMultiFormatReader } = await import('@zxing/browser');
-        if (cancelled) return;
+        if (cancelled) {
+          stopCamera();
+          stopAcquired();
+          return;
+        }
         const reader = new BrowserMultiFormatReader();
         const controls = await reader.decodeFromStream(stream, videoEl, (result) => {
           if (cancelled || detectedRef.current) return;
@@ -204,10 +240,14 @@ export function IsbnScannerModal({ open, onClose, onDetected }: IsbnScannerModal
         });
         if (cancelled) {
           controls.stop();
+          stopCamera();
+          stopAcquired();
         } else {
           zxingControlsRef.current = controls;
         }
       } catch (err) {
+        stopAcquired();
+        stopCamera();
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : '';
         setCameraState('error');
@@ -222,9 +262,10 @@ export function IsbnScannerModal({ open, onClose, onDetected }: IsbnScannerModal
     startScanner();
     return () => {
       cancelled = true;
+      stopAcquired();
       stopCamera();
     };
-  }, [open, handleDecodedValue, stopCamera]);
+  }, [open, stopCamera]);
 
   const toggleTorch = async () => {
     const track = streamRef.current?.getVideoTracks()[0];

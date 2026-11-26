@@ -104,36 +104,46 @@ function appendHistory(prev: HistoryEntry[], entry: HistoryEntry): HistoryEntry[
   return next.length > MAX_HISTORY_ENTRIES ? next.slice(next.length - MAX_HISTORY_ENTRIES) : next;
 }
 
+function normalizeLoadedCueState(raw: CueStoreState): CueStoreState {
+  if (!Array.isArray(raw.history)) {
+    raw.history = [];
+  }
+  if (!raw.collectionRatings) {
+    raw.collectionRatings = {};
+  }
+  if (!raw.mindFeedback) {
+    raw.mindFeedback = { dismissedIds: [], dismissedGenres: {}, acceptedCount: 0 };
+  }
+  if (!raw.atomicReadUnits) {
+    raw.atomicReadUnits = {};
+  }
+  if (raw.settings && !raw.settings.detailMode) {
+    raw.settings.detailMode = 'simple';
+  }
+  if (raw.settings?.watchFilter === 'anime') {
+    raw.settings.watchFilter = 'tv';
+  }
+  if (raw.shows) {
+    for (const show of Object.values(raw.shows)) {
+      if (show && show.mediaType === 'anime') {
+        show.mediaType = 'tv';
+        const hasAnimeGenre = (show.genres || []).some((g) => g.toLowerCase() === 'anime');
+        if (!hasAnimeGenre) {
+          show.genres = ['Anime', ...(show.genres || [])];
+        }
+      }
+    }
+  }
+  return raw;
+}
+
 function loadInitialState(): CueStoreState {
   try {
     const rawV3 = localStorage.getItem(STORAGE_KEY);
     if (rawV3) {
       const parsed = JSON.parse(rawV3) as CueStoreState;
       if (parsed && parsed.shows && parsed.movies && parsed.readItems && parsed.games) {
-        if (!Array.isArray(parsed.history)) {
-          parsed.history = [];
-        }
-        if (!parsed.collectionRatings) {
-          parsed.collectionRatings = {};
-        }
-        if (!parsed.mindFeedback) {
-          parsed.mindFeedback = { dismissedIds: [], dismissedGenres: {}, acceptedCount: 0 };
-        }
-        if (!parsed.atomicReadUnits) {
-          parsed.atomicReadUnits = {};
-        }
-        if (parsed.settings && !parsed.settings.detailMode) {
-          parsed.settings.detailMode = 'simple';
-        }
-        if (parsed.settings?.watchFilter === 'anime') {
-          parsed.settings.watchFilter = 'tv';
-        }
-        for (const show of Object.values(parsed.shows)) {
-          if (show && show.mediaType === 'anime') {
-            show.mediaType = 'tv';
-          }
-        }
-        return parsed;
+        return normalizeLoadedCueState(parsed);
       }
     }
     const empty = createEmptyState();
@@ -245,6 +255,7 @@ interface CueContextValue {
   dismissBanner: () => void;
   triggerSampleReleaseAlert: () => void;
 
+  // Modals & local overlays
   filterSheetOpen: boolean;
   setFilterSheetOpen: (open: boolean) => void;
   notificationsOpen: boolean;
@@ -255,6 +266,7 @@ interface CueContextValue {
   setInsightsOpen: (open: boolean) => void;
   importModalOpen: boolean;
   setImportModalOpen: (open: boolean) => void;
+  registerOverlayBackHandler: (onBack: () => void) => () => void;
 
   // Watch actions
   watchNextEpisode: (showId: string) => void;
@@ -442,6 +454,7 @@ interface CueHistoryState {
   depth: number;
   stack: RouteView[];
   modal?: boolean;
+  overlayId?: number;
 }
 
 function routesEqual(a?: RouteView, b?: RouteView): boolean {
@@ -491,6 +504,9 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     insights: false,
     import: false,
   });
+  const suppressModalBackPopRef = useRef(0);
+  const overlayHandlersRef = useRef<Array<{ id: number; close: () => void }>>([]);
+  const overlayIdSeqRef = useRef(1);
 
   const [syncCode, setSyncCode] = useState<string | null>(() => {
     try {
@@ -564,9 +580,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   );
 
   const hydrateFromCloud = useCallback((cloudState: CueStoreState, cloudTs: number) => {
-    if (!Array.isArray(cloudState.history)) {
-      cloudState.history = [];
-    }
+    const normalized = normalizeLoadedCueState(cloudState);
     suppressNextPushRef.current = true;
     localEditedAtRef.current = cloudTs;
     try {
@@ -575,8 +589,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore storage quota
     }
-    stateRef.current = cloudState;
-    setState(cloudState);
+    stateRef.current = normalized;
+    setState(normalized);
     setLastSyncedAt(cloudTs);
     setSyncStatus('synced');
     setSyncError(null);
@@ -796,7 +810,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       try {
         const cur = window.history.state as Partial<CueHistoryState> | null;
         if (open) {
-          if (!(cur?.cueNav && cur?.modal === true)) {
+          if (!(cur?.cueNav && cur?.modal === true && !cur?.overlayId)) {
             const nextDepth = historyDepthRef.current + 1;
             historyDepthRef.current = nextDepth;
             const entry: CueHistoryState = {
@@ -811,7 +825,15 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           queueMicrotask(() => {
             const anyOpen = Object.values(modalFlagsRef.current).some(Boolean);
             const latest = window.history.state as Partial<CueHistoryState> | null;
-            if (!anyOpen && latest?.cueNav && latest?.modal === true && historyDepthRef.current > 0) {
+            if (
+              !anyOpen &&
+              overlayHandlersRef.current.length === 0 &&
+              latest?.cueNav &&
+              latest?.modal === true &&
+              !latest?.overlayId &&
+              historyDepthRef.current > 0
+            ) {
+              suppressModalBackPopRef.current += 1;
               window.history.back();
             }
           });
@@ -822,6 +844,47 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     },
     []
   );
+
+  const registerOverlayBackHandler = useCallback((onBack: () => void) => {
+    const id = overlayIdSeqRef.current++;
+    let closedByPop = false;
+    overlayHandlersRef.current.push({
+      id,
+      close: () => {
+        closedByPop = true;
+        onBack();
+      },
+    });
+    try {
+      const nextDepth = historyDepthRef.current + 1;
+      historyDepthRef.current = nextDepth;
+      const entry: CueHistoryState = {
+        cueNav: true,
+        depth: nextDepth,
+        stack: routeStackRef.current,
+        modal: true,
+        overlayId: id,
+      };
+      window.history.pushState(entry, '');
+    } catch {
+      // ignore history access errors
+    }
+    return () => {
+      overlayHandlersRef.current = overlayHandlersRef.current.filter((item) => item.id !== id);
+      if (closedByPop) return;
+      queueMicrotask(() => {
+        try {
+          const latest = window.history.state as Partial<CueHistoryState> | null;
+          if (latest?.cueNav && latest?.overlayId === id && historyDepthRef.current > 0) {
+            suppressModalBackPopRef.current += 1;
+            window.history.back();
+          }
+        } catch {
+          // ignore history access errors
+        }
+      });
+    };
+  }, []);
 
   const setFilterSheetOpen = useCallback(
     (open: boolean) => updateModalOpen('filter', setFilterSheetOpenRaw, open),
@@ -860,10 +923,29 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     }
 
     const onPopState = (event: PopStateEvent) => {
+      const st = event.state as Partial<CueHistoryState> | null;
+      if (suppressModalBackPopRef.current > 0) {
+        suppressModalBackPopRef.current -= 1;
+        if (typeof st?.depth === 'number' && st.depth >= 0) {
+          historyDepthRef.current = st.depth;
+        }
+        return;
+      }
+
+      if (overlayHandlersRef.current.length > 0) {
+        const topOverlay = overlayHandlersRef.current.pop();
+        if (typeof st?.depth === 'number' && st.depth >= 0) {
+          historyDepthRef.current = st.depth;
+        } else {
+          historyDepthRef.current = Math.max(0, historyDepthRef.current - 1);
+        }
+        topOverlay?.close();
+        return;
+      }
+
       const hadModal = Object.values(modalFlagsRef.current).some(Boolean);
       closeAllModalsRaw();
 
-      const st = event.state as Partial<CueHistoryState> | null;
       if (st?.cueNav && Array.isArray(st.stack) && st.stack.length > 0) {
         const nextStack = st.stack;
         const prevTop = routeStackRef.current[routeStackRef.current.length - 1];
@@ -886,6 +968,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const commitNavigation = useCallback(
     (nextStack: RouteView[], mode: 'push' | 'replace' = 'push') => {
+      overlayHandlersRef.current = [];
       closeAllModalsRaw();
       try {
         const cur = window.history.state as Partial<CueHistoryState> | null;
@@ -4283,9 +4366,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const restoreCueBackup = useCallback(
     (backupState: CueStoreState) => {
+      const normalized = normalizeLoadedCueState({ ...backupState });
       lastPreImportStateRef.current = stateRef.current;
-      stateRef.current = backupState;
-      setState(backupState);
+      stateRef.current = normalized;
+      setState(normalized);
       showToast('Restored cue library backup', 'Undo', undoLastImport, { tone: 'undo' });
     },
     [showToast, undoLastImport]
@@ -4661,7 +4745,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       try {
         const parsed = JSON.parse(rawJson);
         if (parsed?.app === 'cue' && parsed?.state?.shows && parsed?.state?.readItems) {
-          const restored = parsed.state as CueStoreState;
+          const restored = normalizeLoadedCueState(parsed.state as CueStoreState);
           stateRef.current = restored;
           setState(restored);
           showToast('Restored cue library backup');
@@ -4939,6 +5023,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         setInsightsOpen,
         importModalOpen,
         setImportModalOpen,
+        registerOverlayBackHandler,
         watchNextEpisode,
         toggleEpisodeWatched,
         incrementEpisodeRewatch,
@@ -5038,4 +5123,15 @@ export function useCueStore() {
   const ctx = useContext(CueContext);
   if (!ctx) throw new Error('useCueStore must be used inside CueProvider');
   return ctx;
+}
+
+export function useModalBackHandler(open: boolean, onClose: () => void) {
+  const { registerOverlayBackHandler } = useCueStore();
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    return registerOverlayBackHandler(() => onCloseRef.current());
+  }, [open, registerOverlayBackHandler]);
 }

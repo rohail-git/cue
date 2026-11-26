@@ -746,7 +746,7 @@ function parseCreatorQualifiedQuery(rawQuery: string): {
   };
 }
 
-/** Extracts ordered issue page titles from Marvel ReprintOfN or DC IssueList wikitext. */
+/** Extracts ordered issue page titles from Marvel ReprintOfN, DC IssueList, or Image gallery wikitext. */
 function parseCollectedIssuePageTitles(wikitext: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -764,6 +764,31 @@ function parseCollectedIssuePageTitles(wikitext: string): string[] {
     out.push(cleaned);
   };
 
+  const addGalleryOrCisEntry = (line: string) => {
+    const fileMatch = line.match(
+      /^(?:Image|File):([^\n|]+?\s+Vol\s+\d+\s+[0-9A-Za-z.-]+)\.(?:jpg|jpeg|png|webp|gif)\b/i
+    );
+    if (fileMatch && fileMatch[1]) {
+      addPage(fileMatch[1].replace(/_/g, ' '));
+      return;
+    }
+    const cisMatch = line.match(/\{\{\s*Cis\s*\|([^|}]+)/i);
+    if (cisMatch && cisMatch[1]) {
+      const inner = cisMatch[1].trim();
+      const hashVol = inner.match(/^(.+?)\s+Vol\.?\s*(\d+)\s*#\s*([0-9A-Za-z.-]+)$/i);
+      if (hashVol) {
+        addPage(`${hashVol[1].trim()} Vol ${hashVol[2]} ${hashVol[3]}`);
+        return;
+      }
+      const hashOnly = inner.match(/^(.+?)\s*#\s*([0-9A-Za-z.-]+)$/i);
+      if (hashOnly) {
+        addPage(`${hashOnly[1].trim()} Vol 1 ${hashOnly[2]}`);
+        return;
+      }
+      addPage(inner);
+    }
+  };
+
   // 1. Marvel Database ReprintOf1 .. ReprintOfN
   const marvelMatches: Array<{ idx: number; page: string }> = [];
   for (const m of wikitext.matchAll(/\|\s*ReprintOf(\d+)\s*=[^\S\r\n]*([^\n|]+)/gi)) {
@@ -778,11 +803,16 @@ function parseCollectedIssuePageTitles(wikitext: string): string[] {
     if (out.length > 0) return out;
   }
 
-  // 2. DC Database | IssueList = ... with {{c|Batman Vol 2 1}}
-  const dcBlock = wikitext.match(/\|\s*IssueList\s*=([\s\S]*?)(?=\n\s*\||\n\s*\}\}|$)/i)?.[1];
+  // 2. DC / Image Database | IssueList = ... with {{c|Batman Vol 2 1}} or {{Cis|Invincible #1}} / gallery
+  const dcBlock = wikitext.match(/\|\s*(?:IssueList|Issues|Contents)\s*=([\s\S]*?)(?=\n\s*\||\n\s*\}\}|$)/i)?.[1];
   if (dcBlock) {
     for (const m of dcBlock.matchAll(/\{\{\s*c\s*\|([^|}]+)(?:\|[^}]*)?\}\}/gi)) {
       if (m[1]) addPage(m[1]);
+    }
+    for (const line of dcBlock.split(/\r?\n/)) {
+      if (/\{\{\s*Cis\s*\|/i.test(line) || /^(?:Image|File):/i.test(line.trim())) {
+        addGalleryOrCisEntry(line.trim());
+      }
     }
     for (const m of dcBlock.matchAll(/\[\[([^|\]]+\s+Vol\s+\d+\s+[^\]]+)\]\]/gi)) {
       if (m[1]) addPage(m[1]);
@@ -790,10 +820,18 @@ function parseCollectedIssuePageTitles(wikitext: string): string[] {
     if (out.length > 0) return out;
   }
 
-  // 3. Fallback: bullet lists or Contents sections referencing {{c|...}} or [[... Vol N M]]
-  for (const m of wikitext.matchAll(/^\*\s*(?:\{\{\s*c\s*\|([^|}]+)(?:\|[^}]*)?\}\}|\[\[([^|\]]+\s+Vol\s+\d+\s+[^\]]+)\]\])/gim)) {
-    const candidate = m[1] || m[2];
-    if (candidate) addPage(candidate);
+  // 3. Fallback: <gallery> blocks or bullet lists referencing {{c|...}}, {{Cis|...}}, or [[... Vol N M]]
+  for (const g of wikitext.matchAll(/<gallery[^>]*>([\s\S]*?)<\/gallery>/gi)) {
+    for (const line of (g[1] || '').split(/\r?\n/)) {
+      addGalleryOrCisEntry(line.trim());
+    }
+  }
+  if (out.length > 0) return out;
+
+  for (const m of wikitext.matchAll(/^\*\s*(?:\{\{\s*c\s*\|([^|}]+)(?:\|[^}]*)?\}\}|\{\{\s*Cis\s*\|([^|}]+)(?:\|[^}]*)?\}\}|\[\[([^|\]]+\s+Vol\s+\d+\s+[^\]]+)\]\])/gim)) {
+    if (m[1]) addPage(m[1]);
+    else if (m[2]) addGalleryOrCisEntry(`{{Cis|${m[2]}}}`);
+    else if (m[3]) addPage(m[3]);
   }
   return out;
 }
@@ -1340,7 +1378,8 @@ export async function fetchComicCollectionIssuesPayload(params: {
       if (wiki === 'marvel') {
         pushCand(`${cleanTitle} Vol 1 ${volNum}`);
         pushCand(`${cleanTitle} Vol ${volNum} 1`);
-      } else if (wiki === 'dc') {
+      } else if (wiki === 'dc' || wiki === 'imagecomics') {
+        pushCand(`${title.trim()}`);
         pushCand(`${title.trim()} (Collected)`);
         pushCand(`${cleanTitle} Vol. ${volNum} (Collected)`);
       }
@@ -1394,7 +1433,11 @@ export async function fetchComicCollectionIssuesPayload(params: {
             (p) => p.title && p.missing === undefined
           );
 
-          // Rank pages by collected issue list count + title/ISBN match
+          // Rank pages by collected issue list count + title/ISBN + format compatibility
+          const wantsBigCollection =
+            /\b(?:omnibus|compendium|complete\s+collection|epic\s+collection|absolute|library\s+edition|masterworks|deluxe\s+edition|colossal)\b/i.test(
+              title
+            );
           let bestPage: MediaWikiQueryPage | undefined;
           let bestIssues: string[] = [];
           let bestScore = -1;
@@ -1413,6 +1456,17 @@ export async function fetchComicCollectionIssuesPayload(params: {
             const cleanPageTitle = (p.title || '')
               .replace(/\s*\(Collected\)\s*$/i, '')
               .trim();
+            const pageIsSmallTpb = /\b(?:tpb|trade\s+paperback)\b/i.test(cleanPageTitle);
+            const pageIsBigCollection =
+              /\b(?:omnibus|compendium|complete\s+collection|epic\s+collection|absolute|library\s+edition|masterworks|deluxe|colossal)\b/i.test(
+                cleanPageTitle
+              );
+
+            // Prevent trade paperback or full-series index pages from hijacking Compendium / Omnibus collections
+            if (wantsBigCollection && !hasExactIsbn && !pageIsBigCollection) {
+              continue;
+            }
+
             const pageVolMatch =
               cleanPageTitle.match(/\bVol\.?\s+1\s+(\d+)$/i) ||
               cleanPageTitle.match(/\bVol\.?\s*(\d+)$/i);
@@ -1428,10 +1482,15 @@ export async function fetchComicCollectionIssuesPayload(params: {
               normTitle(cleanTitle).includes(normTitle(cleanPageTitle).replace(/\bvol\s+\d+.*$/i, '').trim())
                 ? 2
                 : 0;
+            if (!hasExactIsbn && !hasLooseIsbn && titleOverlap === 0) {
+              continue;
+            }
+            const formatBoost = wantsBigCollection && pageIsBigCollection ? 25 : 0;
             const score =
               (hasExactIsbn ? 200 : hasLooseIsbn ? 60 : 0) +
               titleOverlap * 10 +
               volMatchBoost * 15 +
+              formatBoost +
               Math.min(10, issueList.length / 10);
             if (score > bestScore) {
               bestScore = score;
