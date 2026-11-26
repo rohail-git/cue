@@ -8,6 +8,7 @@ import { handleIgdbProxyRequest } from './api/igdb.ts'
 import {
   type ComicWikiSlug,
   fetchComicSeriesIssuesPayload,
+  fetchTrendingComicSeriesPayload,
   searchComicSeriesPayload,
 } from './api/comic-series.ts'
 
@@ -189,6 +190,14 @@ function comicSeriesDevPlugin(): Plugin {
               wiki,
               vol,
               Number.isFinite(limitParam) ? limitParam : 60
+            );
+            res.end(JSON.stringify(payload));
+            return;
+          }
+          if (url.searchParams.get('mode') === 'trending') {
+            const limitParam = Number(url.searchParams.get('limit') || '18');
+            const payload = await fetchTrendingComicSeriesPayload(
+              Number.isFinite(limitParam) ? Math.max(6, Math.min(25, limitParam)) : 18
             );
             res.end(JSON.stringify(payload));
             return;

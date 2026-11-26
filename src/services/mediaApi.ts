@@ -933,71 +933,17 @@ async function fetchTrendingShows(
 }
 
 async function fetchTrendingManga(limit: number): Promise<LiveSearchResult[]> {
-  const win6m = getRecentDateWindow(190);
-  const win12m = getRecentDateWindow(365);
+  const win = getRecentDateWindow(190);
 
-  const fetchAppleManga = async (): Promise<LiveSearchResult[]> => {
+  const queryAniListManga = async (
+    gql: string
+  ): Promise<LiveSearchResult[]> => {
     try {
-      const res = await fetch('https://itunes.apple.com/us/rss/topebooks/limit=25/genre=9026/json');
-      if (!res.ok) return [];
-      const data = (await res.json()) as {
-        feed?: {
-          entry?: Array<{
-            id?: { attributes?: { 'im:id'?: string } };
-            'im:name'?: { label?: string };
-            'im:artist'?: { label?: string };
-            'im:image'?: Array<{ label?: string }>;
-            'im:releaseDate'?: { label?: string };
-            summary?: { label?: string };
-          }>;
-        };
-      };
-      const parsed = parseAppleRssEntries(data.feed?.entry || [], win6m.cutoffDate);
-      const out: LiveSearchResult[] = [];
-      const seen = new Set<string>();
-      for (const { e, relDate, isRecent } of parsed) {
-        if (!isRecent) continue;
-        const id = e.id?.attributes?.['im:id'] || '';
-        const title = (e['im:name']?.label || '').trim();
-        const cover = upscaleAppleArtwork(
-          e['im:image']?.[e['im:image'].length - 1]?.label || ''
-        );
-        const key = canonicalReadWorkKey(title);
-        if (!id || !title || !cover || hasNonLatinScript(title) || seen.has(key)) continue;
-        seen.add(key);
-        const author = e['im:artist']?.label || 'Mangaka';
-        out.push({
-          domain: 'read',
-          kind: 'read',
-          id: `itunes-manga-${id}`,
-          source: 'openlibrary',
-          externalId: id,
-          title,
-          subtitle: author,
-          year: relDate ? relDate.getUTCFullYear() : win6m.currentYear,
-          mediaType: 'manga',
-          genres: ['Manga'],
-          rating: 4.7,
-          posterUrl: cover,
-          backdropUrl: cover,
-          overview: e.summary?.label || `${title} by ${author}.`,
-          director: author,
-          totalUnits: 12,
-        });
-      }
-      return out;
-    } catch {
-      return [];
-    }
-  };
-
-  const fetchAniListRecentManga = async (): Promise<LiveSearchResult[]> => {
-    try {
-      const gql = `query($d:FuzzyDateInt){Page(perPage:24){media(type:MANGA,startDate_greater:$d,sort:[POPULARITY_DESC,TRENDING_DESC]){id format title{english romaji} coverImage{extraLarge large} bannerImage chapters startDate{year} genres averageScore popularity description(asHtml:false) staff(perPage:1){nodes{name{full}}}}}}`;
       const res = await fetch('https://graphql.anilist.co', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: gql, variables: { d: win12m.cutoffYmd } }),
+        body: JSON.stringify({ query: gql }),
+        signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) return [];
       const json = (await res.json()) as {
@@ -1024,7 +970,14 @@ async function fetchTrendingManga(limit: number): Promise<LiveSearchResult[]> {
         .map((m): LiveSearchResult | null => {
           const title = m.title?.english || m.title?.romaji || '';
           const cover = m.coverImage?.extraLarge || m.coverImage?.large || '';
-          if (!title || !cover || hasNonLatinScript(title)) return null;
+          if (
+            !title ||
+            !cover ||
+            hasNonLatinScript(title) ||
+            /\b(?:vol\.?\s*\d+|volume\s+\d+)\b/i.test(title)
+          ) {
+            return null;
+          }
           const author = m.staff?.nodes?.[0]?.name?.full || 'Mangaka';
           return {
             domain: 'read',
@@ -1034,15 +987,15 @@ async function fetchTrendingManga(limit: number): Promise<LiveSearchResult[]> {
             externalId: m.id,
             title,
             subtitle: author,
-            year: m.startDate?.year || win6m.currentYear,
+            year: m.startDate?.year || win.currentYear,
             mediaType: 'manga',
             genres: m.genres?.length ? m.genres.slice(0, 2) : ['Manga'],
-            rating: m.averageScore ? Number((m.averageScore / 20).toFixed(1)) : 4.6,
+            rating: m.averageScore ? Number((m.averageScore / 20).toFixed(1)) : 4.7,
             posterUrl: cover,
             backdropUrl: m.bannerImage || cover,
             overview: stripHtml(m.description) || `${title} manga series.`,
             director: author,
-            totalUnits: m.chapters || 40,
+            totalUnits: m.chapters || 80,
             popularity: m.popularity || 0,
           };
         })
@@ -1052,16 +1005,95 @@ async function fetchTrendingManga(limit: number): Promise<LiveSearchResult[]> {
     }
   };
 
-  const [appleRes, alRes] = await Promise.allSettled([
-    fetchAppleManga(),
-    fetchAniListRecentManga(),
-  ]);
-  const appleList = appleRes.status === 'fulfilled' ? appleRes.value : [];
-  const alList = alRes.status === 'fulfilled' ? alRes.value : [];
-  return interleaveGroups([appleList, alList], limit, (x) => canonicalReadWorkKey(x.title));
+  const releasingGql =
+    'query{Page(perPage:24){media(type:MANGA,format:MANGA,status:RELEASING,sort:[TRENDING_DESC,POPULARITY_DESC]){id format title{english romaji} coverImage{extraLarge large} bannerImage chapters startDate{year} genres averageScore popularity description(asHtml:false) staff(perPage:1){nodes{name{full}}}}}}';
+  const primary = await queryAniListManga(releasingGql);
+
+  const out: LiveSearchResult[] = [];
+  const seen = new Set<string>();
+  for (const item of primary) {
+    const key = canonicalReadWorkKey(item.title);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+    if (out.length >= limit) return out;
+  }
+
+  const fallbackGql =
+    'query{Page(perPage:16){media(type:MANGA,format:MANGA,sort:[TRENDING_DESC]){id format title{english romaji} coverImage{extraLarge large} bannerImage chapters startDate{year} genres averageScore popularity description(asHtml:false) staff(perPage:1){nodes{name{full}}}}}}';
+  const secondary = await queryAniListManga(fallbackGql);
+  for (const item of secondary) {
+    const key = canonicalReadWorkKey(item.title);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 async function fetchTrendingComics(limit: number, targetYear?: number): Promise<LiveSearchResult[]> {
+  if (!targetYear) {
+    try {
+      const res = await fetch(
+        `/api/comic-series?mode=trending&limit=${Math.max(12, Math.min(24, limit))}&v=4`,
+        { signal: AbortSignal.timeout(9500) }
+      );
+      if (res.ok) {
+        const data = (await res.json()) as {
+          items?: Array<{
+            id: string;
+            wiki: 'marvel' | 'dc' | 'imagecomics';
+            volTitle: string;
+            volNumber: number;
+            title: string;
+            publisher: string;
+            startYear: number;
+            isOngoing: boolean;
+            runLabel: string;
+            issueCount: number;
+            coverUrl: string;
+            creator: string;
+            genres: string[];
+            overview: string;
+          }>;
+        };
+        const mapped: LiveSearchResult[] = (data.items || [])
+          .filter((it) => it.title && it.coverUrl)
+          .map((it) => ({
+            domain: 'read' as const,
+            kind: 'read' as const,
+            id: it.id,
+            source: 'comicseries' as const,
+            externalId: it.volTitle,
+            title: it.title,
+            subtitle: `${it.runLabel} · ${it.publisher} · ${it.issueCount} ${
+              it.issueCount === 1 ? 'issue' : 'issues'
+            }`,
+            year: it.startYear,
+            mediaType: 'comic' as const,
+            comicKind: 'series' as const,
+            comicRunLabel: it.runLabel,
+            comicPublisher: it.publisher,
+            comicSeriesWiki: it.wiki,
+            comicSeriesVolTitle: it.volTitle,
+            genres: it.genres.length > 0 ? it.genres : ['Superhero'],
+            rating: 4.7,
+            posterUrl: it.coverUrl,
+            backdropUrl: it.coverUrl,
+            overview: it.overview,
+            director: it.creator || it.publisher,
+            totalUnits: it.issueCount,
+            popularityScore: it.isOngoing ? 92 : 84,
+          }))
+          .slice(0, limit);
+        if (mapped.length > 0) return mapped;
+      }
+    } catch {
+      // fall through to Open Library fallback
+    }
+  }
+
   const win = getRecentDateWindow(185);
   const queryYear = targetYear || win.currentYear;
   const fields =
@@ -1083,7 +1115,7 @@ async function fetchTrendingComics(limit: number, targetYear?: number): Promise<
       const fullTitle = formatDisplayTitle(combinedOpenLibraryTitle(d));
       if (!fullTitle || hasNonLatinScript(fullTitle)) continue;
       if (
-        /\b(coloring book|activity book|study guide|playfulness|in comics|comics in|transnational|torah|anthology)\b/i.test(
+        /\b(coloring book|activity book|study guide|playfulness|in comics|comics in|transnational|torah|anthology|tpb|trade paperback|vol\.?\s*\d+|volume\s+\d+|omnibus|compendium|hardcover|hc|box set|facsimile)\b/i.test(
           fullTitle
         )
       ) {
@@ -1181,7 +1213,16 @@ async function fetchTrendingNovels(limit: number): Promise<LiveSearchResult[]> {
         e['im:image']?.[e['im:image'].length - 1]?.label || ''
       );
       const key = canonicalReadWorkKey(title);
-      if (!id || !title || !cover || hasNonLatinScript(title) || seen.has(key)) continue;
+      if (
+        !id ||
+        !title ||
+        !cover ||
+        hasNonLatinScript(title) ||
+        /\b(?:vol\.?\s*\d+|volume\s+\d+|tpb|omnibus|box set|manga)\b/i.test(title) ||
+        seen.has(key)
+      ) {
+        continue;
+      }
       seen.add(key);
       const author = e['im:artist']?.label || 'Author';
       out.push({
