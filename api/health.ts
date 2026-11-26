@@ -1,6 +1,3 @@
-import { resolveIgdbCredentials, getTwitchAppToken } from './igdb.ts';
-import { resolveTmdbCredential, tmdbFetchJson } from './tmdb.ts';
-
 export interface ServiceProbeResult {
   id: string;
   name: string;
@@ -83,12 +80,46 @@ async function probeEndpoint(
   }
 }
 
+function readTmdbCredential(env?: Record<string, string | undefined>): string {
+  return (
+    env?.TMDB_READ_TOKEN ||
+    env?.TMDB_ACCESS_TOKEN ||
+    env?.TMDB_API_KEY ||
+    process.env.TMDB_READ_TOKEN ||
+    process.env.TMDB_ACCESS_TOKEN ||
+    process.env.TMDB_API_KEY ||
+    ''
+  ).trim();
+}
+
+function readIgdbCreds(env?: Record<string, string | undefined>): {
+  clientId: string;
+  clientSecret: string;
+} {
+  return {
+    clientId: (
+      env?.TWITCH_CLIENT_ID ||
+      env?.IGDB_CLIENT_ID ||
+      process.env.TWITCH_CLIENT_ID ||
+      process.env.IGDB_CLIENT_ID ||
+      ''
+    ).trim(),
+    clientSecret: (
+      env?.TWITCH_CLIENT_SECRET ||
+      env?.IGDB_CLIENT_SECRET ||
+      process.env.TWITCH_CLIENT_SECRET ||
+      process.env.IGDB_CLIENT_SECRET ||
+      ''
+    ).trim(),
+  };
+}
+
 export async function fetchLiveHealthPayload(
   env?: Record<string, string | undefined>
 ): Promise<LiveHealthReport> {
   const started = Date.now();
-  const tmdbCredential = resolveTmdbCredential(env);
-  const { clientId: igdbClientId, clientSecret: igdbSecret } = resolveIgdbCredentials(env);
+  const tmdbCredential = readTmdbCredential(env);
+  const { clientId: igdbClientId, clientSecret: igdbSecret } = readIgdbCreds(env);
   const tmdbServerConfigured = Boolean(tmdbCredential);
   const igdbServerConfigured = Boolean(igdbClientId && igdbSecret);
 
@@ -148,38 +179,34 @@ export async function fetchLiveHealthPayload(
   ];
 
   if (tmdbServerConfigured) {
+    const isBearer = tmdbCredential.length > 60 || tmdbCredential.startsWith('eyJ');
+    const url = isBearer
+      ? 'https://api.themoviedb.org/3/configuration'
+      : `https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(tmdbCredential)}`;
     probeTasks.push(
-      (async (): Promise<ServiceProbeResult> => {
-        const s = Date.now();
-        const r = await tmdbFetchJson('/configuration', tmdbCredential);
-        return {
-          id: 'tmdb',
-          name: 'TMDB Watch Proxy',
-          domain: 'watch',
-          ok: r.ok,
-          statusCode: r.status,
-          latencyMs: Date.now() - s,
-          note: r.ok ? 'Server proxy active' : `HTTP ${r.status}`,
-        };
-      })()
+      probeEndpoint(
+        'tmdb',
+        'TMDB Watch Proxy',
+        'watch',
+        url,
+        isBearer ? { headers: { Authorization: `Bearer ${tmdbCredential}` } } : undefined,
+        (d) => Boolean(d && typeof d === 'object' && 'images' in d)
+      )
     );
   }
 
   if (igdbServerConfigured) {
     probeTasks.push(
-      (async (): Promise<ServiceProbeResult> => {
-        const s = Date.now();
-        const token = await getTwitchAppToken(igdbClientId, igdbSecret);
-        return {
-          id: 'igdb',
-          name: 'IGDB Games Proxy',
-          domain: 'play',
-          ok: Boolean(token),
-          statusCode: token ? 200 : 401,
-          latencyMs: Date.now() - s,
-          note: token ? 'Twitch OAuth active' : 'OAuth error',
-        };
-      })()
+      probeEndpoint(
+        'igdb',
+        'IGDB Games Proxy',
+        'play',
+        `https://id.twitch.tv/oauth2/token?client_id=${encodeURIComponent(
+          igdbClientId
+        )}&client_secret=${encodeURIComponent(igdbSecret)}&grant_type=client_credentials`,
+        { method: 'POST' },
+        (d) => Boolean(d && typeof d === 'object' && 'access_token' in d)
+      )
     );
   }
 
