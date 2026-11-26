@@ -2,6 +2,7 @@ import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { type GameDiscoverMode, fetchTrendingGamesPayload } from './api/trending-games.ts'
+import { fetchLiveHealthPayload } from './api/health.ts'
 import {
   type ComicWikiSlug,
   fetchComicSeriesIssuesPayload,
@@ -203,6 +204,44 @@ function comicSeriesDevPlugin(): Plugin {
   };
 }
 
+function healthDevPlugin(): Plugin {
+  return {
+    name: 'cue-health-dev',
+    configureServer(server) {
+      server.middlewares.use('/api/health', async (req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== 'GET') {
+          next();
+          return;
+        }
+        try {
+          const payload = await fetchLiveHealthPayload();
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 200;
+          res.end(JSON.stringify(payload));
+        } catch {
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 200;
+          res.end(
+            JSON.stringify({
+              status: 'outage',
+              checkedAt: new Date().toISOString(),
+              overallLatencyMs: 0,
+              onlineCount: 0,
+              totalCount: 6,
+              services: [],
+            })
+          );
+        }
+      });
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     react(),
@@ -210,5 +249,6 @@ export default defineConfig({
     imdbResolveDevPlugin(),
     trendingGamesDevPlugin(),
     comicSeriesDevPlugin(),
+    healthDevPlugin(),
   ],
 })

@@ -307,6 +307,16 @@ interface CueContextValue {
   addLiveMovieToStore: (movie: Movie, status?: MovieWatchStatus, andBookmark?: boolean) => void;
   addLiveReadToStore: (item: ReadItem, status?: ReadWatchStatus, andBookmark?: boolean) => void;
   addLiveGameToStore: (game: GameItem, status?: GameWatchStatus, andBookmark?: boolean) => void;
+  patchMediaMetadata: (
+    kind: 'show' | 'movie' | 'read' | 'game',
+    id: string,
+    patch: {
+      posterUrl?: string;
+      backdropUrl?: string;
+      coverUrl?: string;
+      clearStaleIssues?: boolean;
+    }
+  ) => void;
 
   // Private Journal & Lists
   addJournalEntry: (input: Omit<JournalEntry, 'id' | 'createdAt'>) => void;
@@ -3113,6 +3123,84 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     [showToast]
   );
 
+  const patchMediaMetadata = useCallback(
+    (
+      kind: 'show' | 'movie' | 'read' | 'game',
+      id: string,
+      patch: {
+        posterUrl?: string;
+        backdropUrl?: string;
+        coverUrl?: string;
+        clearStaleIssues?: boolean;
+      }
+    ) => {
+      commitState((prev) => {
+        if (kind === 'show') {
+          const s = prev.shows[id];
+          if (!s) return prev;
+          return {
+            ...prev,
+            shows: {
+              ...prev.shows,
+              [id]: {
+                ...s,
+                posterUrl: patch.posterUrl ?? s.posterUrl,
+                backdropUrl: patch.backdropUrl ?? s.backdropUrl,
+              },
+            },
+          };
+        }
+        if (kind === 'movie') {
+          const m = prev.movies[id];
+          if (!m) return prev;
+          return {
+            ...prev,
+            movies: {
+              ...prev.movies,
+              [id]: {
+                ...m,
+                posterUrl: patch.posterUrl ?? m.posterUrl,
+                backdropUrl: patch.backdropUrl ?? m.backdropUrl,
+              },
+            },
+          };
+        }
+        if (kind === 'read') {
+          const r = prev.readItems[id];
+          if (!r) return prev;
+          return {
+            ...prev,
+            readItems: {
+              ...prev.readItems,
+              [id]: {
+                ...r,
+                coverUrl: patch.coverUrl ?? r.coverUrl,
+                backdropUrl: patch.backdropUrl ?? r.backdropUrl,
+                ...(patch.clearStaleIssues
+                  ? { issueDetails: undefined, issueDetailsKey: undefined }
+                  : {}),
+              },
+            },
+          };
+        }
+        const g = prev.games[id];
+        if (!g) return prev;
+        return {
+          ...prev,
+          games: {
+            ...prev.games,
+            [id]: {
+              ...g,
+              coverUrl: patch.coverUrl ?? g.coverUrl,
+              backdropUrl: patch.backdropUrl ?? g.backdropUrl,
+            },
+          },
+        };
+      });
+    },
+    []
+  );
+
   // Private Journal & Lists
   const addJournalEntry = useCallback(
     (input: Omit<JournalEntry, 'id' | 'createdAt'>) => {
@@ -3905,6 +3993,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         addLiveMovieToStore,
         addLiveReadToStore,
         addLiveGameToStore,
+        patchMediaMetadata,
         addJournalEntry,
         deleteJournalEntry,
         markAllNotificationsRead,

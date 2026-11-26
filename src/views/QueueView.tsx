@@ -10,6 +10,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { BingersMediaRow } from '../components/BingersMediaRow';
+import { CueMindCard } from '../components/CueMindCard';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
 import { useCueStore } from '../store/useCueStore';
 import type { GameChapterUnit, HistoryEntry, MediaDomain } from '../types';
@@ -348,6 +349,9 @@ export function QueueView() {
           })}
         </div>
       </div>
+
+      {/* Cue Mind: Live Intelligence & Health Telemetry */}
+      <CueMindCard />
 
       {isEmpty && (
         <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center my-4">

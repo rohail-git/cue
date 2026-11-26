@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "health-check": "node scripts/health-check.mjs"
   },
   "dependencies": {
     "@vercel/blob": "^2.9.0",

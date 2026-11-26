@@ -1,17 +1,28 @@
 import { useEffect, useState } from 'react';
 import {
+  Activity,
   Download,
+  HeartPulse,
   KeyRound,
+  Loader2,
   Palette,
+  RefreshCw,
   RotateCcw,
   ShieldAlert,
   Trash2,
   Upload,
   User,
+  Wrench,
   X,
 } from 'lucide-react';
 import { testTmdbConnection } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
+import {
+  fetchLiveHealth,
+  scanAndRepairLibrary,
+  type LibraryRepairSummary,
+  type LiveHealthReport,
+} from '../utils/libraryHeal';
 
 export function SettingsModal() {
   const {
@@ -21,6 +32,7 @@ export function SettingsModal() {
     setImportModalOpen,
     updateProfile,
     updateSettings,
+    patchMediaMetadata,
     exportLibraryJson,
     selectiveReset,
     clearAllData,
@@ -33,6 +45,10 @@ export function SettingsModal() {
   const [tmdbKey, setTmdbKey] = useState(state.settings.tmdbApiKey);
   const [tmdbStatus, setTmdbStatus] = useState<'idle' | 'testing' | 'ok' | 'err'>('idle');
   const [confirmScope, setConfirmScope] = useState<'watch' | 'read' | 'play' | 'all' | 'wipe' | null>(null);
+  const [health, setHealth] = useState<LiveHealthReport | null>(null);
+  const [loadingHealth, setLoadingHealth] = useState(false);
+  const [repairing, setRepairing] = useState(false);
+  const [repairSummary, setRepairSummary] = useState<LibraryRepairSummary | null>(null);
 
   useEffect(() => {
     if (!settingsOpen) {
@@ -43,6 +59,11 @@ export function SettingsModal() {
     setHandle(state.profile.handle);
     setBio(state.profile.bio);
     setTmdbKey(state.settings.tmdbApiKey);
+    setLoadingHealth(true);
+    fetchLiveHealth(false).then((rep) => {
+      setHealth(rep);
+      setLoadingHealth(false);
+    });
   }, [settingsOpen, state.profile.name, state.profile.handle, state.profile.bio, state.settings.tmdbApiKey]);
 
   if (!settingsOpen) return null;
@@ -317,6 +338,104 @@ export function SettingsModal() {
             {tmdbStatus === 'err' && (
               <p className="text-xs text-red-300">
                 Could not verify key; zero-config search remains active.
+              </p>
+            )}
+          </section>
+
+          {/* System Health & Self-Healing */}
+          <section className="space-y-3 pt-2 border-t border-white/8">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <HeartPulse className="w-4 h-4 text-[#7AC7A4]" />
+                <h4 className="text-sm font-semibold text-ink">System Health & Self-Healing</h4>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  setLoadingHealth(true);
+                  const rep = await fetchLiveHealth(true);
+                  setHealth(rep);
+                  setLoadingHealth(false);
+                }}
+                disabled={loadingHealth}
+                className="text-xs font-medium text-ink-dim hover:text-ink inline-flex items-center gap-1"
+              >
+                {loadingHealth ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-3.5 h-3.5" />
+                )}
+                <span>Refresh</span>
+              </button>
+            </div>
+
+            {health ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {health.services.map((s) => (
+                  <div
+                    key={s.id}
+                    className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl bg-background border border-white/8 text-xs"
+                  >
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <span
+                        className={`h-2 w-2 rounded-full shrink-0 ${
+                          s.ok ? 'bg-[#7AC7A4]' : 'bg-red-400'
+                        }`}
+                      />
+                      <span className="text-ink truncate">{s.name}</span>
+                    </span>
+                    <span className="text-[11px] text-ink-faint tabular-nums shrink-0">
+                      {s.ok ? `${s.latencyMs}ms` : s.note || 'Down'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : loadingHealth ? (
+              <div className="grid grid-cols-2 gap-2">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div
+                    key={`svc-skel-${i}`}
+                    className="h-8 rounded-xl bg-background/60 border border-white/[0.04] animate-pulse"
+                  />
+                ))}
+              </div>
+            ) : null}
+
+            <button
+              type="button"
+              disabled={repairing}
+              onClick={async () => {
+                setRepairing(true);
+                try {
+                  const summary = await scanAndRepairLibrary(state, patchMediaMetadata);
+                  setRepairSummary(summary);
+                  showToast(
+                    summary.repaired > 0 || summary.clearedStaleComics > 0
+                      ? `Repaired ${summary.repaired} covers & refreshed ${summary.clearedStaleComics} comics`
+                      : `Verified ${summary.scanned} library items — all healthy`
+                  );
+                } finally {
+                  setRepairing(false);
+                }
+              }}
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-background border border-white/10 hover:border-watch/50 text-sm font-medium text-ink disabled:opacity-50"
+            >
+              {repairing ? (
+                <Loader2 className="w-4 h-4 animate-spin text-watch" />
+              ) : (
+                <Wrench className="w-4 h-4 text-watch" />
+              )}
+              <span>{repairing ? 'Scanning & repairing…' : 'Check & repair broken covers'}</span>
+            </button>
+
+            {repairSummary && (
+              <p className="text-xs text-[#7AC7A4] flex items-center gap-1.5 tabular-nums">
+                <Activity className="w-3.5 h-3.5 shrink-0" />
+                <span>
+                  {repairSummary.scanned} scanned · {repairSummary.healthy} healthy ·{' '}
+                  {repairSummary.repaired} repaired · {repairSummary.clearedStaleComics} caches
+                  refreshed
+                </span>
               </p>
             )}
           </section>
