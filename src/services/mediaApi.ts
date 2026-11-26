@@ -198,7 +198,11 @@ function stripEditionAffixes(title: string): string {
         ''
       )
       .replace(
-        /(?:[:,\-–—\s]+)(?:the\s+)?(?:absolute|deluxe|omnibus|compendium|compact(?:\s+comics)?|collector'?s|anniversary|complete|ultimate|standard)?\s*(?:hardcover|hc|softcover|tpb|trade\s+paperback|edition)\b.*$/i,
+        /(?:[:,\-–—\s]+)(?:the\s+)?(?:(?:absolute|deluxe|omnibus|compendium|compact(?:\s+comics)?|collector'?s|anniversary|complete|ultimate|library|standard)\s+)?(?:hardcover|hc|softcover|tpb|trade\s+paperback|edition)\b.*$/i,
+        ''
+      )
+      .replace(
+        /(?:[:,\-–—\s]+)(?:the\s+)?(?:omnibus|compendium|absolute|deluxe|epic\s+collection|complete\s+collection)\b.*$/i,
         ''
       )
       .replace(/\s+#\d+\s*$/i, '')
@@ -4437,6 +4441,7 @@ const MONTH_ABBR = [
 ];
 
 function cleanFandomStoryTitle(raw: string, seriesNorm: string): string | undefined {
+  if (/^\s*\|/.test(raw)) return undefined;
   let s = raw
     .replace(/\[\[([^|\]]+)\|([^\]]+)\]\]/g, '$2')
     .replace(/\[\[([^\]]+)/g, '$1')
@@ -4445,14 +4450,14 @@ function cleanFandomStoryTitle(raw: string, seriesNorm: string): string | undefi
     .replace(/<[^>]+>/g, '')
     .trim();
   s = s.replace(/^["'“”]+|["'“”]+$/g, '').trim();
-  if (!s || s.length < 2) return undefined;
+  if (!s || s.length < 2 || /^\|/.test(s)) return undefined;
   if (normalizeTitleKey(s) === seriesNorm) return undefined;
   return s;
 }
 
 function formatFandomReleaseDate(rawWikitext: string): string | undefined {
-  const moRaw = rawWikitext.match(/\|\s*Month\s*=\s*([^\n|]+)/i)?.[1]?.trim();
-  const yrRaw = rawWikitext.match(/\|\s*Year\s*=\s*(\d{4})/i)?.[1]?.trim();
+  const moRaw = rawWikitext.match(/\|\s*Month\s*=[^\S\r\n]*([^\n|]+)/i)?.[1]?.trim();
+  const yrRaw = rawWikitext.match(/\|\s*Year\s*=[^\S\r\n]*(\d{4})/i)?.[1]?.trim();
   if (!yrRaw) return undefined;
   if (!moRaw) return yrRaw;
 
@@ -4475,7 +4480,8 @@ export async function fetchComicIssueDetails(
   title: string,
   totalIssues: number,
   creator?: string,
-  editionId?: string
+  editionId?: string,
+  publisher?: string
 ): Promise<Record<number, ComicIssueMeta>> {
   const cappedTotal = Math.max(1, Math.min(48, Math.round(totalIssues)));
   const cleanSeries = stripEditionAffixes(title)
@@ -4483,6 +4489,7 @@ export async function fetchComicIssueDetails(
     .replace(/\s+/g, ' ')
     .trim();
   const seriesNorm = normalizeTitleKey(cleanSeries);
+  const seriesCore = seriesNorm.replace(/^the\s+/, '');
 
   const matchedKey =
     (CURATED_COMIC_WIKI_MAP[seriesNorm] ? seriesNorm : undefined) ||
@@ -4498,14 +4505,20 @@ export async function fetchComicIssueDetails(
       slotSpecs.push({ slot, ...resolved });
     }
   } else {
-    const marvelHay = `${title} ${creator || ''}`.toLowerCase();
+    const pubHay = `${title} ${creator || ''} ${publisher || ''}`.toLowerCase();
     const isLikelyMarvel =
-      /\b(marvel|spider-man|x-men|avengers|daredevil|wolverine|iron man|captain america|thor|hulk)\b/.test(
-        marvelHay
+      /\b(marvel|spider-man|x-men|avengers|daredevil|wolverine|iron man|captain america|thor|hulk|annihilation|guardians of the galaxy|silver surfer|fantastic four)\b/.test(
+        pubHay
+      );
+    const isLikelyImage =
+      /\b(image comics|invincible|saga|walking dead|spawn|radiant black|department of truth)\b/.test(
+        pubHay
       );
     const wikiOrder: FandomWikiSlug[] = isLikelyMarvel
       ? ['marvel', 'dc', 'imagecomics']
-      : ['dc', 'marvel', 'imagecomics'];
+      : isLikelyImage
+        ? ['imagecomics', 'marvel', 'dc']
+        : ['dc', 'marvel', 'imagecomics'];
 
     for (const w of wikiOrder) {
       try {
@@ -4520,11 +4533,17 @@ export async function fetchComicIssueDetails(
         };
         const volHits = (json.query?.prefixsearch || [])
           .map((x) => x.title || '')
-          .map((t) => t.match(/^(.+?\bVol\s+\d+)\s+\d+$/i))
-          .filter((m): m is RegExpMatchArray => Boolean(m));
+          .map((t) => t.match(/^(.+?)\s+Vol\s+(\d+)\s+\d+$/i))
+          .filter((m): m is RegExpMatchArray => {
+            if (!m) return false;
+            const volBase = normalizeTitleKey(m[1]).replace(/^the\s+/, '');
+            return volBase === seriesCore && seriesCore.length > 0;
+          })
+          .sort((a, b) => Number(a[2]) - Number(b[2]));
+
         if (volHits.length > 0) {
           targetWiki = w;
-          const prefix = volHits[0][1];
+          const prefix = `${volHits[0][1].trim()} Vol ${volHits[0][2]}`;
           for (let slot = 1; slot <= cappedTotal; slot += 1) {
             slotSpecs.push({
               slot,
@@ -4601,7 +4620,7 @@ export async function fetchComicIssueDetails(
 
         const page = pageByTitle.get(cur.toLowerCase()) || pageByTitle.get(spec.pageTitle.toLowerCase());
         const rawWikitext = page?.revisions?.[0]?.slots?.main?.['*'] || '';
-        const imgMatch = rawWikitext.match(/\|\s*Image1?\s*=\s*([^\n|]+)/i)?.[1];
+        const imgMatch = rawWikitext.match(/\|\s*Image1?\s*=[^\S\r\n]*([^\n|]+)/i)?.[1];
         const cleanFile = imgMatch
           ? imgMatch
               .replace(/\[\[(?:File|Image):/i, '')
@@ -4669,7 +4688,7 @@ export async function fetchComicIssueDetails(
       for (const { spec, page, rawWikitext, coverFilename } of batchParsed) {
         if (!page || page.missing !== undefined) continue;
 
-        const storyRaw = rawWikitext.match(/\|\s*StoryTitle1\s*=\s*([^\n]+)/i)?.[1];
+        const storyRaw = rawWikitext.match(/\|\s*StoryTitle1\s*=[^\S\r\n]*([^\n]+)/i)?.[1];
         const storyTitle = storyRaw ? cleanFandomStoryTitle(storyRaw, seriesNorm) : undefined;
         const releaseDate = rawWikitext ? formatFandomReleaseDate(rawWikitext) : undefined;
         const coverUrl =

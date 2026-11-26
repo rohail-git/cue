@@ -143,7 +143,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   useEffect(() => {
     if (!item || item.format !== 'comic') return;
     const total = Math.max(1, item.totalUnits);
-    const detailsKey = `${progress?.editionId || progress?.edition || 'default'}::${total}::ca2`;
+    const detailsKey = `${progress?.editionId || progress?.edition || 'default'}::${total}::ca5`;
     if (
       item.issueDetailsKey === detailsKey &&
       item.issueDetails &&
@@ -167,7 +167,10 @@ export function ReadDetailView({ readId }: { readId: string }) {
       ).then(({ issues, totalIssues }) => {
         if (cancelled) return;
         fetchedIssueKeyRef.current.add(cacheKey);
-        if (Object.keys(issues).length > 0) {
+        if (
+          Object.keys(issues).length > 0 ||
+          (item.issueDetails && Object.keys(item.issueDetails).length > 0)
+        ) {
           updateReadIssueDetails(
             item.id,
             issues,
@@ -177,15 +180,22 @@ export function ReadDetailView({ readId }: { readId: string }) {
         }
       });
     } else {
-      fetchComicIssueDetails(item.title, total, item.creator, progress?.editionId).then(
-        (details) => {
-          if (cancelled) return;
-          fetchedIssueKeyRef.current.add(cacheKey);
-          if (Object.keys(details).length > 0) {
-            updateReadIssueDetails(item.id, details, detailsKey);
-          }
+      fetchComicIssueDetails(
+        item.title,
+        total,
+        item.creator,
+        progress?.editionId,
+        item.comicPublisher
+      ).then((details) => {
+        if (cancelled) return;
+        fetchedIssueKeyRef.current.add(cacheKey);
+        if (
+          Object.keys(details).length > 0 ||
+          (item.issueDetails && Object.keys(item.issueDetails).length > 0)
+        ) {
+          updateReadIssueDetails(item.id, details, detailsKey);
         }
-      );
+      });
     }
     return () => {
       cancelled = true;
