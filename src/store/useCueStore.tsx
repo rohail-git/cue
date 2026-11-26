@@ -307,6 +307,11 @@ interface CueContextValue {
   rateGameChapter: (gameId: string, chapter: number, rating: number | undefined) => void;
   setGameChapterTitle: (gameId: string, chapter: number, title: string) => void;
   setGameMood: (gameId: string, mood: PersonalMood | undefined) => void;
+  setMediaFinishedDate: (
+    kind: 'show' | 'movie' | 'read' | 'game',
+    id: string,
+    dateValue: string | undefined
+  ) => void;
   resetGameProgress: (gameId: string) => void;
 
   // Collection & List actions
@@ -977,6 +982,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       bookmarked: prev?.bookmarked ?? true,
       notifications: prev?.notifications ?? true,
       lastWatchedAt: new Date().toISOString(),
+      finishedAt: status === 'finished' ? prev?.finishedAt || new Date().toISOString() : undefined,
     };
   };
 
@@ -1661,6 +1667,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       bookmarked: prev?.bookmarked ?? true,
       edition: prev?.edition,
       lastReadAt: activeCount > 0 ? new Date().toISOString() : prev?.lastReadAt,
+      finishedAt: finished ? prev?.finishedAt || new Date().toISOString() : undefined,
     };
   };
 
@@ -2531,6 +2538,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       platform: existing?.platform || game.platforms[0] || 'PC',
       bookmarked: existing?.bookmarked ?? true,
       lastPlayedAt: new Date().toISOString(),
+      finishedAt: isFinished ? existing?.finishedAt || new Date().toISOString() : undefined,
     };
   };
 
@@ -2769,6 +2777,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               platform: patch.platform ?? existing?.platform ?? game.platforms[0] ?? 'PC',
               bookmarked: existing?.bookmarked ?? true,
               lastPlayedAt: new Date().toISOString(),
+              finishedAt:
+                nextStatus === 'completed'
+                  ? existing?.finishedAt || new Date().toISOString()
+                  : undefined,
             },
           },
         };
@@ -2814,6 +2826,9 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               platform: existing?.platform || game.platforms[0] || 'PC',
               bookmarked: existing?.bookmarked ?? true,
               lastPlayedAt: new Date().toISOString(),
+              finishedAt: nextDone
+                ? existing?.finishedAt || new Date().toISOString()
+                : undefined,
             },
           },
         };
@@ -2829,13 +2844,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       if (!game) return prev;
       const existing = prev.gameProgress[gameId];
       const nextPlat = !(existing?.platinum ?? false);
+      const nextStatus = nextPlat ? 'completed' : existing?.status || 'playing';
       return {
         ...prev,
         gameProgress: {
           ...prev.gameProgress,
           [gameId]: {
             ...(existing || {}),
-            status: nextPlat ? 'completed' : existing?.status || 'playing',
+            status: nextStatus,
             hoursPlayed: existing?.hoursPlayed || 0,
             completionPct: nextPlat ? 100 : existing?.completionPct || 0,
             currentChapter: nextPlat && game.totalChapters ? game.totalChapters : existing?.currentChapter,
@@ -2844,6 +2860,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             platform: existing?.platform || game.platforms[0] || 'PC',
             bookmarked: existing?.bookmarked ?? true,
             lastPlayedAt: new Date().toISOString(),
+            finishedAt:
+              nextStatus === 'completed'
+                ? existing?.finishedAt || new Date().toISOString()
+                : undefined,
           },
         },
       };
@@ -3028,6 +3048,65 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       };
     });
   }, []);
+
+  const setMediaFinishedDate = useCallback(
+    (
+      kind: 'show' | 'movie' | 'read' | 'game',
+      id: string,
+      dateValue: string | undefined
+    ) => {
+      const normalizedIso = dateValue?.trim()
+        ? /^\d{4}-\d{2}-\d{2}$/.test(dateValue.trim())
+          ? `${dateValue.trim()}T12:00:00.000Z`
+          : dateValue.trim()
+        : undefined;
+      commitState((prev) => {
+        if (kind === 'show') {
+          const prog = prev.showProgress[id];
+          if (!prog) return prev;
+          return {
+            ...prev,
+            showProgress: {
+              ...prev.showProgress,
+              [id]: { ...prog, finishedAt: normalizedIso },
+            },
+          };
+        }
+        if (kind === 'movie') {
+          const prog = prev.movieProgress[id];
+          if (!prog) return prev;
+          return {
+            ...prev,
+            movieProgress: {
+              ...prev.movieProgress,
+              [id]: { ...prog, watchedAt: normalizedIso },
+            },
+          };
+        }
+        if (kind === 'read') {
+          const prog = prev.readProgress[id];
+          if (!prog) return prev;
+          return {
+            ...prev,
+            readProgress: {
+              ...prev.readProgress,
+              [id]: { ...prog, finishedAt: normalizedIso },
+            },
+          };
+        }
+        const prog = prev.gameProgress[id];
+        if (!prog) return prev;
+        return {
+          ...prev,
+          gameProgress: {
+            ...prev.gameProgress,
+            [id]: { ...prog, finishedAt: normalizedIso },
+          },
+        };
+      });
+    },
+    []
+  );
 
   const resetGameProgress = useCallback(
     (gameId: string) => {
@@ -4121,6 +4200,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         rateGameChapter,
         setGameChapterTitle,
         setGameMood,
+        setMediaFinishedDate,
         resetGameProgress,
         rateCollection,
         toggleListPinnedToQueue,

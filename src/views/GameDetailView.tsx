@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Bookmark,
+  CalendarCheck2,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -20,6 +21,7 @@ import {
 } from 'lucide-react';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
+import { FinishedDateRow, formatFinishedDate } from '../components/FinishedDateCard';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl } from '../components/RatingControl';
@@ -67,6 +69,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
     rateGameChapter,
     setGameChapterTitle,
     setGameMood,
+    setMediaFinishedDate,
     resetGameProgress,
     addJournalEntry,
     toggleItemInList,
@@ -513,6 +516,12 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                       Your rating ★ {formatRating(progress.rating)}/5
                     </span>
                   )}
+                  {isCompleted && formatFinishedDate(progress?.finishedAt || progress?.lastPlayedAt) && (
+                    <span className="bg-surface border border-watched/35 rounded-full px-3 py-1 text-xs font-medium text-watched inline-flex items-center gap-1.5 tabular-nums">
+                      <CalendarCheck2 className="w-3.5 h-3.5" />
+                      Completed {formatFinishedDate(progress?.finishedAt || progress?.lastPlayedAt)}
+                    </span>
+                  )}
                 </div>
               </section>
 
@@ -687,37 +696,151 @@ export function GameDetailView({ gameId }: { gameId: string }) {
             </>
           ) : (
             <>
-              {/* Advanced Quick Actions: Complete + Platinum */}
-              <div className="flex items-center gap-2.5 flex-wrap mb-4">
-                <button
-                  type="button"
-                  onClick={() => toggleGameCompleted(game.id)}
-                  className={`h-9 px-4 rounded-full border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
-                    isCompleted
-                      ? 'border-watched bg-watched/15 text-watched'
-                      : 'border-white/12 bg-surface text-ink hover:bg-surface-raised'
-                  }`}
-                >
-                  <Check className="w-3.5 h-3.5" strokeWidth={2.5} />
-                  <span>{isCompleted ? 'Completed' : 'Mark Completed'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => toggleGamePlatinum(game.id)}
-                  aria-label="Toggle 100% Platinum trophy"
-                  className={`h-9 px-3.5 rounded-full border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
-                    progress?.platinum
-                      ? 'border-brand bg-brand/15 text-brand'
-                      : 'border-white/12 bg-surface text-ink-dim hover:text-ink'
-                  }`}
-                >
-                  <Trophy className="w-3.5 h-3.5" />
-                  <span>100% Trophy</span>
-                </button>
-              </div>
+              {/* Advanced Card 1: Play Log, Completion, Platform & Finished Date */}
+              <section className="rounded-[24px] bg-surface border border-white/[0.07] p-4 sm:p-5 space-y-4 mb-5">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => toggleGameCompleted(game.id)}
+                      className={`h-9 px-3.5 rounded-full border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
+                        isCompleted
+                          ? 'border-watched bg-watched/15 text-watched'
+                          : 'border-white/12 bg-background text-ink hover:bg-surface-raised'
+                      }`}
+                    >
+                      <Check className="w-3.5 h-3.5" strokeWidth={2.5} />
+                      <span>{isCompleted ? 'Completed' : 'Mark Completed'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleGamePlatinum(game.id)}
+                      aria-label="Toggle 100% Platinum trophy"
+                      className={`h-9 px-3.5 rounded-full border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
+                        progress?.platinum
+                          ? 'border-brand bg-brand/15 text-brand'
+                          : 'border-white/12 bg-background text-ink-dim hover:text-ink'
+                      }`}
+                    >
+                      <Trophy className="w-3.5 h-3.5" />
+                      <span>100% Trophy</span>
+                    </button>
+                  </div>
+                </div>
 
-              {/* Story Chapter Tracker (Advanced) */}
-              <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5">
+                <div className="rounded-2xl bg-background/50 border border-white/[0.05] grid grid-cols-3 divide-x divide-white/[0.06] text-center">
+                  <div className="py-3 px-2">
+                    <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
+                      Hours
+                    </p>
+                    <div className="flex items-center justify-center gap-1.5 mt-1">
+                      <button
+                        type="button"
+                        onClick={() => logGameSession(game.id, -1)}
+                        aria-label="Decrease hours"
+                        className="w-6 h-6 rounded-full bg-white/8 flex items-center justify-center text-ink-dim hover:text-ink"
+                      >
+                        <Minus className="w-3 h-3" />
+                      </button>
+                      <span className="font-display font-bold text-base text-ink tabular-nums min-w-[2.4rem]">
+                        {hours}h
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => logGameSession(game.id, 1)}
+                        aria-label="Increase hours"
+                        className="w-6 h-6 rounded-full bg-brand/20 flex items-center justify-center text-brand"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="py-3 px-2">
+                    <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
+                      Completion
+                    </p>
+                    <p className="font-display font-bold text-base sm:text-lg text-watched tabular-nums mt-0.5">
+                      {pct}%
+                    </p>
+                  </div>
+                  <div className="py-3 px-2">
+                    <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
+                      Runs
+                    </p>
+                    <div className="flex items-center justify-center gap-1.5 mt-1">
+                      <button
+                        type="button"
+                        onClick={() => incrementGamePlaythrough(game.id, -1)}
+                        aria-label="Decrease playthroughs"
+                        className="w-6 h-6 rounded-full bg-white/8 flex items-center justify-center text-ink-dim hover:text-ink"
+                      >
+                        <Minus className="w-3 h-3" />
+                      </button>
+                      <span className="font-display font-bold text-base text-watched tabular-nums min-w-[1.5rem]">
+                        x{progress?.playthroughCount || 0}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => incrementGamePlaythrough(game.id, 1)}
+                        aria-label="Increase playthroughs"
+                        className="w-6 h-6 rounded-full bg-watched/20 flex items-center justify-center text-watched"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-semibold text-ink-dim">Overall completion</span>
+                    <span className="text-xs font-bold text-watched tabular-nums">{pct}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={pct}
+                    onChange={(e) =>
+                      updateGameProgress(game.id, { completionPct: Number(e.target.value) })
+                    }
+                    aria-label="Game completion percentage"
+                    className="w-full accent-[#A894E8] cursor-pointer"
+                  />
+                </div>
+
+                <div className="pt-2 border-t border-white/[0.06]">
+                  <p className="text-xs font-semibold text-ink-dim mb-2">Platform</p>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {PLATFORMS.map((plat) => (
+                      <button
+                        key={plat}
+                        type="button"
+                        onClick={() => updateGameProgress(game.id, { platform: plat })}
+                        className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                          platform === plat
+                            ? 'border-brand bg-brand/15 text-ink'
+                            : 'border-white/8 bg-background text-ink-dim hover:text-ink'
+                        }`}
+                      >
+                        {plat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <FinishedDateRow
+                  isFinished={isCompleted}
+                  finishedAt={progress?.finishedAt}
+                  fallbackDate={progress?.lastPlayedAt}
+                  verbLabel="Completed"
+                  onChangeDate={(ymd) => setMediaFinishedDate('game', game.id, ymd)}
+                  onMarkFinished={() => toggleGameCompleted(game.id)}
+                />
+              </section>
+
+              {/* Story Chapter Tracker (Advanced Card 2) */}
+              <section className="rounded-[24px] bg-surface border border-white/[0.07] p-4 sm:p-5 mb-5">
                 <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-semibold text-ink">Story chapter progress</span>
@@ -927,102 +1050,20 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                 )}
               </section>
 
-              <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-4 mb-5">
-                <div className="flex items-center justify-between flex-wrap gap-3">
-                  <div>
-                    <p className="text-xs text-ink-dim uppercase tracking-wider font-semibold">
-                      Hours played
-                    </p>
-                    <div className="flex items-center gap-2.5 mt-1">
-                      <button
-                        type="button"
-                        onClick={() => logGameSession(game.id, -1)}
-                        className="w-8 h-8 rounded-full bg-white/8 flex items-center justify-center text-ink"
-                      >
-                        <Minus className="w-3.5 h-3.5" />
-                      </button>
-                      <span className="font-display font-bold text-2xl text-ink tabular-nums min-w-[3.5rem] text-center">
-                        {hours}h
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => logGameSession(game.id, 1)}
-                        className="w-8 h-8 rounded-full bg-brand/20 text-brand flex items-center justify-center"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-ink-dim">Playthroughs:</span>
-                    <button
-                      type="button"
-                      onClick={() => incrementGamePlaythrough(game.id, -1)}
-                      className="w-7 h-7 rounded-full bg-white/8 flex items-center justify-center text-ink-dim"
-                    >
-                      <Minus className="w-3.5 h-3.5" />
-                    </button>
-                    <span className="text-sm font-bold text-watched tabular-nums min-w-[1.5rem] text-center">
-                      x{progress?.playthroughCount || 0}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => incrementGamePlaythrough(game.id, 1)}
-                      className="w-7 h-7 rounded-full bg-watched/20 flex items-center justify-center text-watched"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-xs font-semibold text-ink-dim">Completion</span>
-                    <span className="text-xs font-bold text-watched tabular-nums">{pct}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={pct}
-                    onChange={(e) =>
-                      updateGameProgress(game.id, { completionPct: Number(e.target.value) })
-                    }
-                    aria-label="Game completion percentage"
-                    className="w-full accent-[#A894E8] cursor-pointer"
-                  />
-                </div>
-
-                <div>
-                  <p className="text-xs font-semibold text-ink-dim mb-2">Platform</p>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {PLATFORMS.map((plat) => (
-                      <button
-                        key={plat}
-                        type="button"
-                        onClick={() => updateGameProgress(game.id, { platform: plat })}
-                        className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
-                          platform === plat
-                            ? 'border-brand bg-brand/15 text-ink'
-                            : 'border-white/8 bg-background text-ink-dim hover:text-ink'
-                        }`}
-                      >
-                        {plat}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </section>
-
-              {/* Info & Star Rating */}
-              <section className="pb-5">
+              {/* Info & Star Rating (Advanced Card 3) */}
+              <section className="rounded-[24px] bg-surface border border-white/[0.07] p-4 sm:p-5 space-y-3.5 mb-5">
                 <div className="flex items-center justify-between gap-4">
-                  <div>
+                  <div className="min-w-0">
                     <h2 className="font-semibold text-[16px] text-ink">Game info</h2>
-                    {displayGenres.length > 0 && (
-                      <p className="text-[13.5px] text-ink-dim mt-0.5">{displayGenres.join(' · ')}</p>
-                    )}
+                    <p className="text-[13px] text-ink-dim mt-0.5 flex items-center gap-1.5 flex-wrap">
+                      {displayGenres.length > 0 && <span>{displayGenres.slice(0, 3).join(' · ')}</span>}
+                      {game.franchise && (
+                        <>
+                          {displayGenres.length > 0 && <span>·</span>}
+                          <span className="text-play font-medium">{game.franchise}</span>
+                        </>
+                      )}
+                    </p>
                   </div>
                   <RatingControl
                     value={progress?.rating}
@@ -1032,16 +1073,20 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                   />
                 </div>
 
-                <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>
-                  {game.overview}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setExpanded((v) => !v)}
-                  className="text-xs font-medium text-brand mt-1"
-                >
-                  {expanded ? 'Show less' : 'More'}
-                </button>
+                {game.overview && (
+                  <div>
+                    <p className={`text-[13.5px] text-ink-dim leading-relaxed ${expanded ? '' : 'line-clamp-3'}`}>
+                      {game.overview}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setExpanded((v) => !v)}
+                      className="text-xs font-medium text-brand mt-1"
+                    >
+                      {expanded ? 'Show less' : 'More'}
+                    </button>
+                  </div>
+                )}
               </section>
 
               <PersonalNotesSection

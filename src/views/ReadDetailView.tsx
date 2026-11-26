@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Bookmark,
   BookOpen,
+  CalendarCheck2,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -20,6 +21,7 @@ import {
 } from 'lucide-react';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
+import { FinishedDateRow, formatFinishedDate } from '../components/FinishedDateCard';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
@@ -62,6 +64,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
     rateReadItem,
     rateCollection,
     setReadMood,
+    setMediaFinishedDate,
     updateReadEditionCovers,
     updateReadIssueDetails,
     patchReadIssueMeta,
@@ -542,6 +545,12 @@ export function ReadDetailView({ readId }: { readId: string }) {
                       Your rating ★ {formatRating(progress.rating)}/5
                     </span>
                   )}
+                  {stats.isFinished && formatFinishedDate(progress?.finishedAt || progress?.lastReadAt) && (
+                    <span className="bg-surface border border-watched/35 rounded-full px-3 py-1 text-xs font-medium text-watched inline-flex items-center gap-1.5 tabular-nums">
+                      <CalendarCheck2 className="w-3.5 h-3.5" />
+                      Finished {formatFinishedDate(progress?.finishedAt || progress?.lastReadAt)}
+                    </span>
+                  )}
                 </div>
               </section>
 
@@ -767,14 +776,14 @@ export function ReadDetailView({ readId }: { readId: string }) {
               </section>
             </>
           ) : (
-            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5">
-              <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-                <span className="text-sm font-semibold text-ink">
+            <section className="rounded-[24px] bg-surface border border-white/[0.07] p-4 sm:p-5 space-y-4 mb-5">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-xs font-semibold uppercase tracking-wider text-ink-dim">
                   {item.format === 'comic' ? 'Issue run progress' : 'Chapter progress'}
                 </span>
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-bold text-watched tabular-nums">
-                    {stats.current} / {stats.total} {stats.unitLabel} ({Math.round(stats.ratio * 100)}%)
+                  <span className="text-xs font-bold text-watched tabular-nums">
+                    {Math.round(stats.ratio * 100)}%
                   </span>
                   <button
                     type="button"
@@ -798,7 +807,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
                     if (val > 0) updateReadTotalUnits(item.id, val);
                     setEditingTotal(false);
                   }}
-                  className="flex items-center gap-2 mb-3"
+                  className="flex items-center gap-2"
                 >
                   <input
                     type="number"
@@ -816,6 +825,51 @@ export function ReadDetailView({ readId }: { readId: string }) {
                 </form>
               )}
 
+              <div className="rounded-2xl bg-background/50 border border-white/[0.05] grid grid-cols-3 divide-x divide-white/[0.06] text-center">
+                <div className="py-3 px-2">
+                  <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
+                    {stats.unitLabel}
+                  </p>
+                  <p className="font-display font-bold text-base sm:text-lg text-watched tabular-nums mt-0.5">
+                    {stats.current} / {stats.total}
+                  </p>
+                </div>
+                <div className="py-3 px-2">
+                  <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
+                    Status
+                  </p>
+                  <p className="font-display font-bold text-xs sm:text-sm text-ink mt-1.5">
+                    {stats.isFinished ? 'Finished' : stats.current > 0 ? 'Reading' : 'Up next'}
+                  </p>
+                </div>
+                <div className="py-3 px-2">
+                  <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
+                    Rereads
+                  </p>
+                  <div className="flex items-center justify-center gap-1.5 mt-1">
+                    <button
+                      type="button"
+                      onClick={() => incrementReread(item.id, -1)}
+                      aria-label="Decrease reread count"
+                      className="w-6 h-6 rounded-full bg-white/8 flex items-center justify-center text-ink-dim hover:text-ink"
+                    >
+                      <Minus className="w-3 h-3" />
+                    </button>
+                    <span className="font-display font-bold text-base text-watched tabular-nums min-w-[1.5rem]">
+                      x{stats.rereadCount}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => incrementReread(item.id, 1)}
+                      aria-label="Increase reread count"
+                      className="w-6 h-6 rounded-full bg-watched/20 flex items-center justify-center text-watched"
+                    >
+                      <Plus className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               <input
                 type="range"
                 min={0}
@@ -823,57 +877,43 @@ export function ReadDetailView({ readId }: { readId: string }) {
                 value={stats.current}
                 onChange={(e) => setReadProgress(item.id, Number(e.target.value))}
                 aria-label="Reading progress slider"
-                className="w-full accent-[#DFB062] cursor-pointer mb-3"
+                className="w-full accent-[#DFB062] cursor-pointer"
               />
 
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setReadProgress(item.id, stats.current - 1)}
+                  className="h-9 px-3 rounded-full bg-white/8 text-xs font-semibold text-ink hover:bg-white/12 flex items-center gap-1"
+                >
+                  <Minus className="w-3.5 h-3.5" />1 {stats.unitSingular}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => advanceReadProgress(item.id, 1)}
+                  className="h-9 px-3 rounded-full bg-watched/15 text-xs font-semibold text-watched hover:bg-watched/25 flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />1 {stats.unitSingular}
+                </button>
+                {!stats.isFinished && (
                   <button
                     type="button"
-                    onClick={() => setReadProgress(item.id, stats.current - 1)}
-                    className="h-9 px-3 rounded-full bg-white/8 text-xs font-semibold text-ink hover:bg-white/12 flex items-center gap-1"
+                    onClick={() => markReadFinished(item.id)}
+                    className="h-9 px-3 rounded-full bg-white/8 border border-white/10 text-xs font-semibold text-watched hover:bg-white/12"
                   >
-                    <Minus className="w-3.5 h-3.5" />1 {stats.unitSingular}
+                    Finish
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => advanceReadProgress(item.id, 1)}
-                    className="h-9 px-3 rounded-full bg-watched/15 text-xs font-semibold text-watched hover:bg-watched/25 flex items-center gap-1"
-                  >
-                    <Plus className="w-3.5 h-3.5" />1 {stats.unitSingular}
-                  </button>
-                  {!stats.isFinished && (
-                    <button
-                      type="button"
-                      onClick={() => markReadFinished(item.id)}
-                      className="h-9 px-3 rounded-full bg-white/8 border border-white/10 text-xs font-semibold text-watched hover:bg-white/12"
-                    >
-                      Finish
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-ink-dim">Rereads:</span>
-                  <button
-                    type="button"
-                    onClick={() => incrementReread(item.id, -1)}
-                    className="w-7 h-7 rounded-full bg-white/8 flex items-center justify-center text-ink-dim"
-                  >
-                    <Minus className="w-3.5 h-3.5" />
-                  </button>
-                  <span className="text-sm font-bold text-watched tabular-nums min-w-[1.5rem] text-center">
-                    x{stats.rereadCount}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => incrementReread(item.id, 1)}
-                    className="w-7 h-7 rounded-full bg-watched/20 flex items-center justify-center text-watched"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                )}
               </div>
+
+              <FinishedDateRow
+                isFinished={stats.isFinished}
+                finishedAt={progress?.finishedAt}
+                fallbackDate={progress?.lastReadAt}
+                verbLabel="Finished"
+                onChangeDate={(ymd) => setMediaFinishedDate('read', item.id, ymd)}
+                onMarkFinished={() => markReadFinished(item.id)}
+              />
             </section>
           )}
 
@@ -1176,13 +1216,13 @@ export function ReadDetailView({ readId }: { readId: string }) {
 
           {/* Advanced Info & Star Rating */}
           {detailMode === 'advanced' && (
-            <section className="pb-5">
+            <section className="rounded-[24px] bg-surface border border-white/[0.07] p-4 sm:p-5 space-y-3.5 mb-5">
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <h2 className="font-semibold text-[16px] text-ink">About</h2>
-                  <p className="text-[13.5px] text-ink-dim mt-0.5">
+                  <p className="text-[13px] text-ink-dim mt-0.5">
                     {[
-                      cleanDisplayGenres(item.genres).join(' · '),
+                      cleanDisplayGenres(item.genres).slice(0, 3).join(' · '),
                       `${item.totalUnits} ${stats.unitLabel}`,
                     ]
                       .filter(Boolean)
@@ -1197,9 +1237,38 @@ export function ReadDetailView({ readId }: { readId: string }) {
                 />
               </div>
 
-              <div className="mt-3.5 flex items-center justify-between gap-2 flex-wrap">
-                <span className="text-xs text-ink-dim">Format</span>
-                <div className="inline-flex items-center gap-1 bg-surface border border-white/10 rounded-full p-1">
+              {unitAvg && unitAvg.count > 0 && (
+                <SuggestedRatingBanner
+                  compact
+                  label={item.title}
+                  calculatedAvg={unitAvg.avg}
+                  ratedCount={unitAvg.count}
+                  unitWord={stats.unitLabel}
+                  currentRating={progress?.rating}
+                  ratingSource={progress?.ratingSource}
+                  onAcceptAvg={(avg) => rateReadItem(item.id, avg, 'auto')}
+                  onManualRate={(r) => rateReadItem(item.id, r, 'manual')}
+                />
+              )}
+
+              {item.overview && (
+                <div>
+                  <p className={`text-[13.5px] text-ink-dim leading-relaxed ${expanded ? '' : 'line-clamp-3'}`}>
+                    {item.overview}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setExpanded((v) => !v)}
+                    className="text-xs font-medium text-brand mt-1"
+                  >
+                    {expanded ? 'Show less' : 'More'}
+                  </button>
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-white/[0.06] flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-xs font-medium text-ink-dim">Format</span>
+                <div className="inline-flex items-center gap-1 bg-background border border-white/10 rounded-full p-1">
                   {(['novel', 'comic', 'manga'] as const).map((fmt) => {
                     const active = item.format === fmt;
                     const label = fmt === 'comic' ? 'Comic' : fmt === 'manga' ? 'Manga' : 'Novel';
@@ -1220,33 +1289,6 @@ export function ReadDetailView({ readId }: { readId: string }) {
                   })}
                 </div>
               </div>
-
-              {unitAvg && unitAvg.count > 0 && (
-                <div className="mt-3">
-                  <SuggestedRatingBanner
-                    compact
-                    label={item.title}
-                    calculatedAvg={unitAvg.avg}
-                    ratedCount={unitAvg.count}
-                    unitWord={stats.unitLabel}
-                    currentRating={progress?.rating}
-                    ratingSource={progress?.ratingSource}
-                    onAcceptAvg={(avg) => rateReadItem(item.id, avg, 'auto')}
-                    onManualRate={(r) => rateReadItem(item.id, r, 'manual')}
-                  />
-                </div>
-              )}
-
-              <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>
-                {item.overview}
-              </p>
-              <button
-                type="button"
-                onClick={() => setExpanded((v) => !v)}
-                className="text-xs font-medium text-brand mt-1"
-              >
-                {expanded ? 'Show less' : 'More'}
-              </button>
             </section>
           )}
 

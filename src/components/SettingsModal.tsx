@@ -227,9 +227,9 @@ export function SettingsModal() {
               <div>
                 <p className="text-xs text-ink-dim mb-1.5">Cover banner</p>
                 <div className="grid grid-cols-4 gap-2">
-                  {bannerOptions.map((b) => (
+                  {bannerOptions.map((b, idx) => (
                     <button
-                      key={b.label}
+                      key={`${b.label}-${idx}`}
                       type="button"
                       onClick={() => updateProfile({ bannerUrl: b.url })}
                       className={`relative h-12 rounded-xl overflow-hidden border ${

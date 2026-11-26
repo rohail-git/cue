@@ -175,6 +175,7 @@ export interface ShowProgress {
   bookmarked: boolean;
   notifications: boolean;
   lastWatchedAt?: string;
+  finishedAt?: string;
   rating?: number;
   ratingSource?: RatingSource;
   episodeRatings?: Record<string, number>;
@@ -203,6 +204,7 @@ export interface ReadProgress {
   editionTitle?: string;
   editionCoverUrl?: string;
   lastReadAt?: string;
+  finishedAt?: string;
   rating?: number;
   ratingSource?: RatingSource;
   unitRatings?: Record<number, number>;
@@ -221,6 +223,7 @@ export interface GameProgress {
   platform: GamePlatform;
   bookmarked: boolean;
   lastPlayedAt?: string;
+  finishedAt?: string;
   rating?: number;
   mood?: PersonalMood;
 }

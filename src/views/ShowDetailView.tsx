@@ -3,6 +3,7 @@ import {
   Bell,
   BellOff,
   Bookmark,
+  CalendarCheck2,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -18,6 +19,7 @@ import {
 } from 'lucide-react';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
+import { FinishedDateRow, formatFinishedDate } from '../components/FinishedDateCard';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
@@ -58,6 +60,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
     rateSeason,
     rateShow,
     setShowMood,
+    setMediaFinishedDate,
     updateShowEpisodes,
     addJournalEntry,
     toggleItemInList,
@@ -618,6 +621,12 @@ export function ShowDetailView({ showId }: { showId: string }) {
                       Your rating ★ {formatRating(progress.rating)}/5
                     </span>
                   )}
+                  {stats.isFinished && formatFinishedDate(progress?.finishedAt || progress?.lastWatchedAt) && (
+                    <span className="bg-surface border border-watched/35 rounded-full px-3 py-1 text-xs font-medium text-watched inline-flex items-center gap-1.5 tabular-nums">
+                      <CalendarCheck2 className="w-3.5 h-3.5" />
+                      Finished {formatFinishedDate(progress?.finishedAt || progress?.lastWatchedAt)}
+                    </span>
+                  )}
                 </div>
               </section>
 
@@ -791,33 +800,68 @@ export function ShowDetailView({ showId }: { showId: string }) {
             </>
           ) : (
             <>
-              <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 grid grid-cols-3 gap-3 text-center">
-                <div>
-                  <p className="text-[11px] text-ink-dim uppercase tracking-wider font-semibold">Progress</p>
-                  <p className="font-display font-bold text-lg text-watched tabular-nums mt-0.5">
-                    {stats.watchedUnique} / {stats.totalEpisodes}
-                  </p>
+              {/* Advanced Card 1: Tracking Overview & Finished Date */}
+              <section className="rounded-[24px] bg-surface border border-white/[0.07] p-4 sm:p-5 space-y-4 mb-5">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-semibold uppercase tracking-wider text-ink-dim">
+                      Series progress
+                    </span>
+                    <span className="font-bold text-watched tabular-nums">
+                      {Math.round(stats.progressRatio * 100)}%
+                    </span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
+                    <div
+                      className="h-full bg-watched transition-all duration-300"
+                      style={{ width: `${Math.round(stats.progressRatio * 100)}%` }}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <p className="text-[11px] text-ink-dim uppercase tracking-wider font-semibold">Runtime</p>
-                  <p className="font-display font-bold text-lg text-ink tabular-nums mt-0.5">
-                    {show.runtimeAvg}m avg
-                  </p>
+
+                <div className="rounded-2xl bg-background/50 border border-white/[0.05] grid grid-cols-3 divide-x divide-white/[0.06] text-center">
+                  <div className="py-3 px-2">
+                    <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
+                      Episodes
+                    </p>
+                    <p className="font-display font-bold text-base sm:text-lg text-watched tabular-nums mt-0.5">
+                      {stats.watchedUnique} / {stats.totalEpisodes}
+                    </p>
+                  </div>
+                  <div className="py-3 px-2">
+                    <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
+                      Runtime
+                    </p>
+                    <p className="font-display font-bold text-base sm:text-lg text-ink tabular-nums mt-0.5">
+                      {show.runtimeAvg}m avg
+                    </p>
+                  </div>
+                  <div className="py-3 px-2 min-w-0">
+                    <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
+                      Network
+                    </p>
+                    <p className="font-display font-bold text-sm text-ink truncate mt-1">
+                      {show.network || 'Streaming'}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-[11px] text-ink-dim uppercase tracking-wider font-semibold">Network</p>
-                  <p className="font-display font-bold text-sm text-ink truncate mt-1">
-                    {show.network || 'Streaming'}
-                  </p>
-                </div>
+
+                <FinishedDateRow
+                  isFinished={stats.isFinished}
+                  finishedAt={progress?.finishedAt}
+                  fallbackDate={progress?.lastWatchedAt}
+                  verbLabel="Finished"
+                  onChangeDate={(ymd) => setMediaFinishedDate('show', show.id, ymd)}
+                  onMarkFinished={() => markShowAllWatched(show.id)}
+                />
               </section>
 
-              {/* Show Info */}
-              <section className="pb-4 border-b border-white/[0.08]">
+              {/* Advanced Card 2: Rating, About & Portrait Cast */}
+              <section className="rounded-[24px] bg-surface border border-white/[0.07] p-4 sm:p-5 space-y-3.5 mb-5">
                 <div className="flex items-center justify-between gap-4">
-                  <div>
+                  <div className="min-w-0">
                     <h2 className="font-semibold text-[16px] text-ink">Show info</h2>
-                    <p className="text-[13.5px] text-ink-dim mt-0.5 flex items-center gap-1.5 flex-wrap">
+                    <p className="text-[13px] text-ink-dim mt-0.5 flex items-center gap-1.5 flex-wrap">
                       <span>{show.year}</span>
                       {cleanDisplayGenres(show.genres).length > 0 && (
                         <>
@@ -826,13 +870,9 @@ export function ShowDetailView({ showId }: { showId: string }) {
                         </>
                       )}
                       <span>·</span>
-                      <span className="tabular-nums">
-                        {stats.watchedUnique}/{stats.totalEpisodes} ep
-                      </span>
-                      <span>·</span>
-                      <span className="inline-flex items-center gap-1 text-brand">
+                      <span className="inline-flex items-center gap-1 text-brand font-semibold">
                         <Star className="w-3.5 h-3.5 fill-brand" />
-                        {show.rating.toFixed(1)}
+                        {show.rating.toFixed(1)}/10
                       </span>
                     </p>
                   </div>
@@ -846,26 +886,24 @@ export function ShowDetailView({ showId }: { showId: string }) {
                 </div>
 
                 {showCalcAvg && showCalcAvg.count > 0 && (
-                  <div className="mt-3">
-                    <SuggestedRatingBanner
-                      compact
-                      label={show.title}
-                      calculatedAvg={showCalcAvg.avg}
-                      ratedCount={showCalcAvg.count}
-                      unitWord={showCalcAvg.basis}
-                      currentRating={progress?.rating}
-                      ratingSource={progress?.ratingSource}
-                      onAcceptAvg={(avg) => rateShow(show.id, avg, 'auto')}
-                      onManualRate={(r) => rateShow(show.id, r, 'manual')}
-                    />
-                  </div>
+                  <SuggestedRatingBanner
+                    compact
+                    label={show.title}
+                    calculatedAvg={showCalcAvg.avg}
+                    ratedCount={showCalcAvg.count}
+                    unitWord={showCalcAvg.basis}
+                    currentRating={progress?.rating}
+                    ratingSource={progress?.ratingSource}
+                    onAcceptAvg={(avg) => rateShow(show.id, avg, 'auto')}
+                    onManualRate={(r) => rateShow(show.id, r, 'manual')}
+                  />
                 )}
 
                 {show.overview && (
-                  <div className="mt-2.5">
+                  <div>
                     <p
                       className={`text-[13.5px] text-ink-dim leading-relaxed ${
-                        expandedOverview ? '' : 'line-clamp-2'
+                        expandedOverview ? '' : 'line-clamp-3'
                       }`}
                     >
                       {show.overview}
@@ -881,26 +919,35 @@ export function ShowDetailView({ showId }: { showId: string }) {
                 )}
 
                 {show.cast.length > 0 && (
-                  <div className="mt-3.5 flex items-start gap-3 overflow-x-auto no-scrollbar pb-1">
-                    {show.cast.map((c) => (
-                      <div key={c.id} className="w-16 shrink-0 text-center">
-                        <div className="w-12 h-12 mx-auto rounded-full overflow-hidden bg-surface border border-white/10">
-                          <MediaImage
-                            src={c.avatarUrl}
-                            alt={c.character}
-                            className="w-full h-full object-cover"
-                          />
+                  <div className="pt-2 border-t border-white/[0.06]">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-faint mb-2.5">
+                      Cast
+                    </p>
+                    <div className="flex items-start gap-3 overflow-x-auto no-scrollbar pb-1">
+                      {show.cast.map((c) => (
+                        <div key={c.id} className="w-[88px] shrink-0 text-left">
+                          <div className="aspect-[3/4] rounded-xl overflow-hidden bg-background border border-white/[0.06]">
+                            <MediaImage
+                              src={c.avatarUrl}
+                              alt={c.actor}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                          <p className="text-[11.5px] font-semibold text-ink truncate mt-1.5">
+                            {c.actor}
+                          </p>
+                          <p className="text-[10px] uppercase tracking-wider text-ink-faint truncate">
+                            {c.character}
+                          </p>
                         </div>
-                        <p className="text-[11px] font-medium text-ink truncate mt-1">{c.character}</p>
-                        <p className="text-[10px] text-ink-faint truncate">{c.actor}</p>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 )}
               </section>
 
-              {/* Seasons & Episodes */}
-              <section className="pt-5 pb-6">
+              {/* Advanced Card 3: Seasons & Episodes */}
+              <section className="rounded-[24px] bg-surface border border-white/[0.07] p-4 sm:p-5 mb-5">
                 <div className="lg:hidden">{activeSeasonObj && renderSeasonColumn(activeSeasonObj, true)}</div>
 
                 <div className="hidden lg:block">
@@ -919,7 +966,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
                             className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors ${
                               active
                                 ? 'bg-brand text-brand-ink'
-                                : 'bg-surface border border-white/10 text-ink-dim hover:text-ink'
+                                : 'bg-background border border-white/10 text-ink-dim hover:text-ink'
                             }`}
                           >
                             {s2 ? `Seasons ${s1.number}–${s2.number}` : `Season ${s1.number}`}

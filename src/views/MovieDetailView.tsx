@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Bookmark,
+  CalendarCheck2,
   Check,
   ChevronLeft,
   ListPlus,
@@ -12,6 +13,7 @@ import {
 } from 'lucide-react';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
+import { FinishedDateRow, formatFinishedDate } from '../components/FinishedDateCard';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
@@ -35,6 +37,7 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
     rateMovie,
     rateCollection,
     setMovieMood,
+    setMediaFinishedDate,
     updateMovieDetails,
     toggleItemInList,
     createCustomList,
@@ -255,6 +258,12 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                       Your rating ★ {formatRating(progress.rating)}/5
                     </span>
                   )}
+                  {isWatched && formatFinishedDate(progress?.watchedAt) && (
+                    <span className="bg-surface border border-watched/35 rounded-full px-3 py-1 text-xs font-medium text-watched inline-flex items-center gap-1.5 tabular-nums">
+                      <CalendarCheck2 className="w-3.5 h-3.5" />
+                      Watched {formatFinishedDate(progress?.watchedAt)}
+                    </span>
+                  )}
                   {movie.trailerUrl && (
                     <a
                       href={movie.trailerUrl}
@@ -395,48 +404,81 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                 </section>
               )}
 
-              <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 flex items-center justify-between gap-4 flex-wrap">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider text-ink-dim">
-                    Watch log & runtime
-                  </p>
-                  <p className="text-sm font-semibold text-ink mt-0.5 tabular-nums">
-                    {(progress?.watchCount || 0) * movie.runtime} min watched total · Release {movie.releaseDate}
-                  </p>
+              {/* Advanced Card 1: Watch Log & Completion Date */}
+              <section className="rounded-[24px] bg-surface border border-white/[0.07] p-4 sm:p-5 space-y-4 mb-5">
+                <div className="rounded-2xl bg-background/50 border border-white/[0.05] grid grid-cols-3 divide-x divide-white/[0.06] text-center">
+                  <div className="py-3 px-2">
+                    <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
+                      Watches
+                    </p>
+                    <div className="flex items-center justify-center gap-1.5 mt-1">
+                      <button
+                        type="button"
+                        onClick={() => incrementMovieRewatch(movie.id, -1)}
+                        aria-label="Decrease watch count"
+                        className="w-6 h-6 rounded-full bg-white/8 flex items-center justify-center text-ink-dim hover:text-ink"
+                      >
+                        <Minus className="w-3 h-3" />
+                      </button>
+                      <span className="font-display font-bold text-base text-watched tabular-nums min-w-[1.6rem]">
+                        x{progress?.watchCount || 0}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => incrementMovieRewatch(movie.id, 1)}
+                        aria-label="Increase watch count"
+                        className="w-6 h-6 rounded-full bg-watched/20 flex items-center justify-center text-watched"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="py-3 px-2">
+                    <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
+                      Time logged
+                    </p>
+                    <p className="font-display font-bold text-base sm:text-lg text-ink tabular-nums mt-0.5">
+                      {(progress?.watchCount || 0) * movie.runtime}m
+                    </p>
+                  </div>
+                  <div className="py-3 px-2 min-w-0">
+                    <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
+                      Release
+                    </p>
+                    <p className="font-display font-bold text-xs sm:text-sm text-ink tabular-nums truncate mt-1.5">
+                      {movie.releaseDate}
+                    </p>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-ink-dim">Watches:</span>
-                  <button
-                    type="button"
-                    onClick={() => incrementMovieRewatch(movie.id, -1)}
-                    aria-label="Decrease watch count"
-                    className="w-7 h-7 rounded-full bg-white/8 flex items-center justify-center text-ink-dim"
-                  >
-                    <Minus className="w-3.5 h-3.5" />
-                  </button>
-                  <span className="text-sm font-bold text-watched tabular-nums min-w-[1.5rem] text-center">
-                    x{progress?.watchCount || 0}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => incrementMovieRewatch(movie.id, 1)}
-                    aria-label="Increase watch count"
-                    className="w-7 h-7 rounded-full bg-watched/20 flex items-center justify-center text-watched"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+
+                <FinishedDateRow
+                  isFinished={isWatched}
+                  finishedAt={progress?.watchedAt}
+                  verbLabel="Watched"
+                  onChangeDate={(ymd) => setMediaFinishedDate('movie', movie.id, ymd)}
+                  onMarkFinished={() => toggleMovieWatched(movie.id)}
+                />
               </section>
 
-              <section className="pb-5">
+              {/* Advanced Card 2: Rating, About & Cast */}
+              <section className="rounded-[24px] bg-surface border border-white/[0.07] p-4 sm:p-5 space-y-3.5 mb-5">
                 <div className="flex items-center justify-between gap-4">
-                  <div>
+                  <div className="min-w-0">
                     <h2 className="font-semibold text-[16px] text-ink">Movie info</h2>
-                    {cleanDisplayGenres(movie.genres).length > 0 && (
-                      <p className="text-[13.5px] text-ink-dim mt-0.5">
-                        {cleanDisplayGenres(movie.genres).join(' · ')}
-                      </p>
-                    )}
+                    <p className="text-[13px] text-ink-dim mt-0.5 flex items-center gap-1.5 flex-wrap">
+                      <span>{movie.runtime} min</span>
+                      {cleanDisplayGenres(movie.genres).length > 0 && (
+                        <>
+                          <span>·</span>
+                          <span>{cleanDisplayGenres(movie.genres).slice(0, 2).join(', ')}</span>
+                        </>
+                      )}
+                      <span>·</span>
+                      <span className="inline-flex items-center gap-1 text-brand font-semibold">
+                        <Star className="w-3.5 h-3.5 fill-brand" />
+                        {movie.rating.toFixed(1)}/10
+                      </span>
+                    </p>
                   </div>
                   <RatingControl
                     value={progress?.rating}
@@ -446,16 +488,64 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                   />
                 </div>
 
-                <p className={`text-[13.5px] text-ink-dim leading-relaxed mt-2.5 ${expanded ? '' : 'line-clamp-3'}`}>
-                  {movie.overview}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setExpanded((v) => !v)}
-                  className="text-xs font-medium text-brand mt-1"
-                >
-                  {expanded ? 'Show less' : 'More'}
-                </button>
+                {movie.overview && (
+                  <div>
+                    <p
+                      className={`text-[13.5px] text-ink-dim leading-relaxed ${
+                        expanded ? '' : 'line-clamp-3'
+                      }`}
+                    >
+                      {movie.overview}
+                    </p>
+                    <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setExpanded((v) => !v)}
+                        className="text-xs font-medium text-brand"
+                      >
+                        {expanded ? 'Show less' : 'More'}
+                      </button>
+                      {movie.trailerUrl && (
+                        <a
+                          href={movie.trailerUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="bg-background hover:bg-surface-raised border border-white/[0.1] rounded-full px-3 py-1 text-xs font-semibold text-ink inline-flex items-center gap-1.5 transition-colors"
+                        >
+                          <Play className="w-3 h-3 fill-brand text-brand" />
+                          <span>Watch trailer</span>
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {movie.cast.length > 0 && (
+                  <div className="pt-2 border-t border-white/[0.06]">
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-faint mb-2.5">
+                      Cast
+                    </p>
+                    <div className="flex items-start gap-3 overflow-x-auto no-scrollbar pb-1">
+                      {movie.cast.map((c) => (
+                        <div key={c.id} className="w-[88px] shrink-0 text-left">
+                          <div className="aspect-[3/4] rounded-xl overflow-hidden bg-background border border-white/[0.06]">
+                            <MediaImage
+                              src={c.avatarUrl}
+                              alt={c.actor}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                          <p className="text-[11.5px] font-semibold text-ink truncate mt-1.5">
+                            {c.actor}
+                          </p>
+                          <p className="text-[10px] uppercase tracking-wider text-ink-faint truncate">
+                            {c.character}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </section>
 
               <PersonalNotesSection
