@@ -107,6 +107,7 @@ export interface Movie {
   backdropUrl: string;
   overview: string;
   releaseDate: string;
+  trailerUrl?: string;
   cast: CastMember[];
 }
 
@@ -150,6 +151,7 @@ export interface CollectionRating {
 export interface GameItem {
   id: string;
   steamAppId?: number;
+  igdbId?: number;
   title: string;
   developer: string;
   year: number;
@@ -159,6 +161,7 @@ export interface GameItem {
   coverUrl: string;
   backdropUrl: string;
   overview: string;
+  franchise?: string;
   totalChapters?: number;
   chapterUnit?: GameChapterUnit;
   chapterSource?: GameChapterSource;

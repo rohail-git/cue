@@ -60,6 +60,7 @@ export interface LiveSearchResult {
     | 'openlibrary'
     | 'anilist'
     | 'cheapshark'
+    | 'igdb'
     | 'wikipedia'
     | 'comicseries';
   externalId: number | string;
@@ -74,6 +75,7 @@ export interface LiveSearchResult {
   overview: string;
   director?: string;
   runtime?: number;
+  trailerUrl?: string;
   totalUnits?: number;
   comicKind?: 'series' | 'collection';
   comicRunLabel?: string;
@@ -84,6 +86,8 @@ export interface LiveSearchResult {
   editionIssueCounts?: Partial<Record<ComicEditionId, number>>;
   editionVariants?: Partial<Record<GeneralizedComicEditionId, string[]>>;
   steamAppId?: number;
+  igdbId?: number;
+  franchise?: string;
   platforms?: string[];
   popularity?: number;
   popularityScore?: number;
@@ -400,6 +404,80 @@ function matchesMediaFilter(item: LiveSearchResult, mediaFilter: SearchMediaFilt
   return item.mediaType === mediaFilter;
 }
 
+const TMDB_GENRE_MAP: Record<number, string> = {
+  28: 'Action',
+  12: 'Adventure',
+  16: 'Animation',
+  35: 'Comedy',
+  80: 'Crime',
+  99: 'Documentary',
+  18: 'Drama',
+  10751: 'Family',
+  14: 'Fantasy',
+  36: 'History',
+  27: 'Horror',
+  10402: 'Music',
+  9648: 'Mystery',
+  10749: 'Romance',
+  878: 'Sci-Fi',
+  10759: 'Action & Adventure',
+  10762: 'Kids',
+  10765: 'Sci-Fi & Fantasy',
+  53: 'Thriller',
+  10752: 'War',
+  37: 'Western',
+};
+
+function mapTmdbGenres(
+  genreIds?: number[],
+  originalLang?: string,
+  isMovie = false
+): string[] {
+  const isAnime = !isMovie && genreIds?.includes(16) && originalLang === 'ja';
+  const mapped: string[] = isAnime ? ['Anime'] : [];
+  for (const id of genreIds || []) {
+    const label = TMDB_GENRE_MAP[id];
+    if (label && !mapped.includes(label)) {
+      mapped.push(label);
+    }
+    if (mapped.length >= 3) break;
+  }
+  if (mapped.length > 0) return mapped;
+  return isMovie ? ['Feature Film'] : ['Series'];
+}
+
+let serverTmdbStatusPromise: Promise<boolean> | null = null;
+let serverIgdbStatusPromise: Promise<boolean> | null = null;
+
+export function checkServerTmdbConfigured(): Promise<boolean> {
+  if (!serverTmdbStatusPromise) {
+    serverTmdbStatusPromise = fetch('/api/tmdb?action=status', {
+      signal: AbortSignal.timeout(4000),
+    })
+      .then((r) => (r.ok ? (r.json() as Promise<{ configured?: boolean }>) : { configured: false }))
+      .then((d) => Boolean(d.configured))
+      .catch(() => false);
+  }
+  return serverTmdbStatusPromise;
+}
+
+export function checkServerIgdbConfigured(): Promise<boolean> {
+  if (!serverIgdbStatusPromise) {
+    serverIgdbStatusPromise = fetch('/api/igdb?action=status', {
+      signal: AbortSignal.timeout(4000),
+    })
+      .then((r) => (r.ok ? (r.json() as Promise<{ configured?: boolean }>) : { configured: false }))
+      .then((d) => Boolean(d.configured))
+      .catch(() => false);
+  }
+  return serverIgdbStatusPromise;
+}
+
+async function isTmdbAvailable(tmdbApiKey?: string): Promise<boolean> {
+  if (tmdbApiKey && tmdbApiKey.trim().length > 8) return true;
+  return checkServerTmdbConfigured();
+}
+
 export async function searchLiveMedia(
   query: string,
   mediaFilter: SearchMediaFilter = 'all',
@@ -429,24 +507,41 @@ export async function searchLiveMedia(
   const wantsPlay = mediaFilter === 'all' || mediaFilter === 'play' || mediaFilter === 'game';
 
   if (wantsWatch) {
-    const hasTmdb = Boolean(tmdbApiKey && tmdbApiKey.trim().length > 8);
-    if (hasTmdb) {
+    const useTmdb = await isTmdbAvailable(tmdbApiKey);
+    if (useTmdb) {
       tasks.push(
-        searchTmdbMulti(trimmed, tmdbApiKey!.trim()).catch(async () => {
-          const fallback: LiveSearchResult[] = [];
-          if (
-            mediaFilter === 'all' ||
-            mediaFilter === 'watch' ||
-            mediaFilter === 'tv' ||
-            mediaFilter === 'anime'
-          ) {
-            fallback.push(...(await searchTvMaze(trimmed)));
-          }
-          if (mediaFilter === 'all' || mediaFilter === 'watch' || mediaFilter === 'movie') {
-            fallback.push(...(await searchItunesMovies(trimmed)));
-          }
-          return fallback;
-        })
+        searchTmdbMulti(trimmed, tmdbApiKey?.trim())
+          .then(async (hits) => {
+            if (hits.length > 0) return hits;
+            const fallback: LiveSearchResult[] = [];
+            if (
+              mediaFilter === 'all' ||
+              mediaFilter === 'watch' ||
+              mediaFilter === 'tv' ||
+              mediaFilter === 'anime'
+            ) {
+              fallback.push(...(await searchTvMaze(trimmed)));
+            }
+            if (mediaFilter === 'all' || mediaFilter === 'watch' || mediaFilter === 'movie') {
+              fallback.push(...(await searchItunesMovies(trimmed)));
+            }
+            return fallback;
+          })
+          .catch(async () => {
+            const fallback: LiveSearchResult[] = [];
+            if (
+              mediaFilter === 'all' ||
+              mediaFilter === 'watch' ||
+              mediaFilter === 'tv' ||
+              mediaFilter === 'anime'
+            ) {
+              fallback.push(...(await searchTvMaze(trimmed)));
+            }
+            if (mediaFilter === 'all' || mediaFilter === 'watch' || mediaFilter === 'movie') {
+              fallback.push(...(await searchItunesMovies(trimmed)));
+            }
+            return fallback;
+          })
       );
     } else {
       if (
@@ -580,15 +675,18 @@ async function fetchTrendingMovies(
   tmdbApiKey?: string
 ): Promise<LiveSearchResult[]> {
   const win = getRecentDateWindow(185);
-  const hasTmdb = Boolean(tmdbApiKey && tmdbApiKey.trim().length > 8);
+  const useTmdb = await isTmdbAvailable(tmdbApiKey);
 
-  if (hasTmdb) {
+  if (useTmdb) {
     try {
-      const res = await fetch(
-        `https://api.themoviedb.org/3/discover/movie?sort_by=popularity.desc&primary_release_date.gte=${win.cutoffIso}&primary_release_date.lte=${win.todayIso}&api_key=${encodeURIComponent(
-          tmdbApiKey!.trim()
-        )}`
-      );
+      const userKey = tmdbApiKey?.trim();
+      const url =
+        userKey && userKey.length > 8
+          ? `https://api.themoviedb.org/3/discover/movie?sort_by=popularity.desc&primary_release_date.gte=${win.cutoffIso}&primary_release_date.lte=${win.todayIso}&api_key=${encodeURIComponent(
+              userKey
+            )}`
+          : `/api/tmdb?action=trending-movies&gte=${win.cutoffIso}&lte=${win.todayIso}`;
+      const res = await fetch(url);
       if (res.ok) {
         const data = (await res.json()) as {
           results?: Array<{
@@ -599,6 +697,7 @@ async function fetchTrendingMovies(
             backdrop_path?: string;
             overview?: string;
             vote_average?: number;
+            genre_ids?: number[];
             popularity?: number;
           }>;
         };
@@ -618,7 +717,7 @@ async function fetchTrendingMovies(
             title: r.title,
             year: r.release_date ? Number(r.release_date.slice(0, 4)) : win.currentYear,
             mediaType: 'movie',
-            genres: ['Feature Film'],
+            genres: mapTmdbGenres(r.genre_ids, undefined, true),
             rating: r.vote_average ? Number(r.vote_average.toFixed(1)) : 7.8,
             posterUrl: poster,
             backdropUrl: backdrop,
@@ -699,15 +798,18 @@ async function fetchTrendingShows(
   tmdbApiKey?: string
 ): Promise<LiveSearchResult[]> {
   const win = getRecentDateWindow(185);
-  const hasTmdb = Boolean(tmdbApiKey && tmdbApiKey.trim().length > 8);
+  const useTmdb = await isTmdbAvailable(tmdbApiKey);
 
-  if (hasTmdb) {
+  if (useTmdb) {
     try {
-      const res = await fetch(
-        `https://api.themoviedb.org/3/discover/tv?sort_by=popularity.desc&first_air_date.gte=${win.cutoffIso}&first_air_date.lte=${win.todayIso}&api_key=${encodeURIComponent(
-          tmdbApiKey!.trim()
-        )}`
-      );
+      const userKey = tmdbApiKey?.trim();
+      const url =
+        userKey && userKey.length > 8
+          ? `https://api.themoviedb.org/3/trending/tv/week?language=en-US&api_key=${encodeURIComponent(
+              userKey
+            )}`
+          : '/api/tmdb?action=trending-tv';
+      const res = await fetch(url);
       if (res.ok) {
         const data = (await res.json()) as {
           results?: Array<{
@@ -739,7 +841,7 @@ async function fetchTrendingShows(
             title: r.name,
             year: r.first_air_date ? Number(r.first_air_date.slice(0, 4)) : win.currentYear,
             mediaType: 'tv',
-            genres: ['Series'],
+            genres: mapTmdbGenres(r.genre_ids, r.original_language, false),
             rating: r.vote_average ? Number(r.vote_average.toFixed(1)) : 7.9,
             posterUrl: poster,
             backdropUrl: backdrop,
@@ -1113,6 +1215,61 @@ async function fetchGamesByMode(
   mode: 'trending' | 'anticipated' | 'popular' = 'trending'
 ): Promise<LiveSearchResult[]> {
   try {
+    if (await checkServerIgdbConfigured()) {
+      const igdbRes = await fetch(
+        `/api/igdb?action=discover&mode=${mode}&limit=${Math.max(12, Math.min(30, limit))}`,
+        { signal: AbortSignal.timeout(9000) }
+      );
+      if (igdbRes.ok) {
+        const igdbJson = (await igdbRes.json()) as {
+          configured?: boolean;
+          items?: Array<{
+            id: string;
+            igdbId: number;
+            title: string;
+            year: number;
+            rating: number;
+            posterUrl: string;
+            backdropUrl: string;
+            overview: string;
+            developer?: string;
+            platforms?: string[];
+            genres?: string[];
+            franchise?: string;
+            subtitle?: string;
+            popularityScore?: number;
+          }>;
+        };
+        if (igdbJson.configured && Array.isArray(igdbJson.items) && igdbJson.items.length > 0) {
+          return igdbJson.items.slice(0, limit).map((g) => ({
+            domain: 'play',
+            kind: 'game',
+            id: g.id,
+            source: 'igdb',
+            externalId: g.igdbId,
+            igdbId: g.igdbId,
+            title: g.title,
+            subtitle: g.subtitle || g.platforms?.slice(0, 2).join(' · ') || 'Video Game',
+            year: g.year,
+            mediaType: 'game',
+            genres: g.genres?.length ? g.genres : ['Video Game'],
+            rating: g.rating,
+            posterUrl: g.posterUrl,
+            backdropUrl: g.backdropUrl || g.posterUrl,
+            overview: g.overview,
+            director: g.developer,
+            franchise: g.franchise,
+            platforms: g.platforms,
+            popularityScore: g.popularityScore,
+          }));
+        }
+      }
+    }
+  } catch {
+    // fall through to Steam + Metacritic feed
+  }
+
+  try {
     const res = await fetch(
       `/api/trending-games?mode=${mode}&limit=${Math.max(12, Math.min(30, limit))}`,
       { signal: AbortSignal.timeout(10000) }
@@ -1199,9 +1356,62 @@ async function fetchAnticipatedWatch(
   tmdbApiKey?: string
 ): Promise<LiveSearchResult[]> {
   const win = getRecentDateWindow(185);
-  const hasTmdb = Boolean(tmdbApiKey && tmdbApiKey.trim().length > 8);
+  const useTmdb = await isTmdbAvailable(tmdbApiKey);
+  const userKey = tmdbApiKey?.trim();
 
   const tvTask = (async (): Promise<LiveSearchResult[]> => {
+    if (useTmdb) {
+      try {
+        const url =
+          userKey && userKey.length > 8
+            ? `https://api.themoviedb.org/3/discover/tv?sort_by=popularity.desc&first_air_date.gte=${win.todayIso}&language=en-US&page=1&api_key=${encodeURIComponent(
+                userKey
+              )}`
+            : `/api/tmdb?action=upcoming-tv&gte=${win.todayIso}`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = (await res.json()) as {
+            results?: Array<{
+              id: number;
+              name?: string;
+              first_air_date?: string;
+              poster_path?: string;
+              backdrop_path?: string;
+              overview?: string;
+              vote_average?: number;
+              original_language?: string;
+              genre_ids?: number[];
+            }>;
+          };
+          const out: LiveSearchResult[] = [];
+          for (const r of data.results || []) {
+            if (!r.poster_path || !r.name) continue;
+            const poster = `https://image.tmdb.org/t/p/w500${r.poster_path}`;
+            out.push({
+              domain: 'watch',
+              kind: 'show',
+              id: `tmdb-tv-${r.id}`,
+              source: 'tmdb',
+              externalId: r.id,
+              title: r.name,
+              year: r.first_air_date ? Number(r.first_air_date.slice(0, 4)) : win.currentYear + 1,
+              mediaType: 'tv',
+              genres: mapTmdbGenres(r.genre_ids, r.original_language, false),
+              rating: r.vote_average ? Number(r.vote_average.toFixed(1)) : 8.0,
+              posterUrl: poster,
+              backdropUrl: r.backdrop_path
+                ? `https://image.tmdb.org/t/p/w1280${r.backdrop_path}`
+                : poster,
+              overview: r.overview || `${r.name} — upcoming series.`,
+            });
+          }
+          if (out.length > 0) return out;
+        }
+      } catch {
+        // fall through to TVMaze
+      }
+    }
+
     try {
       const dates = [7, 14, 21, 30].map((offset) =>
         new Date(Date.now() + offset * 86400 * 1000).toISOString().slice(0, 10)
@@ -1263,13 +1473,15 @@ async function fetchAnticipatedWatch(
   })();
 
   const moviesTask = (async (): Promise<LiveSearchResult[]> => {
-    if (hasTmdb) {
+    if (useTmdb) {
       try {
-        const res = await fetch(
-          `https://api.themoviedb.org/3/movie/upcoming?language=en-US&page=1&api_key=${encodeURIComponent(
-            tmdbApiKey!.trim()
-          )}`
-        );
+        const url =
+          userKey && userKey.length > 8
+            ? `https://api.themoviedb.org/3/movie/upcoming?language=en-US&page=1&api_key=${encodeURIComponent(
+                userKey
+              )}`
+            : '/api/tmdb?action=upcoming-movies';
+        const res = await fetch(url);
         if (res.ok) {
           const data = (await res.json()) as {
             results?: Array<{
@@ -1280,6 +1492,7 @@ async function fetchAnticipatedWatch(
               backdrop_path?: string;
               overview?: string;
               vote_average?: number;
+              genre_ids?: number[];
             }>;
           };
           const out: LiveSearchResult[] = [];
@@ -1296,7 +1509,7 @@ async function fetchAnticipatedWatch(
               title: r.title,
               year: r.release_date ? Number(r.release_date.slice(0, 4)) : win.currentYear + 1,
               mediaType: 'movie',
-              genres: ['Feature Film'],
+              genres: mapTmdbGenres(r.genre_ids, undefined, true),
               rating: r.vote_average ? Number(r.vote_average.toFixed(1)) : 8.0,
               posterUrl: poster,
               backdropUrl: r.backdrop_path ? `https://image.tmdb.org/t/p/w1280${r.backdrop_path}` : poster,
@@ -1328,9 +1541,62 @@ async function fetchPopularWatch(
   tmdbApiKey?: string
 ): Promise<LiveSearchResult[]> {
   const win = getRecentDateWindow(185);
-  const hasTmdb = Boolean(tmdbApiKey && tmdbApiKey.trim().length > 8);
+  const useTmdb = await isTmdbAvailable(tmdbApiKey);
+  const userKey = tmdbApiKey?.trim();
 
   const showsTask = (async (): Promise<LiveSearchResult[]> => {
+    if (useTmdb) {
+      try {
+        const url =
+          userKey && userKey.length > 8
+            ? `https://api.themoviedb.org/3/tv/top_rated?language=en-US&page=1&api_key=${encodeURIComponent(
+                userKey
+              )}`
+            : '/api/tmdb?action=popular-tv';
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = (await res.json()) as {
+            results?: Array<{
+              id: number;
+              name?: string;
+              first_air_date?: string;
+              poster_path?: string;
+              backdrop_path?: string;
+              overview?: string;
+              vote_average?: number;
+              original_language?: string;
+              genre_ids?: number[];
+            }>;
+          };
+          const out: LiveSearchResult[] = [];
+          for (const r of data.results || []) {
+            if (!r.poster_path || !r.name) continue;
+            const poster = `https://image.tmdb.org/t/p/w500${r.poster_path}`;
+            out.push({
+              domain: 'watch',
+              kind: 'show',
+              id: `tmdb-tv-${r.id}`,
+              source: 'tmdb',
+              externalId: r.id,
+              title: r.name,
+              year: r.first_air_date ? Number(r.first_air_date.slice(0, 4)) : 2016,
+              mediaType: 'tv',
+              genres: mapTmdbGenres(r.genre_ids, r.original_language, false),
+              rating: r.vote_average ? Number(r.vote_average.toFixed(1)) : 8.5,
+              posterUrl: poster,
+              backdropUrl: r.backdrop_path
+                ? `https://image.tmdb.org/t/p/w1280${r.backdrop_path}`
+                : poster,
+              overview: r.overview || `${r.name} series.`,
+            });
+          }
+          if (out.length > 0) return out;
+        }
+      } catch {
+        // fall through to TVMaze
+      }
+    }
+
     try {
       const res = await fetch('https://api.tvmaze.com/shows?page=0');
       if (!res.ok) return [];
@@ -1383,13 +1649,15 @@ async function fetchPopularWatch(
   })();
 
   const moviesTask = (async (): Promise<LiveSearchResult[]> => {
-    if (hasTmdb) {
+    if (useTmdb) {
       try {
-        const res = await fetch(
-          `https://api.themoviedb.org/3/movie/top_rated?language=en-US&page=1&api_key=${encodeURIComponent(
-            tmdbApiKey!.trim()
-          )}`
-        );
+        const url =
+          userKey && userKey.length > 8
+            ? `https://api.themoviedb.org/3/movie/top_rated?language=en-US&page=1&api_key=${encodeURIComponent(
+                userKey
+              )}`
+            : '/api/tmdb?action=popular-movies';
+        const res = await fetch(url);
         if (res.ok) {
           const data = (await res.json()) as {
             results?: Array<{
@@ -1400,6 +1668,7 @@ async function fetchPopularWatch(
               backdrop_path?: string;
               overview?: string;
               vote_average?: number;
+              genre_ids?: number[];
             }>;
           };
           const out: LiveSearchResult[] = [];
@@ -1415,7 +1684,7 @@ async function fetchPopularWatch(
               title: r.title,
               year: r.release_date ? Number(r.release_date.slice(0, 4)) : 2014,
               mediaType: 'movie',
-              genres: ['Feature Film'],
+              genres: mapTmdbGenres(r.genre_ids, undefined, true),
               rating: r.vote_average ? Number(r.vote_average.toFixed(1)) : 8.5,
               posterUrl: poster,
               backdropUrl: r.backdrop_path ? `https://image.tmdb.org/t/p/w1280${r.backdrop_path}` : poster,
@@ -3382,6 +3651,60 @@ async function searchAniListManga(query: string): Promise<LiveSearchResult[]> {
 
 async function searchGames(query: string): Promise<LiveSearchResult[]> {
   const results: LiveSearchResult[] = [];
+  const fetchIgdb = async (): Promise<LiveSearchResult[]> => {
+    try {
+      if (!(await checkServerIgdbConfigured())) return [];
+      const res = await fetch(
+        `/api/igdb?action=search&q=${encodeURIComponent(query)}`,
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (!res.ok) return [];
+      const json = (await res.json()) as {
+        configured?: boolean;
+        items?: Array<{
+          id: string;
+          igdbId: number;
+          title: string;
+          year: number;
+          rating: number;
+          posterUrl: string;
+          backdropUrl: string;
+          overview: string;
+          developer?: string;
+          platforms?: string[];
+          genres?: string[];
+          franchise?: string;
+          subtitle?: string;
+          popularityScore?: number;
+        }>;
+      };
+      if (!json.configured || !Array.isArray(json.items)) return [];
+      return json.items.map((g) => ({
+        domain: 'play' as const,
+        kind: 'game' as const,
+        id: g.id,
+        source: 'igdb' as const,
+        externalId: g.igdbId,
+        igdbId: g.igdbId,
+        title: g.title,
+        subtitle: g.subtitle || g.platforms?.slice(0, 2).join(' · ') || 'Video Game',
+        year: g.year,
+        mediaType: 'game' as const,
+        genres: g.genres?.length ? g.genres : ['Video Game'],
+        rating: g.rating,
+        posterUrl: g.posterUrl,
+        backdropUrl: g.backdropUrl || g.posterUrl,
+        overview: g.overview,
+        director: g.developer,
+        franchise: g.franchise,
+        platforms: g.platforms,
+        popularityScore: g.popularityScore,
+      }));
+    } catch {
+      return [];
+    }
+  };
+
   const fetchCheapShark = async (): Promise<LiveSearchResult[]> => {
     const out: LiveSearchResult[] = [];
     try {
@@ -3433,13 +3756,21 @@ async function searchGames(query: string): Promise<LiveSearchResult[]> {
     return out;
   };
 
-  const [wikiRes, csRes] = await Promise.allSettled([
+  const [igdbRes, wikiRes, csRes] = await Promise.allSettled([
+    fetchIgdb(),
     searchWikipediaSummary(query, 'game'),
     fetchCheapShark(),
   ]);
 
+  if (igdbRes.status === 'fulfilled') {
+    for (const item of igdbRes.value) {
+      results.push(item);
+    }
+  }
   if (wikiRes.status === 'fulfilled' && wikiRes.value) {
-    results.push(wikiRes.value);
+    if (!results.some((r) => normalizeTitleKey(r.title) === normalizeTitleKey(wikiRes.value!.title))) {
+      results.push(wikiRes.value);
+    }
   }
   if (csRes.status === 'fulfilled') {
     for (const item of csRes.value) {
@@ -3638,10 +3969,15 @@ export async function fetchGameChapterInfo(title: string): Promise<GameChapterLo
   return { found: false };
 }
 
-async function searchTmdbMulti(query: string, apiKey: string): Promise<LiveSearchResult[]> {
-  const res = await fetch(
-    `https://api.themoviedb.org/3/search/multi?query=${encodeURIComponent(query)}&api_key=${encodeURIComponent(apiKey)}`
-  );
+async function searchTmdbMulti(query: string, apiKey?: string): Promise<LiveSearchResult[]> {
+  const cleanKey = apiKey?.trim();
+  const url =
+    cleanKey && cleanKey.length > 8
+      ? `https://api.themoviedb.org/3/search/multi?query=${encodeURIComponent(
+          query
+        )}&api_key=${encodeURIComponent(cleanKey)}`
+      : `/api/tmdb?action=search&q=${encodeURIComponent(query)}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error('TMDB search failed');
   const data = (await res.json()) as {
     results?: Array<{
@@ -3664,10 +4000,9 @@ async function searchTmdbMulti(query: string, apiKey: string): Promise<LiveSearc
 
   return (data.results || [])
     .filter((r) => r.media_type === 'tv' || r.media_type === 'movie')
-    .slice(0, 10)
+    .slice(0, 12)
     .map((r) => {
       const isMovie = r.media_type === 'movie';
-      const isAnime = !isMovie && r.genre_ids?.includes(16) && r.original_language === 'ja';
       const poster = r.poster_path ? `https://image.tmdb.org/t/p/w500${r.poster_path}` : '';
       const backdrop = r.backdrop_path
         ? `https://image.tmdb.org/t/p/w1280${r.backdrop_path}`
@@ -3687,7 +4022,7 @@ async function searchTmdbMulti(query: string, apiKey: string): Promise<LiveSearc
         title: r.title || r.name || 'Untitled',
         year: dateStr ? Number(dateStr.slice(0, 4)) : 2024,
         mediaType: isMovie ? ('movie' as const) : ('tv' as const),
-        genres: isAnime ? ['Anime'] : isMovie ? ['Feature Film'] : ['Series'],
+        genres: mapTmdbGenres(r.genre_ids, r.original_language, isMovie),
         rating: r.vote_average ? Number(r.vote_average.toFixed(1)) : 7.8,
         posterUrl: poster,
         backdropUrl: backdrop,
@@ -3698,6 +4033,105 @@ async function searchTmdbMulti(query: string, apiKey: string): Promise<LiveSearc
     });
 }
 
+export async function fetchTmdbMovieDetails(
+  tmdbId: number,
+  tmdbApiKey?: string
+): Promise<Partial<Movie> | null> {
+  if (!tmdbId) return null;
+  try {
+    const cleanKey = tmdbApiKey?.trim();
+    let movieData: {
+      runtime?: number;
+      overview?: string;
+      release_date?: string;
+      poster_path?: string;
+      backdrop_path?: string;
+      genres?: Array<{ name: string }>;
+      credits?: {
+        cast?: Array<{
+          id: number;
+          name: string;
+          character: string;
+          profile_path?: string;
+        }>;
+        crew?: Array<{ job?: string; name?: string }>;
+      };
+      videos?: {
+        results?: Array<{ site?: string; type?: string; key?: string; official?: boolean }>;
+      };
+    } | null = null;
+    let directorFromProxy: string | undefined;
+    let trailerFromProxy: string | undefined;
+
+    if (cleanKey && cleanKey.length > 8) {
+      const res = await fetch(
+        `https://api.themoviedb.org/3/movie/${tmdbId}?api_key=${encodeURIComponent(
+          cleanKey
+        )}&append_to_response=credits,videos`
+      );
+      if (res.ok) movieData = await res.json();
+    } else if (await checkServerTmdbConfigured()) {
+      const res = await fetch(`/api/tmdb?action=movie-detail&id=${tmdbId}`);
+      if (res.ok) {
+        const payload = (await res.json()) as {
+          configured?: boolean;
+          movie?: typeof movieData;
+          director?: string;
+          trailerUrl?: string;
+        };
+        if (payload.configured && payload.movie) {
+          movieData = payload.movie;
+          directorFromProxy = payload.director;
+          trailerFromProxy = payload.trailerUrl;
+        }
+      }
+    }
+
+    if (!movieData) return null;
+
+    const director =
+      directorFromProxy ||
+      movieData.credits?.crew?.find((c) => c.job === 'Director')?.name ||
+      undefined;
+    const cast: CastMember[] = (movieData.credits?.cast || [])
+      .slice(0, 10)
+      .map((c) => ({
+        id: String(c.id),
+        actor: c.name,
+        character: c.character || c.name,
+        avatarUrl: c.profile_path ? `https://image.tmdb.org/t/p/w185${c.profile_path}` : '',
+      }));
+    const vidList = movieData.videos?.results || [];
+    const ytTrailer =
+      vidList.find((v) => v.site === 'YouTube' && v.type === 'Trailer' && v.official && v.key) ||
+      vidList.find((v) => v.site === 'YouTube' && v.type === 'Trailer' && v.key) ||
+      vidList.find((v) => v.site === 'YouTube' && v.key);
+    const trailerUrl =
+      trailerFromProxy ||
+      (ytTrailer?.key ? `https://www.youtube.com/watch?v=${ytTrailer.key}` : undefined);
+
+    return {
+      ...(director ? { director } : {}),
+      ...(movieData.runtime ? { runtime: movieData.runtime } : {}),
+      ...(movieData.genres?.length
+        ? { genres: movieData.genres.map((g) => g.name).slice(0, 3) }
+        : {}),
+      ...(cast.length > 0 ? { cast } : {}),
+      ...(movieData.overview ? { overview: movieData.overview } : {}),
+      ...(movieData.release_date ? { releaseDate: movieData.release_date } : {}),
+      ...(movieData.poster_path
+        ? { posterUrl: `https://image.tmdb.org/t/p/w500${movieData.poster_path}` }
+        : {}),
+      ...(movieData.backdrop_path
+        ? { backdropUrl: `https://image.tmdb.org/t/p/w1280${movieData.backdrop_path}` }
+        : {}),
+      ...(trailerUrl ? { trailerUrl } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function testTmdbConnection(apiKey: string): Promise<boolean> {
   const res = await fetch(
     `https://api.themoviedb.org/3/configuration?api_key=${encodeURIComponent(apiKey.trim())}`
@@ -3706,7 +4140,7 @@ export async function testTmdbConnection(apiKey: string): Promise<boolean> {
 }
 
 export async function hydrateLiveShow(item: LiveSearchResult, tmdbApiKey?: string): Promise<Show> {
-  if (item.source === 'tmdb' && tmdbApiKey) {
+  if (item.source === 'tmdb') {
     return hydrateTmdbShow(item, tmdbApiKey);
   }
   if (item.source === 'anilist') {
@@ -4639,23 +5073,69 @@ async function hydrateTvMazeShow(item: LiveSearchResult): Promise<Show> {
   };
 }
 
-async function hydrateTmdbShow(item: LiveSearchResult, apiKey: string): Promise<Show> {
-  const res = await fetch(
-    `https://api.themoviedb.org/3/tv/${item.externalId}?api_key=${encodeURIComponent(apiKey)}&append_to_response=credits`
-  );
-  if (!res.ok) return fallbackShowFromSearch(item);
-  const data = await res.json();
-  const validSeasons = ((data.seasons || []) as Array<{ season_number: number }>)
-    .filter((s) => s.season_number > 0)
-    .slice(0, 20);
+async function hydrateTmdbShow(item: LiveSearchResult, apiKey?: string): Promise<Show> {
+  const cleanKey = apiKey?.trim();
+  let data: {
+    name?: string;
+    first_air_date?: string;
+    genres?: Array<{ name: string }>;
+    vote_average?: number;
+    poster_path?: string;
+    backdrop_path?: string;
+    overview?: string;
+    episode_run_time?: number[];
+    networks?: Array<{ name: string }>;
+    number_of_episodes?: number;
+    seasons?: Array<{ season_number: number }>;
+    credits?: {
+      cast?: Array<{ id: number; name: string; character: string; profile_path?: string }>;
+    };
+  } | null = null;
+  let seasonResponses: Array<{
+    season_number: number;
+    episodes?: Array<{
+      season_number: number;
+      episode_number: number;
+      name?: string;
+      air_date?: string;
+      runtime?: number;
+      still_path?: string;
+      overview?: string;
+    }>;
+  } | null> = [];
 
-  const seasonResponses = await Promise.all(
-    validSeasons.map((s) =>
-      fetch(
-        `https://api.themoviedb.org/3/tv/${item.externalId}/season/${s.season_number}?api_key=${encodeURIComponent(apiKey)}`
-      ).then((r) => (r.ok ? r.json() : null))
-    )
-  );
+  if (cleanKey && cleanKey.length > 8) {
+    const res = await fetch(
+      `https://api.themoviedb.org/3/tv/${item.externalId}?api_key=${encodeURIComponent(cleanKey)}&append_to_response=credits`
+    );
+    if (!res.ok) return fallbackShowFromSearch(item);
+    data = await res.json();
+    const validSeasons = (data?.seasons || [])
+      .filter((s) => s.season_number > 0)
+      .slice(0, 20);
+    seasonResponses = await Promise.all(
+      validSeasons.map((s) =>
+        fetch(
+          `https://api.themoviedb.org/3/tv/${item.externalId}/season/${s.season_number}?api_key=${encodeURIComponent(
+            cleanKey
+          )}`
+        ).then((r) => (r.ok ? r.json() : null))
+      )
+    );
+  } else {
+    const res = await fetch(`/api/tmdb?action=tv-detail&id=${encodeURIComponent(String(item.externalId))}`);
+    if (!res.ok) return fallbackShowFromSearch(item);
+    const payload = (await res.json()) as {
+      configured?: boolean;
+      show?: typeof data;
+      seasons?: typeof seasonResponses;
+    };
+    if (!payload.configured || !payload.show) return fallbackShowFromSearch(item);
+    data = payload.show;
+    seasonResponses = payload.seasons || [];
+  }
+
+  if (!data) return fallbackShowFromSearch(item);
 
   const seasons: Season[] = [];
   for (const sData of seasonResponses) {
@@ -4830,8 +5310,9 @@ export function hydrateLiveGameItem(item: LiveSearchResult): GameItem {
   return {
     id: item.id,
     steamAppId: item.steamAppId,
+    igdbId: item.igdbId,
     title: item.title,
-    developer: item.subtitle || 'Studio',
+    developer: item.director || item.subtitle || 'Studio',
     year: item.year,
     genres: item.genres,
     rating: item.rating,
@@ -4839,6 +5320,7 @@ export function hydrateLiveGameItem(item: LiveSearchResult): GameItem {
     coverUrl: item.posterUrl,
     backdropUrl: item.backdropUrl || item.posterUrl,
     overview: item.overview,
+    franchise: item.franchise,
     totalChapters: known?.totalChapters,
     chapterUnit: known?.unit,
     chapterSource: known?.source,

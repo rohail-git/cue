@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Bookmark,
   Check,
@@ -6,6 +6,7 @@ import {
   ListPlus,
   Maximize2,
   Minus,
+  Play,
   Plus,
   Star,
 } from 'lucide-react';
@@ -14,6 +15,7 @@ import { DetailModeToggle } from '../components/DetailModeToggle';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
+import { fetchTmdbMovieDetails } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode } from '../types';
 import { evaluateMovieCollectionProgress, findMovieCollection } from '../utils/containers';
@@ -33,6 +35,7 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
     rateMovie,
     rateCollection,
     setMovieMood,
+    updateMovieDetails,
     toggleItemInList,
     createCustomList,
   } = useCueStore();
@@ -44,18 +47,38 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
     () => sessionDetailModeByMovieId.get(movieId) || state.settings.detailMode || 'simple'
   );
+  const enrichedMovieRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setDetailMode(sessionDetailModeByMovieId.get(movieId) || state.settings.detailMode || 'simple');
   }, [movieId, state.settings.detailMode]);
 
+  const movie = state.movies[movieId];
+  const progress = state.movieProgress[movieId];
+
+  useEffect(() => {
+    if (!movie?.tmdbId) return;
+    if (enrichedMovieRef.current.has(movie.id)) return;
+    const needsEnrich = movie.cast.length === 0 || !movie.trailerUrl;
+    if (!needsEnrich) return;
+
+    let cancelled = false;
+    fetchTmdbMovieDetails(movie.tmdbId, state.settings.tmdbApiKey).then((patch) => {
+      if (cancelled) return;
+      enrichedMovieRef.current.add(movie.id);
+      if (patch) {
+        updateMovieDetails(movie.id, patch);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [movie, state.settings.tmdbApiKey, updateMovieDetails]);
+
   const handleDetailModeChange = (nextMode: DetailCardMode) => {
     sessionDetailModeByMovieId.set(movieId, nextMode);
     setDetailMode(nextMode);
   };
-
-  const movie = state.movies[movieId];
-  const progress = state.movieProgress[movieId];
 
   if (!movie) {
     return (
@@ -231,6 +254,17 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                     <span className="bg-surface border border-brand/35 rounded-full px-3 py-1 text-xs font-semibold text-brand inline-flex items-center gap-1 tabular-nums">
                       Your rating ★ {formatRating(progress.rating)}/5
                     </span>
+                  )}
+                  {movie.trailerUrl && (
+                    <a
+                      href={movie.trailerUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="bg-surface hover:bg-surface-raised border border-white/[0.12] rounded-full px-3 py-1 text-xs font-semibold text-ink inline-flex items-center gap-1.5 transition-colors"
+                    >
+                      <Play className="w-3 h-3 fill-brand text-brand" />
+                      <span>Watch trailer</span>
+                    </a>
                   )}
                 </div>
               </section>

@@ -301,7 +301,7 @@ export function SettingsModal() {
             </button>
           </section>
 
-          {/* Live Search */}
+            {/* Live Search */}
           <section className="space-y-2.5 pt-2 border-t border-white/8">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
@@ -309,12 +309,63 @@ export function SettingsModal() {
                 <h4 className="text-sm font-semibold text-ink">Live Catalog APIs</h4>
               </div>
               <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-watch/15 text-watch">
-                English-First Active
+                {health?.integrations?.tmdbServerConfigured && health?.integrations?.igdbServerConfigured
+                  ? 'TMDB + IGDB Active'
+                  : health?.integrations?.tmdbServerConfigured
+                    ? 'TMDB Proxy Active'
+                    : health?.integrations?.igdbServerConfigured
+                      ? 'IGDB Proxy Active'
+                      : 'Zero-Config Active'}
               </span>
             </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl bg-background border border-white/8 text-xs">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span
+                    className={`h-2 w-2 rounded-full shrink-0 ${
+                      health?.integrations?.tmdbServerConfigured || state.settings.tmdbApiKey
+                        ? 'bg-[#7AC7A4]'
+                        : 'bg-white/25'
+                    }`}
+                  />
+                  <span className="text-ink truncate">TMDB Movies & TV</span>
+                </span>
+                <span className="text-[11px] text-ink-dim shrink-0">
+                  {health?.integrations?.tmdbServerConfigured
+                    ? 'Vercel proxy'
+                    : state.settings.tmdbApiKey
+                      ? 'Personal key'
+                      : 'Fallback (TVMaze)'}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl bg-background border border-white/8 text-xs">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span
+                    className={`h-2 w-2 rounded-full shrink-0 ${
+                      health?.integrations?.igdbServerConfigured
+                        ? 'bg-[#7AC7A4]'
+                        : 'bg-white/25'
+                    }`}
+                  />
+                  <span className="text-ink truncate">IGDB Games</span>
+                </span>
+                <span className="text-[11px] text-ink-dim shrink-0">
+                  {health?.integrations?.igdbServerConfigured
+                    ? 'Vercel proxy'
+                    : 'Fallback (Steam)'}
+                </span>
+              </div>
+            </div>
+
             <p className="text-xs text-ink-dim">
-              TVMaze, iTunes/Wikipedia, Open Library, AniList, and Steam/CheapShark work out of the
-              box. Optionally add a TMDB v3 API key for Watch multi-search.
+              Server proxies (<code className="text-ink/80">/api/tmdb</code> &{' '}
+              <code className="text-ink/80">/api/igdb</code>) activate automatically on every device
+              once <code className="text-ink/80">TMDB_API_KEY</code> and{' '}
+              <code className="text-ink/80">TWITCH_CLIENT_ID</code> /{' '}
+              <code className="text-ink/80">TWITCH_CLIENT_SECRET</code> are set on Vercel. You can
+              also override TMDB below.
             </p>
             <div className="flex gap-2">
               <input

@@ -241,6 +241,7 @@ interface CueContextValue {
   toggleMovieWatchlist: (movieId: string) => void;
   rateMovie: (movieId: string, rating: number | undefined) => void;
   setMovieMood: (movieId: string, mood: PersonalMood | undefined) => void;
+  updateMovieDetails: (movieId: string, patch: Partial<Movie>) => void;
 
   // Read actions
   advanceReadProgress: (readId: string, delta?: number) => void;
@@ -1603,6 +1604,24 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             status: existing?.status || 'watchlist',
             watchCount: existing?.watchCount || 0,
             mood,
+          },
+        },
+      };
+    });
+  }, []);
+
+  const updateMovieDetails = useCallback((movieId: string, patch: Partial<Movie>) => {
+    if (!patch || Object.keys(patch).length === 0) return;
+    commitState((prev) => {
+      const existing = prev.movies[movieId];
+      if (!existing) return prev;
+      return {
+        ...prev,
+        movies: {
+          ...prev.movies,
+          [movieId]: {
+            ...existing,
+            ...patch,
           },
         },
       };
@@ -4069,6 +4088,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         toggleMovieWatchlist,
         rateMovie,
         setMovieMood,
+        updateMovieDetails,
         advanceReadProgress,
         setReadProgress,
         toggleReadUnit,

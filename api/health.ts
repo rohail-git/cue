@@ -1,3 +1,6 @@
+import { resolveIgdbCredentials, getTwitchAppToken } from './igdb.ts';
+import { resolveTmdbCredential, tmdbFetchJson } from './tmdb.ts';
+
 export interface ServiceProbeResult {
   id: string;
   name: string;
@@ -15,6 +18,10 @@ export interface LiveHealthReport {
   onlineCount: number;
   totalCount: number;
   services: ServiceProbeResult[];
+  integrations?: {
+    tmdbServerConfigured: boolean;
+    igdbServerConfigured: boolean;
+  };
 }
 
 const UA_HEADER = 'CueMediaTracker/1.0 (+https://cue-three-theta.vercel.app)';
@@ -76,9 +83,16 @@ async function probeEndpoint(
   }
 }
 
-export async function fetchLiveHealthPayload(): Promise<LiveHealthReport> {
+export async function fetchLiveHealthPayload(
+  env?: Record<string, string | undefined>
+): Promise<LiveHealthReport> {
   const started = Date.now();
-  const services = await Promise.all([
+  const tmdbCredential = resolveTmdbCredential(env);
+  const { clientId: igdbClientId, clientSecret: igdbSecret } = resolveIgdbCredentials(env);
+  const tmdbServerConfigured = Boolean(tmdbCredential);
+  const igdbServerConfigured = Boolean(igdbClientId && igdbSecret);
+
+  const probeTasks: Array<Promise<ServiceProbeResult>> = [
     probeEndpoint(
       'tvmaze',
       'TVMaze Shows',
@@ -97,8 +111,8 @@ export async function fetchLiveHealthPayload(): Promise<LiveHealthReport> {
     ),
     probeEndpoint(
       'anilist',
-      'AniList Anime & Manga',
-      'watch',
+      'AniList Manga & Novels',
+      'read',
       'https://graphql.anilist.co',
       {
         method: 'POST',
@@ -131,7 +145,45 @@ export async function fetchLiveHealthPayload(): Promise<LiveHealthReport> {
       undefined,
       (d) => Boolean(d && typeof d === 'object' && 'items' in d)
     ),
-  ]);
+  ];
+
+  if (tmdbServerConfigured) {
+    probeTasks.push(
+      (async (): Promise<ServiceProbeResult> => {
+        const s = Date.now();
+        const r = await tmdbFetchJson('/configuration', tmdbCredential);
+        return {
+          id: 'tmdb',
+          name: 'TMDB Watch Proxy',
+          domain: 'watch',
+          ok: r.ok,
+          statusCode: r.status,
+          latencyMs: Date.now() - s,
+          note: r.ok ? 'Server proxy active' : `HTTP ${r.status}`,
+        };
+      })()
+    );
+  }
+
+  if (igdbServerConfigured) {
+    probeTasks.push(
+      (async (): Promise<ServiceProbeResult> => {
+        const s = Date.now();
+        const token = await getTwitchAppToken(igdbClientId, igdbSecret);
+        return {
+          id: 'igdb',
+          name: 'IGDB Games Proxy',
+          domain: 'play',
+          ok: Boolean(token),
+          statusCode: token ? 200 : 401,
+          latencyMs: Date.now() - s,
+          note: token ? 'Twitch OAuth active' : 'OAuth error',
+        };
+      })()
+    );
+  }
+
+  const services = await Promise.all(probeTasks);
 
   const onlineCount = services.filter((s) => s.ok).length;
   const totalCount = services.length;
@@ -149,6 +201,10 @@ export async function fetchLiveHealthPayload(): Promise<LiveHealthReport> {
     onlineCount,
     totalCount,
     services,
+    integrations: {
+      tmdbServerConfigured,
+      igdbServerConfigured,
+    },
   };
 }
 

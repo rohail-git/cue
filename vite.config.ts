@@ -1,8 +1,10 @@
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { type GameDiscoverMode, fetchTrendingGamesPayload } from './api/trending-games.ts'
 import { fetchLiveHealthPayload } from './api/health.ts'
+import { handleTmdbProxyRequest } from './api/tmdb.ts'
+import { handleIgdbProxyRequest } from './api/igdb.ts'
 import {
   type ComicWikiSlug,
   fetchComicSeriesIssuesPayload,
@@ -204,7 +206,7 @@ function comicSeriesDevPlugin(): Plugin {
   };
 }
 
-function healthDevPlugin(): Plugin {
+function healthDevPlugin(env: Record<string, string | undefined>): Plugin {
   return {
     name: 'cue-health-dev',
     configureServer(server) {
@@ -219,7 +221,7 @@ function healthDevPlugin(): Plugin {
           return;
         }
         try {
-          const payload = await fetchLiveHealthPayload();
+          const payload = await fetchLiveHealthPayload(env);
           res.setHeader('Content-Type', 'application/json');
           res.statusCode = 200;
           res.end(JSON.stringify(payload));
@@ -242,13 +244,78 @@ function healthDevPlugin(): Plugin {
   };
 }
 
-export default defineConfig({
-  plugins: [
-    react(),
-    tailwindcss(),
-    imdbResolveDevPlugin(),
-    trendingGamesDevPlugin(),
-    comicSeriesDevPlugin(),
-    healthDevPlugin(),
-  ],
+function tmdbDevPlugin(env: Record<string, string | undefined>): Plugin {
+  return {
+    name: 'cue-tmdb-dev',
+    configureServer(server) {
+      server.middlewares.use('/api/tmdb', async (req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== 'GET') {
+          next();
+          return;
+        }
+        try {
+          const url = new URL(req.url || '/', 'http://localhost');
+          const out = await handleTmdbProxyRequest(url.searchParams, env);
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = out.status;
+          res.end(JSON.stringify(out.body));
+        } catch {
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 200;
+          res.end(JSON.stringify({ configured: false, results: [] }));
+        }
+      });
+    },
+  };
+}
+
+function igdbDevPlugin(env: Record<string, string | undefined>): Plugin {
+  return {
+    name: 'cue-igdb-dev',
+    configureServer(server) {
+      server.middlewares.use('/api/igdb', async (req, res, next) => {
+        if (req.method === 'OPTIONS') {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== 'GET') {
+          next();
+          return;
+        }
+        try {
+          const url = new URL(req.url || '/', 'http://localhost');
+          const out = await handleIgdbProxyRequest(url.searchParams, env);
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = out.status;
+          res.end(JSON.stringify(out.body));
+        } catch {
+          res.setHeader('Content-Type', 'application/json');
+          res.statusCode = 200;
+          res.end(JSON.stringify({ configured: false, items: [] }));
+        }
+      });
+    },
+  };
+}
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  return {
+    plugins: [
+      react(),
+      tailwindcss(),
+      imdbResolveDevPlugin(),
+      trendingGamesDevPlugin(),
+      comicSeriesDevPlugin(),
+      tmdbDevPlugin(env),
+      igdbDevPlugin(env),
+      healthDevPlugin(env),
+    ],
+  };
 })

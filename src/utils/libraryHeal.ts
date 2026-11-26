@@ -19,6 +19,10 @@ export interface LiveHealthReport {
   onlineCount: number;
   totalCount: number;
   services: ServiceProbeResult[];
+  integrations?: {
+    tmdbServerConfigured: boolean;
+    igdbServerConfigured: boolean;
+  };
 }
 
 export interface LibraryRepairProgress {
