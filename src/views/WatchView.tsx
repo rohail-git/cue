@@ -78,12 +78,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
       const shows = state.showOrder
         .map((id) => state.shows[id])
         .filter((s): s is Show => Boolean(s) && Boolean(state.showProgress[s.id]?.bookmarked))
-        .filter((s) => {
-          if (filter === 'movie') return false;
-          if (filter === 'tv') return s.mediaType === 'tv';
-          if (filter === 'anime') return s.mediaType === 'anime';
-          return true;
-        });
+        .filter(() => filter !== 'movie');
 
       const sortShows = (list: Show[]) =>
         [...list].sort((a, b) => {
@@ -225,7 +220,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
       <BingersMediaRow
         key={show.id}
         title={show.title}
-        badgeLabel={show.mediaType === 'anime' ? 'Anime' : 'Show'}
+        badgeLabel="Show"
         badgeClassName="bg-watch/15 text-watch"
         posterUrl={show.posterUrl}
         posterTag={next?.number === 1 ? 'PREMIERE' : undefined}
@@ -370,7 +365,6 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
     { id: 'all', label: 'All' },
     { id: 'tv', label: 'Shows' },
     { id: 'movie', label: 'Movies' },
-    { id: 'anime', label: 'Anime' },
   ];
 
   const listClass = isPosterLayout
@@ -448,7 +442,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
                   <Tv className="w-7 h-7 text-watch mx-auto mb-2.5 opacity-80" />
                   <p className="font-display font-bold text-lg text-ink">No upcoming releases yet</p>
                   <p className="text-xs text-ink-dim mt-1">
-                    Add shows or anime in Search to see upcoming episode schedules here.
+                    Add shows in Search to see upcoming episode schedules here.
                   </p>
                 </div>
               )}
@@ -466,7 +460,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
                     Nothing in Watch yet
                   </h2>
                   <p className="text-sm text-ink-dim mt-1 max-w-sm mx-auto">
-                    Search for TV shows, movies, or anime to start tracking episodes and rewatches.
+                    Search for shows and movies to start tracking episodes and rewatches.
                   </p>
                   <div className="mt-4 flex items-center justify-center gap-2.5 flex-wrap">
                     <button

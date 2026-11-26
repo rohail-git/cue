@@ -33,7 +33,7 @@ function mapRef(ref: { kind: 'show' | 'movie' | 'read' | 'game'; id: string }): 
       externalId: s.tvmazeId || s.id,
       title: s.title,
       year: s.year,
-      mediaType: s.mediaType === 'anime' ? 'anime' : 'tv',
+      mediaType: 'tv',
       genres: s.genres,
       rating: s.rating,
       posterUrl: s.posterUrl,

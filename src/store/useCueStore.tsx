@@ -99,6 +99,14 @@ function loadInitialState(): CueStoreState {
         if (parsed.settings && !parsed.settings.detailMode) {
           parsed.settings.detailMode = 'simple';
         }
+        if (parsed.settings?.watchFilter === 'anime') {
+          parsed.settings.watchFilter = 'tv';
+        }
+        for (const show of Object.values(parsed.shows)) {
+          if (show && show.mediaType === 'anime') {
+            show.mediaType = 'tv';
+          }
+        }
         return parsed;
       }
     }

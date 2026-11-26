@@ -113,7 +113,7 @@ export function QueueView() {
           sortTs: prog.lastWatchedAt || '',
           active: st.watchedUnique > 0,
           title: show.title,
-          badgeLabel: show.mediaType === 'anime' ? 'Anime' : 'Show',
+          badgeLabel: 'Show',
           badgeClassName: 'bg-watch/15 text-watch',
           posterUrl: show.posterUrl,
           posterTag: next.number === 1 ? 'PREMIERE' : undefined,

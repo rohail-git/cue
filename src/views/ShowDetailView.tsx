@@ -104,7 +104,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
   const enrichedAnimeRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (!show || show.mediaType !== 'anime') return;
+    if (!show || !show.anilistId || show.seasons.length > 1) return;
     if (enrichedAnimeRef.current.has(show.id)) return;
     const allEps = show.seasons.flatMap((s) => s.episodes);
     const uniqueStills = new Set(allEps.map((e) => e.stillUrl).filter(Boolean));
@@ -496,7 +496,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
           <div className="min-w-0 pb-1">
             <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
               <span className="inline-block text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-brand/20 text-brand">
-                {show.mediaType === 'anime' ? 'Anime' : 'Series'}
+                Series
               </span>
             </div>
             <h1 className="font-display font-extrabold text-2xl sm:text-4xl text-ink tracking-tight leading-tight">
@@ -625,7 +625,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
                 <HeroRatingCard
                   value={progress?.rating}
                   onChange={(r) => rateShow(show.id, r, 'manual')}
-                  promptLabel={show.mediaType === 'anime' ? 'Rate this anime' : 'Rate this show'}
+                  promptLabel="Rate this show"
                   ariaPrefix={`Rate ${show.title}`}
                 />
               </section>

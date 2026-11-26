@@ -74,9 +74,8 @@ const DISCOVER_PILLS: DomainPillConfig[] = [
 let sessionDiscoverScope: DiscoverScope = 'all';
 
 function badgeLabelForItem(item: LiveSearchResult): string {
-  if (item.mediaType === 'tv') return 'SHOW';
+  if (item.mediaType === 'tv' || item.mediaType === 'anime') return 'SHOW';
   if (item.mediaType === 'movie') return 'MOVIE';
-  if (item.mediaType === 'anime') return 'ANIME';
   if (item.mediaType === 'manga') return 'MANGA';
   if (item.mediaType === 'comic') return 'COMIC';
   if (item.mediaType === 'novel') return 'NOVEL';
@@ -214,11 +213,11 @@ export function SearchView() {
         items.push({
           domain: 'watch',
           kind: 'show',
-          mediaType: s.mediaType === 'anime' ? 'anime' : 'tv',
+          mediaType: 'tv',
           id: s.id,
           title: s.title,
           year: s.year,
-          badge: s.mediaType === 'anime' ? 'Anime' : 'Show',
+          badge: 'Show',
           genres: s.genres,
           rating: s.rating,
           posterUrl: s.posterUrl,
