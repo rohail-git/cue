@@ -1,3 +1,4 @@
+import { CatchUpPromptSheet } from './components/CatchUpPromptSheet';
 import { MediaInsightsModal } from './components/MediaInsightsModal';
 import { NavChrome } from './components/NavChrome';
 import { NotificationsSheet } from './components/NotificationsSheet';
@@ -19,7 +20,7 @@ import { ShowDetailView } from './views/ShowDetailView';
 import { WatchView } from './views/WatchView';
 
 function CueShell() {
-  const { route, toast, dismissToast } = useCueStore();
+  const { route, toast, dismissToast, catchUpPrompt } = useCueStore();
 
   const activeDomain: 'watch' | 'read' | 'play' | 'neutral' =
     route.view === 'watch' ||
@@ -76,8 +77,16 @@ function CueShell() {
       <NavChrome />
       <main>{renderView()}</main>
 
-      {toast && <ToastBanner key={toast.id} toast={toast} onDismiss={dismissToast} />}
+      {toast && (
+        <ToastBanner
+          key={toast.id}
+          toast={toast}
+          onDismiss={dismissToast}
+          lifted={Boolean(catchUpPrompt)}
+        />
+      )}
 
+      <CatchUpPromptSheet />
       <NotificationsSheet />
       <SettingsModal />
       <SmartImportModal />

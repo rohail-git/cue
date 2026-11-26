@@ -975,7 +975,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                       min={0}
                       max={totalChapters}
                       value={currentChapter}
-                      onChange={(e) => setGameChapter(game.id, Number(e.target.value))}
+                      onChange={(e) => setGameChapter(game.id, Number(e.target.value), { silent: true })}
                       aria-label="Story chapter progress slider"
                       className="w-full accent-[#A894E8] cursor-pointer mb-3"
                     />

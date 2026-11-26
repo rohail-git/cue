@@ -8,6 +8,7 @@ interface ToastBannerProps {
   toast: ToastItem;
   onDismiss: () => void;
   durationMs?: number;
+  lifted?: boolean;
 }
 
 type DomainTheme = MediaDomain | 'neutral';
@@ -82,7 +83,12 @@ const DOMAIN_STYLES: Record<
   },
 };
 
-export function ToastBanner({ toast, onDismiss, durationMs = 4200 }: ToastBannerProps) {
+export function ToastBanner({
+  toast,
+  onDismiss,
+  durationMs = 4200,
+  lifted = false,
+}: ToastBannerProps) {
   const [paused, setPaused] = useState(false);
   const [dragY, setDragY] = useState(0);
   const remainingRef = useRef(durationMs);
@@ -126,7 +132,9 @@ export function ToastBanner({ toast, onDismiss, durationMs = 4200 }: ToastBanner
     <div
       role="status"
       aria-live="polite"
-      className="fixed bottom-[90px] md:bottom-7 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-1.5rem)] max-w-[404px] animate-toast-in"
+      className={`fixed md:bottom-7 left-1/2 -translate-x-1/2 w-[calc(100%-1.5rem)] max-w-[404px] animate-toast-in ${
+        lifted ? 'bottom-[260px] z-[60]' : 'bottom-[90px] z-50'
+      }`}
     >
       <div
         onMouseEnter={pauseTimer}

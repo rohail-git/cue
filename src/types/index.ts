@@ -334,6 +334,7 @@ export interface AppSettings {
   showPosterProgress: boolean;
   detailMode?: DetailCardMode;
   cueMindIntroDismissed?: boolean;
+  skipCatchUpPromptIds?: string[];
   tmdbApiKey: string;
 }
 

@@ -62,6 +62,7 @@ import { lookupKnownGameChapters } from '../utils/gameChapters';
 import {
   type AtomicDelta,
   type SyncedContainerSummary,
+  detectNonAdjacentPriorAtoms,
   extractReadItemIsbn,
   getComicIssueAtomicId,
   isCollectedComicItem,
@@ -199,6 +200,21 @@ export interface ReleaseBannerData {
   mediaId?: string;
 }
 
+export interface CatchUpPromptItem {
+  id: string;
+  mediaKey: string;
+  kind: 'show' | 'read';
+  mediaId: string;
+  title: string;
+  count: number;
+  unitSingular: 'episode' | 'issue' | 'chapter';
+  unitPlural: 'episodes' | 'issues' | 'chapters';
+  verbPast: 'watched' | 'read';
+  mediaNoun: 'show' | 'comic' | 'manga' | 'book';
+  episodeTargets?: Array<{ season: number; number: number }>;
+  readUnitTargets?: number[];
+}
+
 interface CueContextValue {
   state: CueStoreState;
   route: RouteView;
@@ -219,6 +235,11 @@ interface CueContextValue {
     onAction?: () => void,
     options?: ToastOptions
   ) => void;
+
+  catchUpPrompt: CatchUpPromptItem | null;
+  confirmCatchUpPrompt: () => void;
+  neverAskCatchUpPrompt: () => void;
+  dismissCatchUpPrompt: () => void;
 
   activeBanner: ReleaseBannerData | null;
   dismissBanner: () => void;
@@ -308,7 +329,7 @@ interface CueContextValue {
   // Play actions
   logGameSession: (gameId: string, hoursDelta: number) => void;
   advanceGameChapter: (gameId: string, delta?: number) => void;
-  setGameChapter: (gameId: string, chapter: number) => void;
+  setGameChapter: (gameId: string, chapter: number, opts?: { silent?: boolean }) => void;
   updateGameChaptersMeta: (
     gameId: string,
     totalChapters: number,
@@ -444,6 +465,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   }
   const [routeStack, setRouteStack] = useState<RouteView[]>(initialHistoryRef.current.stack);
   const [toast, setToast] = useState<ToastItem | null>(null);
+  const [catchUpPrompt, setCatchUpPrompt] = useState<CatchUpPromptItem | null>(null);
   const [activeBanner, setActiveBanner] = useState<ReleaseBannerData | null>(null);
 
   const [filterSheetOpen, setFilterSheetOpenRaw] = useState(false);
@@ -1120,22 +1142,85 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const toggleEpisodeWatched = useCallback(
     (showId: string, season: number, number: number) => {
-      let seasonToast: { msg: string; actionLabel?: string } | null = null;
+      let toastMsg = '';
+      let toastSub: string | undefined;
+      let toastAction: string | undefined;
       let showPoster = '';
+      let pendingPrompt: CatchUpPromptItem | null = null;
       commitState((prev) => {
         const show = prev.shows[showId];
         if (!show) return prev;
         showPoster = show.posterUrl;
         const prog = prev.showProgress[showId];
+        const prevCounts = prog?.episodeCounts || {};
         const epKey = getEpisodeKey(season, number);
-        const current = prog?.episodeCounts?.[epKey] || 0;
+        const current = prevCounts[epKey] || 0;
+        const nowWatched = current === 0;
+        const orderedEps = [...show.seasons]
+          .sort((a, b) => a.number - b.number)
+          .flatMap((s) => s.episodes);
+        const targetIdx = orderedEps.findIndex(
+          (e) => e.season === season && e.number === number
+        );
+        const targetEp = targetIdx >= 0 ? orderedEps[targetIdx] : undefined;
+
+        if (nowWatched && targetIdx > 0) {
+          const mediaKey = `show:${showId}`;
+          const skipped = prev.settings.skipCatchUpPromptIds?.includes(mediaKey);
+          if (!skipped) {
+            const priorEps = detectNonAdjacentPriorAtoms(
+              orderedEps,
+              targetIdx,
+              (e) => (prevCounts[getEpisodeKey(e.season, e.number)] || 0) > 0
+            );
+            if (priorEps.length > 0) {
+              pendingPrompt = {
+                id: `cup-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                mediaKey,
+                kind: 'show',
+                mediaId: showId,
+                title: show.title,
+                count: priorEps.length,
+                unitSingular: 'episode',
+                unitPlural: 'episodes',
+                verbPast: 'watched',
+                mediaNoun: 'show',
+                episodeTargets: priorEps.map((e) => ({ season: e.season, number: e.number })),
+              };
+            }
+          }
+        }
+
         const nextCounts = {
-          ...(prog?.episodeCounts || {}),
-          [epKey]: current > 0 ? 0 : 1,
+          ...prevCounts,
+          [epKey]: nowWatched ? 1 : 0,
         };
         const updatedProg = recomputeShowStatus(show, nextCounts, prog);
-        if (current === 0) {
-          seasonToast = buildShowSeasonToast(show, season, prog, updatedProg);
+        const codeLabel = formatEpisodeCode(season, number);
+        let nextHistory = prev.history || [];
+
+        if (nowWatched) {
+          const seasonToast = buildShowSeasonToast(show, season, prog, updatedProg);
+          if (seasonToast) {
+            toastMsg = seasonToast.msg;
+            toastAction = seasonToast.actionLabel;
+          } else {
+            toastMsg = show.title;
+            toastSub = targetEp?.title
+              ? `Watched ${codeLabel} · ${targetEp.title}`
+              : `Watched ${codeLabel}`;
+          }
+          nextHistory = appendHistory(nextHistory, {
+            id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            domain: 'watch',
+            mediaKind: 'show',
+            mediaId: showId,
+            title: show.title,
+            posterUrl: show.posterUrl,
+            codeLabel,
+            subtitle: targetEp?.title || codeLabel,
+            loggedAt: new Date().toISOString(),
+          });
         }
         return {
           ...prev,
@@ -1143,14 +1228,18 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             ...prev.showProgress,
             [showId]: updatedProg,
           },
+          history: nextHistory,
         };
       });
-      if (seasonToast) {
-        const { msg, actionLabel } = seasonToast;
-        showToast(msg, actionLabel, undefined, {
+      if (toastMsg) {
+        showToast(toastMsg, toastAction, undefined, {
           domain: 'watch',
+          subtitle: toastSub,
           posterUrl: showPoster,
         });
+      }
+      if (pendingPrompt) {
+        setCatchUpPrompt(pendingPrompt);
       }
     },
     [showToast]
@@ -1980,13 +2069,47 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       let msg = '';
       let actionLabel: string | undefined;
       let coverUrl = '';
+      let pendingPrompt: CatchUpPromptItem | null = null;
       commitState((prev) => {
         const item = prev.readItems[readId];
         if (!item || unitNumber < 1 || unitNumber > item.totalUnits) return prev;
         const prog = prev.readProgress[readId];
         const prevUnits = getCompletedReadUnits(item, prog);
+        const prevSet = new Set(prevUnits);
         const existingHigh = (prog?.completedUnits || []).filter((n) => n > item.totalUnits);
-        const hadUnit = prevUnits.includes(unitNumber);
+        const hadUnit = prevSet.has(unitNumber);
+
+        if (!hadUnit && unitNumber > 1) {
+          const mediaKey = `read:${readId}`;
+          const skipped = prev.settings.skipCatchUpPromptIds?.includes(mediaKey);
+          if (!skipped) {
+            const orderedNums: number[] = [];
+            for (let i = 1; i <= item.totalUnits; i += 1) orderedNums.push(i);
+            const priorNums = detectNonAdjacentPriorAtoms(
+              orderedNums,
+              unitNumber - 1,
+              (u) => prevSet.has(u)
+            );
+            if (priorNums.length > 0) {
+              const isIssues = item.unit === 'issues';
+              pendingPrompt = {
+                id: `cup-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                mediaKey,
+                kind: 'read',
+                mediaId: readId,
+                title: item.title,
+                count: priorNums.length,
+                unitSingular: isIssues ? 'issue' : 'chapter',
+                unitPlural: isIssues ? 'issues' : 'chapters',
+                verbPast: 'read',
+                mediaNoun:
+                  item.format === 'comic' ? 'comic' : item.format === 'manga' ? 'manga' : 'book',
+                readUnitTargets: priorNums,
+              };
+            }
+          }
+        }
+
         const nextActive = hadUnit
           ? prevUnits.filter((u) => u !== unitNumber)
           : [...prevUnits, unitNumber].sort((a, b) => a - b);
@@ -2033,6 +2156,9 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           domain: 'read',
           posterUrl: coverUrl,
         });
+      }
+      if (pendingPrompt) {
+        setCatchUpPrompt(pendingPrompt);
       }
     },
     [pushRoute, showToast]
@@ -2104,6 +2230,89 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     },
     [pushRoute, showToast]
   );
+
+  const dismissCatchUpPrompt = useCallback(() => setCatchUpPrompt(null), []);
+
+  const neverAskCatchUpPrompt = useCallback(() => {
+    const prompt = catchUpPrompt;
+    setCatchUpPrompt(null);
+    if (!prompt) return;
+    commitState((prev) => {
+      const existing = prev.settings.skipCatchUpPromptIds || [];
+      if (existing.includes(prompt.mediaKey)) return prev;
+      return {
+        ...prev,
+        settings: {
+          ...prev.settings,
+          skipCatchUpPromptIds: [...existing, prompt.mediaKey],
+        },
+      };
+    });
+    showToast(`Won't ask again for ${prompt.title}`);
+  }, [catchUpPrompt, commitState, showToast]);
+
+  const confirmCatchUpPrompt = useCallback(() => {
+    const prompt = catchUpPrompt;
+    setCatchUpPrompt(null);
+    if (!prompt) return;
+
+    if (prompt.kind === 'read' && prompt.readUnitTargets?.length) {
+      setReadUnitsBatch(prompt.mediaId, prompt.readUnitTargets, true);
+      return;
+    }
+
+    if (prompt.kind === 'show' && prompt.episodeTargets?.length) {
+      let toastMsg = '';
+      let showPoster = '';
+      commitState((prev) => {
+        const show = prev.shows[prompt.mediaId];
+        if (!show) return prev;
+        showPoster = show.posterUrl;
+        const prog = prev.showProgress[prompt.mediaId];
+        const nextCounts = { ...(prog?.episodeCounts || {}) };
+        let added = 0;
+        for (const ep of prompt.episodeTargets!) {
+          const key = getEpisodeKey(ep.season, ep.number);
+          if ((nextCounts[key] || 0) === 0) {
+            nextCounts[key] = 1;
+            added += 1;
+          }
+        }
+        if (added === 0) return prev;
+        const updatedProg = recomputeShowStatus(show, nextCounts, prog);
+        const stats = getShowStats(show, updatedProg);
+        toastMsg = stats.isFinished
+          ? `Finished ${show.title}!`
+          : `Marked ${added} previous ${added === 1 ? 'episode' : 'episodes'} watched`;
+        const nextHistory = appendHistory(prev.history || [], {
+          id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          domain: 'watch',
+          mediaKind: 'show',
+          mediaId: prompt.mediaId,
+          title: show.title,
+          posterUrl: show.posterUrl,
+          codeLabel: `+${added} eps`,
+          subtitle: `Caught up ${added} ${added === 1 ? 'episode' : 'episodes'}`,
+          loggedAt: new Date().toISOString(),
+        });
+        return {
+          ...prev,
+          showProgress: {
+            ...prev.showProgress,
+            [prompt.mediaId]: updatedProg,
+          },
+          history: nextHistory,
+        };
+      });
+      if (toastMsg) {
+        showToast(toastMsg, undefined, undefined, {
+          domain: 'watch',
+          subtitle: prompt.title,
+          posterUrl: showPoster,
+        });
+      }
+    }
+  }, [catchUpPrompt, commitState, setReadUnitsBatch, showToast]);
 
   const updateReadTotalUnits = useCallback((readId: string, totalUnits: number) => {
     const safeTotal = Math.max(1, Math.round(totalUnits));
@@ -3022,20 +3231,63 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     [pushRoute, showToast]
   );
 
-  const setGameChapter = useCallback((gameId: string, chapter: number) => {
-    commitState((prev) => {
-      const game = prev.games[gameId];
-      if (!game) return prev;
-      const prog = prev.gameProgress[gameId];
-      return {
-        ...prev,
-        gameProgress: {
-          ...prev.gameProgress,
-          [gameId]: applyGameChapter(game, prog, chapter),
-        },
-      };
-    });
-  }, []);
+  const setGameChapter = useCallback(
+    (gameId: string, chapter: number, opts?: { silent?: boolean }) => {
+      let toastMsg = '';
+      let toastSub = '';
+      let gameCover = '';
+      commitState((prev) => {
+        const game = prev.games[gameId];
+        if (!game) return prev;
+        gameCover = game.coverUrl;
+        const prog = prev.gameProgress[gameId];
+        const prevChapter = prog?.currentChapter || 0;
+        const updated = applyGameChapter(game, prog, chapter);
+        const nextChapter = updated.currentChapter || 0;
+        const unit = game.chapterUnit || 'chapters';
+        const codeLabel = formatGameChapterCode(nextChapter, unit);
+        let nextHistory = prev.history || [];
+
+        if (!opts?.silent && nextChapter > prevChapter) {
+          toastMsg = game.title;
+          toastSub =
+            updated.status === 'completed' ? `Completed · ${codeLabel}` : `Logged ${codeLabel}`;
+          nextHistory = appendHistory(nextHistory, {
+            id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            domain: 'play',
+            mediaKind: 'game',
+            mediaId: gameId,
+            title: game.title,
+            posterUrl: game.coverUrl,
+            codeLabel,
+            subtitle: formatGameMeta(
+              game,
+              { platform: updated.platform, hoursPlayed: 0 },
+              { includeHours: false }
+            ),
+            loggedAt: new Date().toISOString(),
+          });
+        }
+
+        return {
+          ...prev,
+          gameProgress: {
+            ...prev.gameProgress,
+            [gameId]: updated,
+          },
+          history: nextHistory,
+        };
+      });
+      if (toastMsg) {
+        showToast(toastMsg, undefined, undefined, {
+          domain: 'play',
+          subtitle: toastSub,
+          posterUrl: gameCover,
+        });
+      }
+    },
+    [showToast]
+  );
 
   const updateGameChaptersMeta = useCallback(
     (
@@ -4593,6 +4845,10 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         toast,
         dismissToast,
         showToast,
+        catchUpPrompt,
+        confirmCatchUpPrompt,
+        neverAskCatchUpPrompt,
+        dismissCatchUpPrompt,
         activeBanner,
         dismissBanner,
         triggerSampleReleaseAlert,

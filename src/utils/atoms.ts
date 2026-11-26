@@ -456,3 +456,27 @@ export function countDeduplicatedReadUnits(
   }
   return unique + rereadExtra;
 }
+
+/**
+ * When marking targetIndex finished, returns unfinished prior items if targetIndex
+ * has neither an adjacent preceding nor adjacent following finished item.
+ */
+export function detectNonAdjacentPriorAtoms<T>(
+  orderedItems: T[],
+  targetIndex: number,
+  isFinishedBefore: (item: T) => boolean
+): T[] {
+  if (targetIndex <= 0 || targetIndex >= orderedItems.length) return [];
+  const prevDone = isFinishedBefore(orderedItems[targetIndex - 1]);
+  const nextDone =
+    targetIndex + 1 < orderedItems.length && isFinishedBefore(orderedItems[targetIndex + 1]);
+  if (prevDone || nextDone) return [];
+
+  const priorUnfinished: T[] = [];
+  for (let i = 0; i < targetIndex; i += 1) {
+    if (!isFinishedBefore(orderedItems[i])) {
+      priorUnfinished.push(orderedItems[i]);
+    }
+  }
+  return priorUnfinished;
+}
