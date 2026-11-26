@@ -1,0 +1,1035 @@
+import { useMemo, useState } from 'react';
+import {
+  Activity,
+  Award,
+  BookOpen,
+  Calendar,
+  Clock,
+  Flame,
+  Gamepad2,
+  Hourglass,
+  Sparkles,
+  Star,
+  Sunrise,
+  TrendingUp,
+  Trophy,
+  Tv,
+} from 'lucide-react';
+import type { CueStoreState } from '../types';
+import {
+  computeJournalAdvancedStats,
+  type HeatmapDayCell,
+  type InvestedTitleItem,
+  type JournalStatsScope,
+  type TimeBlockCell,
+} from '../utils/journalAnalytics';
+import { MediaImage } from './MediaImage';
+
+interface JournalAdvancedStatsProps {
+  state: CueStoreState;
+  scope: JournalStatsScope;
+  onScopeChange: (next: JournalStatsScope) => void;
+  onOpenItem: (item: Pick<InvestedTitleItem, 'domain' | 'kind' | 'id'>) => void;
+}
+
+const SCOPE_PILLS: Array<{
+  id: JournalStatsScope;
+  label: string;
+  activeClass: string;
+  idleClass: string;
+}> = [
+  {
+    id: 'all',
+    label: 'All',
+    activeClass: 'bg-white border-white text-[#131519]',
+    idleClass: 'bg-surface border-white/15 text-ink hover:border-white/30',
+  },
+  {
+    id: 'watch',
+    label: 'Watch',
+    activeClass: 'bg-watch border-watch text-[#0E1A1E]',
+    idleClass: 'bg-watch/10 border-watch/25 text-watch hover:bg-watch/18',
+  },
+  {
+    id: 'read',
+    label: 'Read',
+    activeClass: 'bg-read border-read text-[#1D160A]',
+    idleClass: 'bg-read/10 border-read/25 text-read hover:bg-read/18',
+  },
+  {
+    id: 'play',
+    label: 'Play',
+    activeClass: 'bg-play border-play text-[#161124]',
+    idleClass: 'bg-play/10 border-play/25 text-play hover:bg-play/18',
+  },
+];
+
+function accentTokensForScope(scope: JournalStatsScope) {
+  if (scope === 'watch') {
+    return {
+      text: 'text-watch',
+      bg: 'bg-watch',
+      border: 'border-watch/35',
+      softBg: 'bg-watch/12',
+      hex: '#6EC5D4',
+    };
+  }
+  if (scope === 'read') {
+    return {
+      text: 'text-read',
+      bg: 'bg-read',
+      border: 'border-read/35',
+      softBg: 'bg-read/12',
+      hex: '#DFB062',
+    };
+  }
+  if (scope === 'play') {
+    return {
+      text: 'text-play',
+      bg: 'bg-play',
+      border: 'border-play/35',
+      softBg: 'bg-play/12',
+      hex: '#A894E8',
+    };
+  }
+  return {
+    text: 'text-brand',
+    bg: 'bg-brand',
+    border: 'border-white/15',
+    softBg: 'bg-white/10',
+    hex: '#6EC5D4',
+  };
+}
+
+function heatCellClass(level: 0 | 1 | 2 | 3 | 4, scope: JournalStatsScope): string {
+  if (level === 0) return 'bg-white/[0.05]';
+  if (scope === 'read') {
+    if (level === 1) return 'bg-read/25';
+    if (level === 2) return 'bg-read/45';
+    if (level === 3) return 'bg-read/70';
+    return 'bg-read';
+  }
+  if (scope === 'play') {
+    if (level === 1) return 'bg-play/25';
+    if (level === 2) return 'bg-play/45';
+    if (level === 3) return 'bg-play/70';
+    return 'bg-play';
+  }
+  if (scope === 'watch') {
+    if (level === 1) return 'bg-watch/25';
+    if (level === 2) return 'bg-watch/45';
+    if (level === 3) return 'bg-watch/70';
+    return 'bg-watch';
+  }
+  if (level === 1) return 'bg-[#7AC7A4]/25';
+  if (level === 2) return 'bg-[#7AC7A4]/50';
+  if (level === 3) return 'bg-[#7AC7A4]/75';
+  return 'bg-[#7AC7A4]';
+}
+
+export function JournalAdvancedStats({
+  state,
+  scope,
+  onScopeChange,
+  onOpenItem,
+}: JournalAdvancedStatsProps) {
+  const stats = useMemo(() => computeJournalAdvancedStats(state, scope), [state, scope]);
+  const accent = accentTokensForScope(scope);
+
+  const [chartMetric, setChartMetric] = useState<'logs' | 'hours'>('logs');
+  const [selectedWeekIdx, setSelectedWeekIdx] = useState<number | null>(null);
+  const [selectedDay, setSelectedDay] = useState<HeatmapDayCell | null>(null);
+  const [selectedTimeCell, setSelectedTimeCell] = useState<TimeBlockCell | null>(null);
+  const [dailyPaceMinutes, setDailyPaceMinutes] = useState<30 | 60 | 120>(60);
+  const [selectedRatingStars, setSelectedRatingStars] = useState<number | null>(null);
+  const [selectedDecade, setSelectedDecade] = useState<string | null>(null);
+
+  const weeklyMax = useMemo(() => {
+    const vals = stats.activity.weeklySeries.map((w) =>
+      chartMetric === 'logs' ? w.logs : w.hours
+    );
+    return Math.max(1, ...vals);
+  }, [stats.activity.weeklySeries, chartMetric]);
+
+  const activeWeekPoint = useMemo(() => {
+    if (selectedWeekIdx !== null && stats.activity.weeklySeries[selectedWeekIdx]) {
+      return stats.activity.weeklySeries[selectedWeekIdx];
+    }
+    const nonZero = [...stats.activity.weeklySeries].reverse().find((w) => w.logs > 0);
+    return nonZero || stats.activity.weeklySeries[stats.activity.weeklySeries.length - 1];
+  }, [selectedWeekIdx, stats.activity.weeklySeries]);
+
+  const forecast = useMemo(() => {
+    if (stats.backlog.remainingMinutes <= 0) {
+      return {
+        dateLabel: 'Caught up',
+        daysLabel: '0 days left',
+      };
+    }
+    const days = Math.max(1, Math.ceil(stats.backlog.remainingMinutes / dailyPaceMinutes));
+    const target = new Date(Date.now() + days * 86400 * 1000);
+    const remHours = Math.round(stats.backlog.remainingMinutes / 60);
+    const timeStr =
+      remHours >= 24
+        ? `${Math.floor(remHours / 24)}d ${remHours % 24}h left`
+        : `${Math.max(1, remHours)}h left`;
+    return {
+      dateLabel: target.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      }),
+      daysLabel: `${timeStr} (${days}d at ${dailyPaceMinutes >= 60 ? `${dailyPaceMinutes / 60}h` : '30m'}/day)`,
+    };
+  }, [stats.backlog.remainingMinutes, dailyPaceMinutes]);
+
+  const calendarWeeks = useMemo(() => {
+    const weeks: HeatmapDayCell[][] = Array.from({ length: 16 }, () => []);
+    for (const day of stats.calendarHeatmap.days) {
+      weeks[day.weekIndex]?.push(day);
+    }
+    return weeks;
+  }, [stats.calendarHeatmap.days]);
+
+  const podiumTop3 = stats.topInvested.slice(0, 3);
+  const podiumOthers = stats.topInvested.slice(3, 5);
+  const maxRatingBucket = Math.max(1, ...stats.ratings.histogram.map((b) => b.count));
+  const maxDecadeCount = Math.max(1, ...stats.decades.map((d) => d.count));
+
+  const ringRadius = 36;
+  const ringCirc = 2 * Math.PI * ringRadius;
+  const ringOffset = ringCirc * (1 - stats.habits.completionRatePct / 100);
+
+  return (
+    <div className="space-y-4 pb-6">
+      {/* Scope Filter Bar */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-1.5">
+          {SCOPE_PILLS.map((pill) => {
+            const active = scope === pill.id;
+            return (
+              <button
+                key={pill.id}
+                type="button"
+                onClick={() => {
+                  onScopeChange(pill.id);
+                  setSelectedWeekIdx(null);
+                  setSelectedDay(null);
+                  setSelectedTimeCell(null);
+                }}
+                aria-pressed={active}
+                className={`px-3.5 py-1 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
+                  active ? pill.activeClass : pill.idleClass
+                }`}
+              >
+                {pill.label}
+              </button>
+            );
+          })}
+        </div>
+        <span className="text-[11px] font-medium text-ink-faint tabular-nums">
+          {stats.habits.totalTrackedCount} titles tracked
+        </span>
+      </div>
+
+      {/* 1. Hero Media Life Card */}
+      <section className="rounded-[24px] bg-surface border border-white/[0.06] p-5 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className={`text-[11px] font-bold uppercase tracking-[0.14em] ${accent.text}`}>
+            {scope === 'all'
+              ? 'Your Media Life'
+              : scope === 'watch'
+                ? 'Your Watch Life'
+                : scope === 'read'
+                  ? 'Your Reading Life'
+                  : 'Your Play Life'}
+          </p>
+          <span className="text-[11px] text-ink-faint tabular-nums">
+            {stats.totalHours.toLocaleString()} {stats.totalHours === 1 ? 'hour' : 'hours'} total
+          </span>
+        </div>
+
+        <div>
+          <p className="font-display font-extrabold text-[38px] sm:text-[44px] text-ink leading-none tracking-tight tabular-nums">
+            {stats.heroPrimaryLabel}
+          </p>
+          <p className="text-xs sm:text-[13px] text-ink-dim mt-2 tabular-nums">
+            {stats.heroSubline}
+          </p>
+        </div>
+
+        {scope === 'all' && stats.totalMinutes > 0 && (
+          <div className="space-y-1.5 pt-1">
+            <div className="h-2.5 w-full rounded-full bg-white/[0.06] overflow-hidden flex gap-[2px]">
+              {stats.domainSplit.watchPct > 0 && (
+                <div
+                  className="h-full bg-watch transition-all duration-300"
+                  style={{ width: `${stats.domainSplit.watchPct}%` }}
+                />
+              )}
+              {stats.domainSplit.readPct > 0 && (
+                <div
+                  className="h-full bg-read transition-all duration-300"
+                  style={{ width: `${stats.domainSplit.readPct}%` }}
+                />
+              )}
+              {stats.domainSplit.playPct > 0 && (
+                <div
+                  className="h-full bg-play transition-all duration-300"
+                  style={{ width: `${stats.domainSplit.playPct}%` }}
+                />
+              )}
+            </div>
+            <div className="flex items-center gap-4 text-[11px] text-ink-dim flex-wrap tabular-nums">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-watch" />
+                Watch {stats.domainSplit.watchPct}%
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-read" />
+                Read {stats.domainSplit.readPct}%
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-play" />
+                Play {stats.domainSplit.playPct}%
+              </span>
+            </div>
+          </div>
+        )}
+
+        <p className="text-[12.5px] text-ink/80 pt-1 border-t border-white/[0.05]">
+          {stats.heroComparison}
+        </p>
+      </section>
+
+      {/* 2. Media Personality */}
+      <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Sunrise className={`w-4 h-4 ${accent.text}`} />
+          <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-ink-dim">
+            Media Personality
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3.5">
+          <div
+            className={`h-12 w-12 rounded-2xl border ${accent.border} ${accent.softBg} flex items-center justify-center shrink-0`}
+          >
+            {scope === 'read' ? (
+              <BookOpen className={`w-5 h-5 ${accent.text}`} />
+            ) : scope === 'play' ? (
+              <Gamepad2 className={`w-5 h-5 ${accent.text}`} />
+            ) : scope === 'watch' ? (
+              <Tv className={`w-5 h-5 ${accent.text}`} />
+            ) : (
+              <Sparkles className={`w-5 h-5 ${accent.text}`} />
+            )}
+          </div>
+          <div className="min-w-0">
+            <p className="font-display font-bold text-lg text-ink leading-tight">
+              {stats.personality.archetype}
+            </p>
+            <p className="text-xs text-ink-dim mt-0.5">{stats.personality.subtitle}</p>
+          </div>
+        </div>
+
+        {stats.personality.traits.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+            {stats.personality.traits.map((trait) => (
+              <span
+                key={trait}
+                className="px-2.5 py-1 rounded-full bg-background border border-white/10 text-[11px] font-semibold text-ink/90"
+              >
+                {trait}
+              </span>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* 3. Activity Comparison & Interactive 16-Week Pulse */}
+      <section className="space-y-3">
+        <div className="flex items-center gap-2 px-0.5">
+          <Activity className={`w-4 h-4 ${accent.text}`} />
+          <h2 className="font-display font-bold text-[18px] text-ink">Activity</h2>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-[20px] bg-surface border border-white/[0.06] p-4">
+            <p className="text-[10.5px] font-bold uppercase tracking-wider text-ink-faint">
+              Last 7 Days
+            </p>
+            <p className="font-display font-bold text-2xl text-ink mt-1.5 tabular-nums">
+              {stats.activity.last7Hours}h
+            </p>
+            <p className="text-[11px] text-ink-dim mt-1 tabular-nums">
+              {stats.activity.last7Logs} logs
+              {stats.activity.last7DeltaPct !== null && (
+                <span
+                  className={
+                    stats.activity.last7DeltaPct >= 0 ? ' text-[#7AC7A4]' : ' text-ink-faint'
+                  }
+                >
+                  {' '}
+                  · {stats.activity.last7DeltaPct >= 0 ? '+' : ''}
+                  {stats.activity.last7DeltaPct}%
+                </span>
+              )}
+            </p>
+          </div>
+
+          <div className="rounded-[20px] bg-surface border border-white/[0.06] p-4">
+            <p className="text-[10.5px] font-bold uppercase tracking-wider text-ink-faint">
+              Last 30 Days
+            </p>
+            <p className="font-display font-bold text-2xl text-ink mt-1.5 tabular-nums">
+              {stats.activity.last30Hours}h
+            </p>
+            <p className="text-[11px] text-ink-dim mt-1 tabular-nums">
+              {stats.activity.last30Logs} logs
+              {stats.activity.last30DeltaPct !== null && (
+                <span
+                  className={
+                    stats.activity.last30DeltaPct >= 0 ? ' text-[#7AC7A4]' : ' text-ink-faint'
+                  }
+                >
+                  {' '}
+                  · {stats.activity.last30DeltaPct >= 0 ? '+' : ''}
+                  {stats.activity.last30DeltaPct}%
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        {/* 16-Week Timeline Chart */}
+        <div className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div>
+              <p className="text-xs font-semibold text-ink">16-Week Pulse</p>
+              <p className="text-[11px] text-ink-dim tabular-nums">
+                Week of {activeWeekPoint.weekLabel}: {activeWeekPoint.logs} logs ·{' '}
+                {activeWeekPoint.hours}h
+              </p>
+            </div>
+            <div className="inline-flex rounded-full bg-background border border-white/10 p-0.5">
+              {(
+                [
+                  { id: 'logs', label: 'Logs' },
+                  { id: 'hours', label: 'Time' },
+                ] as const
+              ).map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setChartMetric(m.id)}
+                  className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold transition-colors ${
+                    chartMetric === m.id ? 'bg-white/15 text-ink' : 'text-ink-dim hover:text-ink'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div
+            role="group"
+            aria-label="16 week activity bar chart"
+            className="grid grid-cols-16 gap-1 items-end h-28 pt-2 border-b border-white/[0.06]"
+          >
+            {stats.activity.weeklySeries.map((wk, idx) => {
+              const val = chartMetric === 'logs' ? wk.logs : wk.hours;
+              const pct = val > 0 ? Math.max(10, Math.round((val / weeklyMax) * 100)) : 4;
+              const isSelected = activeWeekPoint.weekStartIso === wk.weekStartIso;
+
+              const totalLogsSafe = Math.max(1, wk.logs);
+              const wPct = Math.round((wk.watchLogs / totalLogsSafe) * 100);
+              const rPct = Math.round((wk.readLogs / totalLogsSafe) * 100);
+              const pPct = Math.max(0, 100 - wPct - rPct);
+
+              return (
+                <button
+                  key={wk.weekStartIso}
+                  type="button"
+                  onClick={() => setSelectedWeekIdx(idx)}
+                  aria-label={`Week of ${wk.weekLabel}: ${wk.logs} logs, ${wk.hours} hours`}
+                  className="h-full flex flex-col justify-end items-center group"
+                >
+                  <div
+                    className={`w-full rounded-t-[4px] overflow-hidden flex flex-col justify-end transition-all duration-300 ${
+                      val === 0 ? 'bg-white/[0.06]' : ''
+                    } ${isSelected ? 'ring-1 ring-white/50' : 'opacity-90 group-hover:opacity-100'}`}
+                    style={{ height: `${pct}%` }}
+                  >
+                    {val > 0 && scope === 'all' ? (
+                      <>
+                        {pPct > 0 && <div className="w-full bg-play" style={{ height: `${pPct}%` }} />}
+                        {rPct > 0 && <div className="w-full bg-read" style={{ height: `${rPct}%` }} />}
+                        {wPct > 0 && <div className="w-full bg-watch" style={{ height: `${wPct}%` }} />}
+                      </>
+                    ) : val > 0 ? (
+                      <div className={`w-full h-full ${accent.bg}`} />
+                    ) : null}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center justify-between text-[10px] text-ink-faint tabular-nums">
+            <span>{stats.activity.weeklySeries[0]?.monthLabel}</span>
+            <span>
+              {stats.activity.weeklySeries[Math.floor(stats.activity.weeklySeries.length / 2)]?.monthLabel}
+            </span>
+            <span>{stats.activity.weeklySeries[stats.activity.weeklySeries.length - 1]?.monthLabel}</span>
+          </div>
+        </div>
+      </section>
+
+      {/* 4. Your Days Calendar Heatmap */}
+      <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-3">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-1.5">
+              <Calendar className={`w-3.5 h-3.5 ${accent.text}`} />
+              <p className="font-display font-bold text-base text-ink">Your Days</p>
+            </div>
+            <p className="text-xs text-ink-dim mt-0.5 tabular-nums">
+              {selectedDay
+                ? `${selectedDay.label}: ${selectedDay.count} ${selectedDay.count === 1 ? 'log' : 'logs'}`
+                : `${stats.calendarHeatmap.activeDaysCount} active ${
+                    stats.calendarHeatmap.activeDaysCount === 1 ? 'day' : 'days'
+                  } logged`}
+            </p>
+          </div>
+          <div className="flex items-center gap-1 text-[10px] text-ink-faint shrink-0 pt-1">
+            <span>Less</span>
+            {([0, 1, 2, 3, 4] as const).map((lvl) => (
+              <span
+                key={lvl}
+                className={`h-2.5 w-2.5 rounded-[2px] ${heatCellClass(lvl, scope)}`}
+              />
+            ))}
+            <span>More</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-16 gap-1">
+          {calendarWeeks.map((week, wIdx) => (
+            <div key={`cal-w-${wIdx}`} className="flex flex-col gap-1">
+              {week.map((day) => (
+                <button
+                  key={day.dateIso}
+                  type="button"
+                  onClick={() => setSelectedDay(day)}
+                  aria-label={`${day.label}: ${day.count} logs`}
+                  className={`w-full aspect-square rounded-[3px] transition-transform ${heatCellClass(
+                    day.level,
+                    scope
+                  )} ${
+                    selectedDay?.dateIso === day.dateIso
+                      ? 'ring-1 ring-white scale-110'
+                      : 'hover:ring-1 hover:ring-white/40'
+                  }`}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-between text-[10px] text-ink-faint">
+          {stats.calendarHeatmap.monthHeaders.map((m) => (
+            <span key={`${m.weekIndex}-${m.label}`}>{m.label}</span>
+          ))}
+        </div>
+      </section>
+
+      {/* 5. When You Engage (Day x Hour Heatmap) */}
+      <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-3">
+        <div>
+          <div className="flex items-center gap-1.5">
+            <Clock className={`w-3.5 h-3.5 ${accent.text}`} />
+            <p className="font-display font-bold text-base text-ink">When You Engage</p>
+          </div>
+          <p className="text-xs text-ink-dim mt-0.5">
+            {selectedTimeCell
+              ? `${selectedTimeCell.dayLabel} (${selectedTimeCell.blockLabel}): ${selectedTimeCell.count} logs`
+              : `Prime window: ${stats.timeHeatmap.primeWindowLabel}`}
+          </p>
+        </div>
+
+        <div className="space-y-1">
+          {[0, 1, 2, 3, 4, 5, 6].map((dayIdx) => {
+            const row = stats.timeHeatmap.cells.filter((c) => c.dayIndex === dayIdx);
+            const dayName = row[0]?.dayLabel || '';
+            return (
+              <div key={dayName} className="flex items-center gap-2">
+                <span className="w-7 text-[10px] font-medium text-ink-faint shrink-0">{dayName}</span>
+                <div className="grid grid-cols-6 gap-1 flex-1">
+                  {row.map((cell) => (
+                    <button
+                      key={`${cell.dayIndex}-${cell.blockIndex}`}
+                      type="button"
+                      onClick={() => setSelectedTimeCell(cell)}
+                      aria-label={`${cell.dayLabel} ${cell.blockLabel}: ${cell.count} logs`}
+                      className={`h-4 sm:h-5 rounded-[4px] transition-all ${heatCellClass(
+                        cell.level,
+                        scope
+                      )} ${
+                        selectedTimeCell?.dayIndex === cell.dayIndex &&
+                        selectedTimeCell?.blockIndex === cell.blockIndex
+                          ? 'ring-1 ring-white'
+                          : 'hover:ring-1 hover:ring-white/35'
+                      }`}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          <div className="flex items-center gap-2 pt-1">
+            <span className="w-7 shrink-0" />
+            <div className="grid grid-cols-6 gap-1 flex-1 text-center text-[10px] text-ink-faint tabular-nums">
+              {['12a', '4a', '8a', '12p', '4p', '8p'].map((lbl) => (
+                <span key={lbl}>{lbl}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* 6. Habits Completion Ring & Hall of Fame */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 flex items-center gap-4">
+          <div className="relative h-24 w-24 shrink-0 flex items-center justify-center">
+            <svg className="h-24 w-24 -rotate-90" viewBox="0 0 88 88" aria-hidden="true">
+              <circle
+                cx="44"
+                cy="44"
+                r={ringRadius}
+                fill="none"
+                stroke="rgba(255,255,255,0.08)"
+                strokeWidth="7"
+              />
+              <circle
+                cx="44"
+                cy="44"
+                r={ringRadius}
+                fill="none"
+                stroke={accent.hex}
+                strokeWidth="7"
+                strokeLinecap="round"
+                strokeDasharray={ringCirc}
+                strokeDashoffset={ringOffset}
+                className="transition-all duration-500"
+              />
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <span className="font-display font-bold text-xl text-ink tabular-nums leading-none">
+                {stats.habits.completionRatePct}%
+              </span>
+            </div>
+          </div>
+          <div className="min-w-0 space-y-1">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-ink-faint">
+              Completion Rate
+            </p>
+            <p className="text-sm font-semibold text-ink tabular-nums">
+              {stats.habits.finishedCount} finished · {stats.habits.inProgressCount} active
+            </p>
+            <p className="text-xs text-ink-dim tabular-nums">
+              {stats.habits.queuedCount} queued · {stats.habits.droppedCount} dropped
+            </p>
+          </div>
+        </section>
+
+        <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-2.5">
+          <div className="flex items-center gap-1.5">
+            <Trophy className={`w-4 h-4 ${accent.text}`} />
+            <p className="font-display font-bold text-base text-ink">Hall of Fame</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2.5 text-xs">
+            <div className="rounded-2xl bg-background/60 border border-white/[0.04] p-2.5">
+              <p className="text-[10px] uppercase tracking-wider text-ink-faint">Biggest Day</p>
+              <p className="font-semibold text-ink mt-0.5 tabular-nums">
+                {stats.hallOfFame.biggestDayCount} {stats.hallOfFame.biggestDayCount === 1 ? 'log' : 'logs'}
+              </p>
+              <p className="text-[11px] text-ink-dim truncate">{stats.hallOfFame.biggestDayLabel}</p>
+            </div>
+            <div className="rounded-2xl bg-background/60 border border-white/[0.04] p-2.5">
+              <p className="text-[10px] uppercase tracking-wider text-ink-faint">Best Month</p>
+              <p className="font-semibold text-ink mt-0.5 truncate">{stats.hallOfFame.bestMonthLabel}</p>
+              <p className="text-[11px] text-ink-dim truncate tabular-nums">
+                {stats.hallOfFame.bestMonthHoursLabel}
+              </p>
+            </div>
+            <div className="rounded-2xl bg-background/60 border border-white/[0.04] p-2.5">
+              <p className="text-[10px] uppercase tracking-wider text-ink-faint">Longest Streak</p>
+              <p className="font-semibold text-ink mt-0.5 inline-flex items-center gap-1 tabular-nums">
+                <Flame className="w-3.5 h-3.5 text-read shrink-0" />
+                {stats.hallOfFame.longestStreakDays} days
+              </p>
+            </div>
+            <div className="rounded-2xl bg-background/60 border border-white/[0.04] p-2.5">
+              <p className="text-[10px] uppercase tracking-wider text-ink-faint">Tracking Since</p>
+              <p className="font-semibold text-ink mt-0.5 truncate">
+                {stats.hallOfFame.trackingSinceLabel}
+              </p>
+              {stats.hallOfFame.trackingSinceTitle && (
+                <p className="text-[11px] text-ink-dim truncate">
+                  {stats.hallOfFame.trackingSinceTitle}
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
+      </div>
+
+      {/* 7. Catching Up Backlog Forecast */}
+      <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5">
+            <Hourglass className={`w-4 h-4 ${accent.text}`} />
+            <p className="font-display font-bold text-base text-ink">Catching Up</p>
+          </div>
+          <div className="inline-flex rounded-full bg-background border border-white/10 p-0.5">
+            {(
+              [
+                { mins: 30, label: '30m/d' },
+                { mins: 60, label: '1h/d' },
+                { mins: 120, label: '2h/d' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.mins}
+                type="button"
+                onClick={() => setDailyPaceMinutes(opt.mins)}
+                className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold transition-colors ${
+                  dailyPaceMinutes === opt.mins
+                    ? 'bg-white/15 text-ink'
+                    : 'text-ink-dim hover:text-ink'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-baseline justify-between gap-3 flex-wrap">
+          <div>
+            <p className="text-[10.5px] font-bold uppercase tracking-wider text-ink-faint">
+              Caught up by
+            </p>
+            <p className="font-display font-extrabold text-2xl text-ink mt-0.5 tabular-nums">
+              {forecast.dateLabel}
+            </p>
+          </div>
+          <div className="text-left sm:text-right">
+            <p className="text-xs font-semibold text-ink tabular-nums">{forecast.daysLabel}</p>
+            <p className="text-[11px] text-ink-dim tabular-nums">
+              {stats.backlog.remainingBreakdownLabel}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* 8. Your Taste: Top 5 Invested Podium */}
+      {stats.topInvested.length > 0 && (
+        <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-4">
+          <div className="flex items-center gap-1.5">
+            <Award className={`w-4 h-4 ${accent.text}`} />
+            <h2 className="font-display font-bold text-base text-ink">Most Time Invested</h2>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2.5 items-end">
+            {([1, 0, 2] as const).map((rankIdx) => {
+              const item = podiumTop3[rankIdx];
+              if (!item) return <div key={`empty-pod-${rankIdx}`} />;
+              const isFirst = rankIdx === 0;
+              return (
+                <button
+                  key={`${item.kind}-${item.id}`}
+                  type="button"
+                  onClick={() => onOpenItem(item)}
+                  className={`text-left group ${isFirst ? '-mt-2' : ''}`}
+                >
+                  <div
+                    className={`relative aspect-[2/3] rounded-[14px] overflow-hidden bg-background border transition-colors ${
+                      isFirst
+                        ? `${accent.border} ring-1 ring-white/10`
+                        : 'border-white/10 group-hover:border-white/25'
+                    }`}
+                  >
+                    <MediaImage
+                      src={item.posterUrl}
+                      alt={item.title}
+                      className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+                    />
+                    <span
+                      className={`absolute top-1.5 left-1.5 h-5 px-1.5 rounded-full text-[10px] font-bold tabular-nums flex items-center justify-center ${
+                        isFirst
+                          ? 'bg-brand text-brand-ink'
+                          : 'bg-[#0F1318]/85 border border-white/15 text-ink'
+                      }`}
+                    >
+                      #{rankIdx + 1}
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-xs font-semibold text-ink truncate">{item.title}</p>
+                  <p className="text-[11px] text-ink-dim tabular-nums truncate">
+                    {item.metricLabel} · {item.subLabel}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+
+          {podiumOthers.length > 0 && (
+            <div className="space-y-2 pt-2 border-t border-white/[0.06]">
+              {podiumOthers.map((item, idx) => (
+                <button
+                  key={`${item.kind}-${item.id}`}
+                  type="button"
+                  onClick={() => onOpenItem(item)}
+                  className="w-full flex items-center gap-3 p-1.5 -mx-1.5 rounded-xl hover:bg-white/[0.04] text-left transition-colors"
+                >
+                  <span className="w-5 text-xs font-bold text-ink-faint tabular-nums text-center">
+                    #{idx + 4}
+                  </span>
+                  <div className="w-9 h-12 rounded-lg overflow-hidden bg-surface-raised shrink-0">
+                    <MediaImage
+                      src={item.posterUrl}
+                      alt={item.title}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-semibold text-ink truncate">{item.title}</p>
+                    <p className="text-[11px] text-ink-dim truncate">{item.subLabel}</p>
+                  </div>
+                  <span className="text-xs font-semibold text-ink tabular-nums shrink-0">
+                    {item.metricLabel}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* 9. Ratings & Histogram */}
+      <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5">
+            <Star className="w-4 h-4 fill-read text-read" />
+            <h2 className="font-display font-bold text-base text-ink">Ratings</h2>
+          </div>
+          <span className="text-xs text-ink-dim tabular-nums">
+            {stats.ratings.totalRated} rated
+          </span>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="rounded-2xl bg-background/60 border border-white/[0.04] p-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-watch">Watch</p>
+            <p className="font-display font-bold text-lg text-ink mt-0.5 tabular-nums">
+              {stats.ratings.watchAvg !== null ? `★ ${stats.ratings.watchAvg}` : '—'}
+            </p>
+          </div>
+          <div className="rounded-2xl bg-background/60 border border-white/[0.04] p-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-read">Read</p>
+            <p className="font-display font-bold text-lg text-ink mt-0.5 tabular-nums">
+              {stats.ratings.readAvg !== null ? `★ ${stats.ratings.readAvg}` : '—'}
+            </p>
+          </div>
+          <div className="rounded-2xl bg-background/60 border border-white/[0.04] p-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-play">Play</p>
+            <p className="font-display font-bold text-lg text-ink mt-0.5 tabular-nums">
+              {stats.ratings.playAvg !== null ? `★ ${stats.ratings.playAvg}` : '—'}
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="grid grid-cols-5 gap-2 items-end h-20 pt-2">
+            {stats.ratings.histogram.map((b) => {
+              const hPct = b.count > 0 ? Math.max(12, Math.round((b.count / maxRatingBucket) * 100)) : 5;
+              const isSelected = selectedRatingStars === b.stars;
+              return (
+                <button
+                  key={b.stars}
+                  type="button"
+                  onClick={() =>
+                    setSelectedRatingStars(isSelected ? null : b.stars)
+                  }
+                  aria-label={`${b.stars} stars: ${b.count} ratings`}
+                  className="h-full flex flex-col justify-end items-center gap-1"
+                >
+                  <div className="w-full flex-1 flex items-end">
+                    <div
+                      className={`w-full rounded-t-[5px] transition-all duration-300 ${
+                        b.count > 0 ? 'bg-read' : 'bg-white/[0.07]'
+                      } ${isSelected ? 'ring-1 ring-white' : ''}`}
+                      style={{ height: `${hPct}%` }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-ink-dim tabular-nums">{b.stars}★</span>
+                </button>
+              );
+            })}
+          </div>
+          {selectedRatingStars !== null && (
+            <p className="text-[11px] text-center text-ink-dim tabular-nums">
+              {selectedRatingStars}★ ·{' '}
+              {stats.ratings.histogram.find((h) => h.stars === selectedRatingStars)?.count || 0}{' '}
+              ratings
+            </p>
+          )}
+        </div>
+      </section>
+
+      {/* 10. Top Genres & Moods */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {stats.topGenres.length > 0 && (
+          <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-2.5">
+            <h2 className="font-display font-bold text-base text-ink">Top Genres</h2>
+            <div className="space-y-2">
+              {stats.topGenres.map((g) => (
+                <div key={g.name} className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-ink font-medium">{g.name}</span>
+                    <span className="text-ink-dim tabular-nums">{g.count}</span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${accent.bg} transition-all duration-300`}
+                      style={{ width: `${g.pct}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <div className="space-y-3">
+          {stats.moods.length > 0 && (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-2.5">
+              <h2 className="font-display font-bold text-base text-ink">How You Felt</h2>
+              <div className="flex items-center gap-2 flex-wrap">
+                {stats.moods.map((m) => (
+                  <span
+                    key={m.key}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-background border border-white/10 text-xs font-medium text-ink"
+                  >
+                    <span>{m.emoji}</span>
+                    <span>{m.label}</span>
+                    <span className="text-ink-dim tabular-nums">{m.count}</span>
+                  </span>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {stats.topSources.length > 0 && (
+            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-2.5">
+              <h2 className="font-display font-bold text-base text-ink">
+                Networks, Publishers & Platforms
+              </h2>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {stats.topSources.map((s) => (
+                  <span
+                    key={s.name}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-background border border-white/10 text-xs text-ink"
+                  >
+                    <span className="font-medium">{s.name}</span>
+                    <span className="text-ink-faint tabular-nums">{s.count}</span>
+                  </span>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      </div>
+
+      {/* 11. Creators & Decades */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {stats.topCreators.length > 0 && (
+          <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-2.5">
+            <h2 className="font-display font-bold text-base text-ink">
+              Creators & Studios You Return To
+            </h2>
+            <div className="flex items-center gap-2 flex-wrap">
+              {stats.topCreators.map((c) => (
+                <span
+                  key={c.name}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-background border border-white/10 text-xs text-ink"
+                >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      c.domain === 'watch'
+                        ? 'bg-watch'
+                        : c.domain === 'read'
+                          ? 'bg-read'
+                          : 'bg-play'
+                    }`}
+                  />
+                  <span className="font-medium">{c.name}</span>
+                  <span className="text-ink-faint tabular-nums">{c.count}</span>
+                </span>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5">
+              <TrendingUp className={`w-4 h-4 ${accent.text}`} />
+              <h2 className="font-display font-bold text-base text-ink">Decades</h2>
+            </div>
+            <span className="text-xs text-ink-dim">
+              {selectedDecade
+                ? `${selectedDecade} (${stats.decades.find((d) => d.label === selectedDecade)?.count || 0})`
+                : `Your decade: ${stats.peakDecadeLabel}`}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-6 gap-2 items-end h-24 pt-2 border-b border-white/[0.06]">
+            {stats.decades.map((d) => {
+              const hPct = d.count > 0 ? Math.max(12, Math.round((d.count / maxDecadeCount) * 100)) : 5;
+              const isPeak = d.label === stats.peakDecadeLabel && d.count > 0;
+              return (
+                <button
+                  key={d.label}
+                  type="button"
+                  onClick={() => setSelectedDecade(d.label)}
+                  aria-label={`${d.label}: ${d.count} titles`}
+                  className="h-full flex flex-col justify-end items-center"
+                >
+                  <div
+                    className={`w-full rounded-t-[5px] transition-all duration-300 ${
+                      d.count === 0
+                        ? 'bg-white/[0.06]'
+                        : isPeak
+                          ? accent.bg
+                          : 'bg-white/25 hover:bg-white/40'
+                    }`}
+                    style={{ height: `${hPct}%` }}
+                  />
+                </button>
+              );
+            })}
+          </div>
+          <div className="grid grid-cols-6 gap-2 text-center text-[10.5px] text-ink-dim tabular-nums">
+            {stats.decades.map((d) => (
+              <span key={d.label}>{d.shortLabel}</span>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}

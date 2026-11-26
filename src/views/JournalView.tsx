@@ -12,13 +12,24 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { DetailModeToggle } from '../components/DetailModeToggle';
 import { DeviceSyncModal } from '../components/DeviceSyncModal';
+import { JournalAdvancedStats } from '../components/JournalAdvancedStats';
 import { MediaImage } from '../components/MediaImage';
 import { MOOD_OPTIONS } from '../components/PersonalNotesSection';
 import { useCueStore } from '../store/useCueStore';
-import type { GameItem, MediaDomain, Movie, PersonalMood, ReadItem, Show } from '../types';
+import type {
+  DetailCardMode,
+  GameItem,
+  MediaDomain,
+  Movie,
+  PersonalMood,
+  ReadItem,
+  Show,
+} from '../types';
 import { evaluateCustomListProgress } from '../utils/containers';
 import { resolveComicEditionCover } from '../utils/editions';
+import type { JournalStatsScope } from '../utils/journalAnalytics';
 import {
   computeAllMediaStats,
   formatGameMeta,
@@ -28,19 +39,25 @@ import {
   getShowStats,
 } from '../utils/stats';
 
+let sessionJournalMode: DetailCardMode | null = null;
+let sessionJournalScope: JournalStatsScope = 'all';
+
 export function JournalView() {
   const {
     state,
     pushRoute,
     setNotificationsOpen,
     setSettingsOpen,
-    setInsightsOpen,
     addJournalEntry,
     deleteJournalEntry,
     createCustomList,
     syncCode,
   } = useCueStore();
 
+  const [journalMode, setJournalMode] = useState<DetailCardMode>(
+    () => sessionJournalMode || state.settings.detailMode || 'simple'
+  );
+  const [advancedScope, setAdvancedScope] = useState<JournalStatsScope>(() => sessionJournalScope);
   const [diaryFilter, setDiaryFilter] = useState<'all' | MediaDomain>('all');
   const [composeOpen, setComposeOpen] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
@@ -53,6 +70,21 @@ export function JournalView() {
   const [newListOpen, setNewListOpen] = useState(false);
   const [listName, setListName] = useState('');
   const [listDesc, setListDesc] = useState('');
+
+  const handleJournalModeChange = (nextMode: DetailCardMode) => {
+    sessionJournalMode = nextMode;
+    setJournalMode(nextMode);
+  };
+
+  const handleAdvancedScopeChange = (nextScope: JournalStatsScope) => {
+    sessionJournalScope = nextScope;
+    setAdvancedScope(nextScope);
+  };
+
+  const flipToAdvanced = (scope: JournalStatsScope) => {
+    handleAdvancedScopeChange(scope);
+    handleJournalModeChange('advanced');
+  };
 
   const analytics = useMemo(() => computeAllMediaStats(state), [state]);
   const readSummary = useMemo(
@@ -322,7 +354,7 @@ export function JournalView() {
         </div>
 
         {/* Name, Label & Bio (100% private — no followers/following) */}
-        <div className="mb-5">
+        <div className="mb-4">
           <div className="flex items-center gap-2">
             <h1 className="font-display font-bold text-2xl text-ink leading-tight">
               {state.profile.name}
@@ -337,70 +369,87 @@ export function JournalView() {
           )}
         </div>
 
-        {/* 4 Unified Cross-Media Stat Tiles */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
-          <button
-            type="button"
-            onClick={() => setInsightsOpen(true)}
-            className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors"
-          >
-            <p className="text-[11px] font-medium uppercase tracking-wider text-watch">
-              WATCHED
-            </p>
-            <p className="font-display font-bold text-[24px] text-ink mt-2 tabular-nums leading-none">
-              {analytics.watchTimeLabel}
-            </p>
-            <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">
-              {analytics.totalWatchCount} eps & films
-            </p>
-          </button>
+        <DetailModeToggle mode={journalMode} onChange={handleJournalModeChange} />
 
-          <button
-            type="button"
-            onClick={() => setInsightsOpen(true)}
-            className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors"
-          >
-            <p className="text-[11px] font-medium uppercase tracking-wider text-read">
-              READ
-            </p>
-            <p className="font-display font-bold text-[24px] text-ink mt-2 tabular-nums leading-none">
-              {readSummary.primary}
-            </p>
-            <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">
-              {readSummary.secondary}
-            </p>
-          </button>
+        <div key={journalMode} data-journal-mode={journalMode} className="animate-detail-flip">
+          {journalMode === 'advanced' ? (
+            <JournalAdvancedStats
+              state={state}
+              scope={advancedScope}
+              onScopeChange={handleAdvancedScopeChange}
+              onOpenItem={(item) => {
+                if (item.kind === 'show') pushRoute({ view: 'show-detail', showId: item.id });
+                else if (item.kind === 'movie') pushRoute({ view: 'movie-detail', movieId: item.id });
+                else if (item.kind === 'game') pushRoute({ view: 'game-detail', gameId: item.id });
+                else pushRoute({ view: 'read-detail', readId: item.id });
+              }}
+            />
+          ) : (
+            <>
+              {/* 4 Unified Cross-Media Stat Tiles */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
+                <button
+                  type="button"
+                  onClick={() => flipToAdvanced('watch')}
+                  className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors"
+                >
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-watch">
+                    WATCHED
+                  </p>
+                  <p className="font-display font-bold text-[24px] text-ink mt-2 tabular-nums leading-none">
+                    {analytics.watchTimeLabel}
+                  </p>
+                  <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">
+                    {analytics.totalWatchCount} eps & films
+                  </p>
+                </button>
 
-          <button
-            type="button"
-            onClick={() => setInsightsOpen(true)}
-            className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors"
-          >
-            <p className="text-[11px] font-medium uppercase tracking-wider text-play">
-              PLAYED
-            </p>
-            <p className="font-display font-bold text-[24px] text-ink mt-2 tabular-nums leading-none">
-              {analytics.totalGameHours.toLocaleString()}h
-            </p>
-            <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">
-              {analytics.gamesCompletedCount} completed
-            </p>
-          </button>
+                <button
+                  type="button"
+                  onClick={() => flipToAdvanced('read')}
+                  className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors"
+                >
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-read">
+                    READ
+                  </p>
+                  <p className="font-display font-bold text-[24px] text-ink mt-2 tabular-nums leading-none">
+                    {readSummary.primary}
+                  </p>
+                  <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">
+                    {readSummary.secondary}
+                  </p>
+                </button>
 
-          <button
-            type="button"
-            onClick={() => setInsightsOpen(true)}
-            className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors"
-          >
-            <p className="text-[11px] font-medium uppercase tracking-wider text-ink-dim">
-              ENTRIES
-            </p>
-            <p className="font-display font-bold text-[24px] text-ink mt-2 tabular-nums leading-none">
-              {analytics.journalEntriesCount}
-            </p>
-            <p className="text-[11px] text-ink-faint mt-1.5">View insights →</p>
-          </button>
-        </div>
+                <button
+                  type="button"
+                  onClick={() => flipToAdvanced('play')}
+                  className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors"
+                >
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-play">
+                    PLAYED
+                  </p>
+                  <p className="font-display font-bold text-[24px] text-ink mt-2 tabular-nums leading-none">
+                    {analytics.totalGameHours.toLocaleString()}h
+                  </p>
+                  <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">
+                    {analytics.gamesCompletedCount} completed
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => flipToAdvanced('all')}
+                  className="rounded-[20px] bg-surface hover:bg-surface-raised border border-white/[0.05] p-4 text-left transition-colors"
+                >
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-ink-dim">
+                    ENTRIES
+                  </p>
+                  <p className="font-display font-bold text-[24px] text-ink mt-2 tabular-nums leading-none">
+                    {analytics.journalEntriesCount}
+                  </p>
+                  <p className="text-[11px] text-ink-faint mt-1.5">Advanced stats →</p>
+                </button>
+              </div>
 
         {/* Private Media Diary */}
         <section className="mb-8">
@@ -789,6 +838,9 @@ export function JournalView() {
             </div>
           )}
         </section>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Log Note Modal */}
