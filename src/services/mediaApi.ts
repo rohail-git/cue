@@ -3557,6 +3557,8 @@ async function searchComicSeries(query: string): Promise<LiveSearchResult[]> {
   }
 }
 
+export const COMIC_ISSUE_CACHE_VERSION = 'ca7';
+
 export async function fetchComicSeriesIssues(
   wiki: 'marvel' | 'dc' | 'imagecomics',
   volTitle: string,
@@ -3566,7 +3568,7 @@ export async function fetchComicSeriesIssues(
     const res = await fetch(
       `/api/comic-series?wiki=${encodeURIComponent(wiki)}&vol=${encodeURIComponent(
         volTitle
-      )}&limit=${Math.max(1, Math.min(75, Math.round(limit)))}&v=3`,
+      )}&limit=${Math.max(1, Math.min(75, Math.round(limit)))}&v=4`,
       { signal: AbortSignal.timeout(10000) }
     );
     if (!res.ok) return { totalIssues: 0, issues: {} };
@@ -4219,6 +4221,7 @@ export async function fetchAnimeEpisodeDetails(
   >();
   const anilistStreamByNum = new Map<number, { title: string; thumbnail: string }>();
   const anilistAirByNum = new Map<number, string>();
+  const anilistAirStampByNum = new Map<number, string>();
   const cast: CastMember[] = [];
   let anilistEpisodesCount = 0;
   let anilistDuration: number | undefined;
@@ -4306,8 +4309,10 @@ export async function fetchAnimeEpisodeDetails(
 
         for (const node of media?.airingSchedule?.nodes || []) {
           if (node.episode && node.airingAt) {
-            const iso = new Date(node.airingAt * 1000).toISOString().slice(0, 10);
-            anilistAirByNum.set(node.episode, iso);
+            const dt = new Date(node.airingAt * 1000);
+            const iso = dt.toISOString();
+            anilistAirByNum.set(node.episode, iso.slice(0, 10));
+            anilistAirStampByNum.set(node.episode, iso);
           }
         }
 
@@ -4338,12 +4343,14 @@ export async function fetchAnimeEpisodeDetails(
     const az = anizipByNum.get(n);
     const alStream = anilistStreamByNum.get(n);
     const alAir = anilistAirByNum.get(n);
+    const alStamp = anilistAirStampByNum.get(n);
     return {
       id: `${showId}-s1e${n}`,
       season: 1,
       number: n,
       title: az?.title || alStream?.title || `Episode ${n}`,
       airdate: az?.airdate || alAir || '',
+      ...(alStamp ? { airstamp: alStamp } : {}),
       runtime: az?.runtime || runtimeAvg,
       stillUrl: az?.stillUrl || alStream?.thumbnail || fallbackStill,
       overview: az?.overview || '',
@@ -4372,6 +4379,7 @@ export async function fetchAnimeEpisodeDetails(
                 number?: number;
                 name?: string;
                 airdate?: string;
+                airstamp?: string;
                 runtime?: number;
                 image?: { medium?: string; original?: string };
                 summary?: string;
@@ -4393,6 +4401,9 @@ export async function fetchAnimeEpisodeDetails(
             }
             if (tvEp.airdate && !slot.airdate) {
               slot.airdate = tvEp.airdate;
+            }
+            if (tvEp.airstamp && !slot.airstamp) {
+              slot.airstamp = tvEp.airstamp;
             }
             if (tvEp.summary && !slot.overview) {
               slot.overview = stripHtml(tvEp.summary);
@@ -4682,24 +4693,110 @@ function extractFandomIssueSynopsis(wikitext: string): string | undefined {
   return `${(lastSpace > 260 ? slice.slice(0, lastSpace) : slice).trim()}…`;
 }
 
-function formatFandomReleaseDate(rawWikitext: string): string | undefined {
-  const moRaw = rawWikitext.match(/\|\s*Month\s*=[^\S\r\n]*([^\n|]+)/i)?.[1]?.trim();
-  const yrRaw = rawWikitext.match(/\|\s*Year\s*=[^\S\r\n]*(\d{4})/i)?.[1]?.trim();
-  if (!yrRaw) return undefined;
-  if (!moRaw) return yrRaw;
-
-  let monthAbbr = '';
-  const numMonth = Number(moRaw);
+function parseFandomMonthNumber(raw?: string): number | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  const numMonth = Number(trimmed);
   if (Number.isInteger(numMonth) && numMonth >= 1 && numMonth <= 12) {
-    monthAbbr = MONTH_ABBR[numMonth - 1];
-  } else {
-    const cleanMo = moRaw.replace(/[^a-zA-Z]/g, '').toLowerCase();
-    const matched = MONTH_ABBR.find(
-      (m) => cleanMo.startsWith(m.toLowerCase()) || m.toLowerCase() === cleanMo.slice(0, 3)
-    );
-    if (matched) monthAbbr = matched;
+    return numMonth;
   }
-  return monthAbbr ? `${monthAbbr} ${yrRaw}` : yrRaw;
+  const cleanMo = trimmed.replace(/[^a-zA-Z]/g, '').toLowerCase();
+  if (cleanMo.length < 3) return null;
+  const idx = MONTH_ABBR.findIndex(
+    (m) => cleanMo.startsWith(m.toLowerCase()) || m.toLowerCase() === cleanMo.slice(0, 3)
+  );
+  return idx >= 0 ? idx + 1 : null;
+}
+
+function formatFandomUtcParts(
+  year: number,
+  zeroBasedMonth: number,
+  day: number
+): { releaseDate: string; releaseDateIso: string } {
+  const dt = new Date(Date.UTC(year, zeroBasedMonth, day));
+  const y = dt.getUTCFullYear();
+  const m = dt.getUTCMonth();
+  const d = dt.getUTCDate();
+  return {
+    releaseDate: `${MONTH_ABBR[m]} ${d}, ${y}`,
+    releaseDateIso: `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+  };
+}
+
+function extractFandomReleaseDate(
+  rawWikitext: string,
+  wiki: FandomWikiSlug,
+  categories?: Array<{ title?: string }>
+): { releaseDate?: string; releaseDateIso?: string } {
+  const relDirect = rawWikitext.match(/\|\s*ReleaseDate\s*=[^\S\r\n]*([^\n|]+)/i)?.[1]?.trim();
+  if (relDirect) {
+    const cleanRel = cleanFandomIssueText(relDirect);
+    const isoM = cleanRel.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoM) {
+      return formatFandomUtcParts(Number(isoM[1]), Number(isoM[2]) - 1, Number(isoM[3]));
+    }
+    const mdyM = cleanRel.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/);
+    if (mdyM) {
+      const m1 = parseFandomMonthNumber(mdyM[1]);
+      if (m1) return formatFandomUtcParts(Number(mdyM[3]), m1 - 1, Number(mdyM[2]));
+    }
+    const dmyM = cleanRel.match(/^(\d{1,2})\s+([A-Za-z]+),?\s+(\d{4})/);
+    if (dmyM) {
+      const m1 = parseFandomMonthNumber(dmyM[2]);
+      if (m1) return formatFandomUtcParts(Number(dmyM[3]), m1 - 1, Number(dmyM[1]));
+    }
+    const moYrM = cleanRel.match(/^([A-Za-z]+),?\s+(\d{4})$/);
+    if (moYrM) {
+      const m1 = parseFandomMonthNumber(moYrM[1]);
+      if (m1) return { releaseDate: `${MONTH_ABBR[m1 - 1]} ${moYrM[2]}` };
+    }
+  }
+
+  for (const cat of categories || []) {
+    const t = cat.title || '';
+    const pubFull = t.match(/^Category:\s*([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})\s*\(Publication\)$/i);
+    if (pubFull) {
+      const m1 = parseFandomMonthNumber(pubFull[1]);
+      if (m1) return formatFandomUtcParts(Number(pubFull[3]), m1 - 1, Number(pubFull[2]));
+    }
+  }
+
+  const dayRaw = rawWikitext.match(/\|\s*Day\s*=[^\S\r\n]*(\d{1,2})/i)?.[1]?.trim();
+  const dayNum = dayRaw ? Number(dayRaw) : 0;
+
+  for (const cat of categories || []) {
+    const t = cat.title || '';
+    const pubMo = t.match(/^Category:\s*(\d{4}),\s*([A-Za-z]+)\s*\(Publication\)$/i);
+    if (pubMo) {
+      const m1 = parseFandomMonthNumber(pubMo[2]);
+      if (m1 && dayNum >= 1 && dayNum <= 31) {
+        return formatFandomUtcParts(Number(pubMo[1]), m1 - 1, dayNum);
+      }
+      if (m1) {
+        return { releaseDate: `${MONTH_ABBR[m1 - 1]} ${pubMo[1]}` };
+      }
+    }
+  }
+
+  const moRaw = rawWikitext.match(/\|\s*(?:Month|PubMonth)\s*=[^\S\r\n]*([^\n|]+)/i)?.[1]?.trim();
+  const yrRaw = rawWikitext.match(/\|\s*Year\s*=[^\S\r\n]*(\d{4})/i)?.[1]?.trim();
+  if (!yrRaw) return {};
+  const yrNum = Number(yrRaw);
+  const m1 = parseFandomMonthNumber(moRaw);
+
+  if (m1 && dayNum >= 1 && dayNum <= 31) {
+    // DC wiki templates store Month/Year as cover date (~2 months after on-sale date).
+    const zeroBasedMonth = wiki === 'dc' ? m1 - 3 : m1 - 1;
+    return formatFandomUtcParts(yrNum, zeroBasedMonth, dayNum);
+  }
+  if (m1) {
+    if (wiki === 'dc') {
+      const dt = new Date(Date.UTC(yrNum, m1 - 3, 1));
+      return { releaseDate: `${MONTH_ABBR[dt.getUTCMonth()]} ${dt.getUTCFullYear()}` };
+    }
+    return { releaseDate: `${MONTH_ABBR[m1 - 1]} ${yrRaw}` };
+  }
+  return { releaseDate: yrRaw };
 }
 
 /** Fetches per-issue comic cover thumbnails, story titles, and release dates via Fandom MediaWiki APIs. */
@@ -4800,7 +4897,7 @@ export async function fetchComicIssueDetails(
       fetch(
         `https://${targetWiki}.fandom.com/api.php?action=query&titles=${encodeURIComponent(
           b.map((item) => item.pageTitle).join('|')
-        )}&prop=pageimages|revisions&rvprop=content&rvslots=main&rvsection=0&pithumbsize=240&redirects=1&format=json&origin=*`
+        )}&prop=pageimages|revisions|categories&rvprop=content&rvslots=main&rvsection=0&cllimit=max&pithumbsize=240&redirects=1&format=json&origin=*`
       )
     )
   );
@@ -4821,6 +4918,7 @@ export async function fetchComicIssueDetails(
               missing?: string;
               title?: string;
               thumbnail?: { source?: string };
+              categories?: Array<{ title?: string }>;
               revisions?: Array<{ slots?: { main?: { '*'?: string } } }>;
             }
           >;
@@ -4917,7 +5015,9 @@ export async function fetchComicIssueDetails(
 
         const storyRaw = rawWikitext.match(/\|\s*StoryTitle1\s*=[^\S\r\n]*([^\n]+)/i)?.[1];
         const storyTitle = storyRaw ? cleanFandomStoryTitle(storyRaw, seriesNorm) : undefined;
-        const releaseDate = rawWikitext ? formatFandomReleaseDate(rawWikitext) : undefined;
+        const { releaseDate, releaseDateIso } = rawWikitext
+          ? extractFandomReleaseDate(rawWikitext, targetWiki, page.categories)
+          : {};
         const coverUrl =
           coverAUrlMap.get(coverFilename.toLowerCase()) || page.thumbnail?.source;
         const writers = rawWikitext
@@ -4933,6 +5033,7 @@ export async function fetchComicIssueDetails(
           issueLabel: spec.issueLabel,
           title: storyTitle,
           releaseDate,
+          ...(releaseDateIso ? { releaseDateIso } : {}),
           coverUrl,
           synopsis,
           writers,
@@ -5020,6 +5121,7 @@ async function hydrateTvMazeShow(item: LiveSearchResult): Promise<Show> {
     number: number;
     name?: string;
     airdate?: string;
+    airstamp?: string;
     runtime?: number;
     image?: { medium?: string; original?: string };
     summary?: string;
@@ -5035,6 +5137,7 @@ async function hydrateTvMazeShow(item: LiveSearchResult): Promise<Show> {
       number: ep.number,
       title: ep.name || `Episode ${ep.number}`,
       airdate: ep.airdate || '',
+      ...(ep.airstamp ? { airstamp: ep.airstamp } : {}),
       runtime: ep.runtime || data.averageRuntime || 45,
       stillUrl: ep.image?.medium || ep.image?.original || backdropUrl || item.posterUrl,
       overview: stripHtml(ep.summary),
@@ -5200,6 +5303,72 @@ async function hydrateTmdbShow(item: LiveSearchResult, apiKey?: string): Promise
     seasons: seasons.length > 0 ? seasons : fallbackShowFromSearch(item).seasons,
     cast,
   };
+}
+
+/** Fetches fresh TVMaze episode dates/airstamps/titles for lightweight schedule refreshes. */
+export async function fetchTvmazeEpisodeSchedule(
+  tvmazeId?: number,
+  title?: string
+): Promise<
+  Array<{
+    season: number;
+    number: number;
+    title?: string;
+    airdate?: string;
+    airstamp?: string;
+    stillUrl?: string;
+    overview?: string;
+  }>
+> {
+  try {
+    let rawEps: Array<{
+      season?: number;
+      number?: number;
+      name?: string;
+      airdate?: string;
+      airstamp?: string;
+      image?: { medium?: string; original?: string };
+      summary?: string;
+    }> = [];
+
+    if (tvmazeId && Number.isFinite(tvmazeId)) {
+      const res = await fetch(`https://api.tvmaze.com/shows/${tvmazeId}/episodes`, {
+        signal: AbortSignal.timeout(6500),
+      });
+      if (res.ok) rawEps = (await res.json()) as typeof rawEps;
+    } else if (title && title.trim().length >= 2) {
+      const cleanTitle = title
+        .replace(/\b(?:season\s*\d+|part\s*\d+|cour\s*\d+|\d+(?:st|nd|rd|th)\s+season)\b/gi, '')
+        .replace(/[:\-–—\s]+$/g, '')
+        .trim();
+      if (cleanTitle.length >= 2) {
+        const res = await fetch(
+          `https://api.tvmaze.com/singlesearch/shows?q=${encodeURIComponent(cleanTitle)}&embed=episodes`,
+          { signal: AbortSignal.timeout(6500) }
+        );
+        if (res.ok) {
+          const json = (await res.json()) as { _embedded?: { episodes?: typeof rawEps } };
+          rawEps = json._embedded?.episodes || [];
+        }
+      }
+    }
+
+    return rawEps
+      .filter((ep): ep is typeof ep & { season: number; number: number } =>
+        Boolean(ep.season && ep.number)
+      )
+      .map((ep) => ({
+        season: ep.season,
+        number: ep.number,
+        title: ep.name?.trim() || undefined,
+        airdate: ep.airdate || undefined,
+        airstamp: ep.airstamp || undefined,
+        stillUrl: ep.image?.medium || ep.image?.original || undefined,
+        overview: ep.summary ? stripHtml(ep.summary) : undefined,
+      }));
+  } catch {
+    return [];
+  }
 }
 
 function fallbackShowFromSearch(item: LiveSearchResult): Show {

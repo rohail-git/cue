@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Search, Tv, Upload } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Clock, Search, Tv, Upload } from 'lucide-react';
 import { BingersMediaRow } from '../components/BingersMediaRow';
 import { FilterSortSheet } from '../components/FilterSortSheet';
 import { MediaImage } from '../components/MediaImage';
@@ -7,7 +7,13 @@ import { ReleaseAlertBanner } from '../components/ReleaseAlertBanner';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
 import { useCueStore } from '../store/useCueStore';
 import type { HistoryEntry, Movie, Show, UpcomingEntry, WatchFilter } from '../types';
-import { formatEpisodeCode, getShowStats } from '../utils/stats';
+import {
+  formatEpisodeCode,
+  formatUpcomingReleaseLabel,
+  getDaysUntilRelease,
+  getShowStats,
+  isMovieReleased,
+} from '../utils/stats';
 
 export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) {
   const {
@@ -71,7 +77,15 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
     }
   };
 
-  const { watchingShows, notStartedShows, finishedShows, watchlistMovies, watchedMovies } =
+  const {
+    watchingShows,
+    caughtUpShows,
+    notStartedShows,
+    finishedShows,
+    watchlistMovies,
+    upcomingMovies,
+    watchedMovies,
+  } =
     useMemo(() => {
       const sortMode = state.settings.sortBy;
 
@@ -101,11 +115,13 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
         });
 
       const watching: Show[] = [];
+      const caughtUp: Show[] = [];
       const notStarted: Show[] = [];
       const finished: Show[] = [];
       for (const s of shows) {
         const st = getShowStats(s, state.showProgress[s.id]);
         if (st.isFinished) finished.push(s);
+        else if (st.isCaughtUp || !st.nextEpisode) caughtUp.push(s);
         else if (st.watchedUnique > 0) watching.push(s);
         else notStarted.push(s);
       }
@@ -127,14 +143,22 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
           return tb.localeCompare(ta);
         });
 
-      const wMovies = movies.filter((m) => (state.movieProgress[m.id]?.watchCount || 0) === 0);
+      const now = new Date();
+      const wMovies = movies.filter(
+        (m) => (state.movieProgress[m.id]?.watchCount || 0) === 0 && isMovieReleased(m, now)
+      );
+      const uMovies = movies.filter(
+        (m) => (state.movieProgress[m.id]?.watchCount || 0) === 0 && !isMovieReleased(m, now)
+      );
       const dMovies = movies.filter((m) => (state.movieProgress[m.id]?.watchCount || 0) > 0);
 
       return {
         watchingShows: sortShows(watching),
+        caughtUpShows: sortShows(caughtUp),
         notStartedShows: sortShows(notStarted),
         finishedShows: sortShows(finished),
         watchlistMovies: sortMovies(wMovies),
+        upcomingMovies: sortMovies(uMovies),
         watchedMovies: sortMovies(dMovies),
       };
     }, [
@@ -150,12 +174,39 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
 
   const upcomingGroups = useMemo(() => {
     const items = state.upcoming.filter((u) => u.domain === 'watch');
+    const seenShowIds = new Set(items.filter((u) => u.kind === 'episode').map((u) => u.mediaId));
+    const derived: UpcomingEntry[] = [];
+    const now = new Date();
+    for (const id of state.showOrder) {
+      if (seenShowIds.has(id)) continue;
+      const show = state.shows[id];
+      const prog = state.showProgress[id];
+      if (!show || !prog?.bookmarked) continue;
+      const st = getShowStats(show, prog);
+      const ep = st.nextUpcomingEpisode;
+      if (!ep) continue;
+      const daysUntil = getDaysUntilRelease(ep.airdate, ep.airstamp, now);
+      if (daysUntil === null || daysUntil < 0) continue;
+      const label = formatUpcomingReleaseLabel(ep.airdate, ep.airstamp, now);
+      derived.push({
+        id: `live-up-${show.id}-${ep.id}`,
+        domain: 'watch',
+        kind: 'episode',
+        mediaId: show.id,
+        title: show.title,
+        subtitle: `${formatEpisodeCode(ep.season, ep.number)} · ${label}`,
+        episodeTitle: ep.title,
+        daysUntil,
+        artworkUrl: show.posterUrl,
+      });
+    }
+    const merged = [...items, ...derived].sort((a, b) => a.daysUntil - b.daysUntil);
     return {
-      today: items.filter((u) => u.daysUntil === 0),
-      thisWeek: items.filter((u) => u.daysUntil > 0 && u.daysUntil <= 6),
-      later: items.filter((u) => u.daysUntil >= 7),
+      today: merged.filter((u) => u.daysUntil === 0),
+      thisWeek: merged.filter((u) => u.daysUntil > 0 && u.daysUntil <= 6),
+      later: merged.filter((u) => u.daysUntil >= 7),
     };
-  }, [state.upcoming]);
+  }, [state.upcoming, state.showOrder, state.shows, state.showProgress]);
 
   const isPosterLayout = state.settings.watchLayout === 'posters';
 
@@ -163,7 +214,15 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
     const prog = state.showProgress[show.id];
     const stats = getShowStats(show, prog);
     const next = stats.nextEpisode;
+    const upcoming = stats.nextUpcomingEpisode;
     const flash = Boolean(justChecked[show.id]);
+    const isWaiting = !stats.isFinished && (stats.isCaughtUp || !next);
+    const upcomingDays = upcoming
+      ? getDaysUntilRelease(upcoming.airdate, upcoming.airstamp)
+      : null;
+    const upcomingDateLabel = upcoming
+      ? formatUpcomingReleaseLabel(upcoming.airdate, upcoming.airstamp)
+      : 'TBA';
 
     if (isPosterLayout) {
       return (
@@ -183,7 +242,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
               alt={show.title}
               className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
             />
-            {!stats.isFinished && (
+            {!stats.isFinished && !isWaiting && (
               <button
                 type="button"
                 onClick={(e) => handleQuickWatchShow(e, show.id)}
@@ -201,18 +260,69 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
               <div className="absolute bottom-0 inset-x-0 h-1 bg-black/50">
                 <div
                   className="h-full bg-watched transition-all duration-300"
-                  style={{ width: `${Math.round(stats.progressRatio * 100)}%` }}
+                  style={{
+                    width: `${Math.round(
+                      (stats.unreleasedEpisodes > 0 ? stats.airedProgressRatio : stats.progressRatio) * 100
+                    )}%`,
+                  }}
                 />
               </div>
             )}
           </div>
           <p className="mt-2 text-sm font-semibold text-ink truncate">{show.title}</p>
-          <p className="text-xs text-ink-dim tabular-nums">
+          <p className="text-xs text-ink-dim tabular-nums truncate">
             {next
-              ? `${formatEpisodeCode(next.season, next.number)} · ${stats.nextOrdinal}/${stats.totalEpisodes}`
-              : 'Finished'}
+              ? `${formatEpisodeCode(next.season, next.number)} · ${stats.nextOrdinal}/${
+                  stats.unreleasedEpisodes > 0 ? stats.airedEpisodes : stats.totalEpisodes
+                }`
+              : isWaiting && upcoming
+                ? `${formatEpisodeCode(upcoming.season, upcoming.number)} · ${upcomingDateLabel}`
+                : 'Finished'}
           </p>
         </div>
+      );
+    }
+
+    if (isWaiting) {
+      return (
+        <BingersMediaRow
+          key={show.id}
+          title={show.title}
+          badgeLabel="Show"
+          badgeClassName="bg-watch/15 text-watch"
+          posterUrl={show.posterUrl}
+          primaryLine={
+            stats.watchedUnique > 0
+              ? `Caught up · ${stats.watchedUnique}/${stats.airedEpisodes} aired`
+              : upcoming
+                ? `Premieres ${upcomingDateLabel}`
+                : 'Waiting for release'
+          }
+          secondaryLine={
+            upcoming
+              ? `Next: ${formatEpisodeCode(upcoming.season, upcoming.number)} · ${upcomingDateLabel}`
+              : `${show.year} · ${show.genres.slice(0, 2).join(' · ')}`
+          }
+          progressRatio={stats.airedProgressRatio}
+          showProgress={false}
+          actionDisabled
+          actionContent={
+            upcomingDays !== null && upcomingDays > 0 ? (
+              <span className="flex flex-col items-center px-1">
+                <span className="text-[15px] font-display font-bold text-ink tabular-nums leading-none">
+                  {upcomingDays}
+                </span>
+                <span className="text-[9.5px] text-ink-dim mt-0.5">
+                  {upcomingDays === 1 ? 'day' : 'days'}
+                </span>
+              </span>
+            ) : (
+              <Clock className="w-[16px] h-[16px] text-ink-dim" />
+            )
+          }
+          actionAriaLabel={`${show.title} waiting for release`}
+          onOpen={() => pushRoute({ view: 'show-detail', showId: show.id })}
+        />
       );
     }
 
@@ -226,13 +336,15 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
         posterTag={next?.number === 1 ? 'PREMIERE' : undefined}
         primaryLine={
           next
-            ? `${formatEpisodeCode(next.season, next.number)} · ${stats.nextOrdinal}/${stats.totalEpisodes}`
+            ? `${formatEpisodeCode(next.season, next.number)} · ${stats.nextOrdinal}/${
+                stats.unreleasedEpisodes > 0 ? stats.airedEpisodes : stats.totalEpisodes
+              }`
             : `Finished · ${stats.totalEpisodes}/${stats.totalEpisodes}`
         }
         secondaryLine={
           next ? next.title : `${show.year} · ${show.genres.slice(0, 2).join(' · ')}`
         }
-        progressRatio={stats.progressRatio}
+        progressRatio={stats.unreleasedEpisodes > 0 ? stats.airedProgressRatio : stats.progressRatio}
         showProgress={state.settings.showPosterProgress}
         isFlashing={flash}
         flashLabel="Watched"
@@ -450,7 +562,9 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
         ) : (
           <div className="animate-fade-in">
             {watchingShows.length === 0 &&
+              caughtUpShows.length === 0 &&
               watchlistMovies.length === 0 &&
+              upcomingMovies.length === 0 &&
               notStartedShows.length === 0 &&
               finishedShows.length === 0 &&
               watchedMovies.length === 0 && (
@@ -487,6 +601,18 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
               <section className="mb-8">
                 <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">Watch next</h2>
                 <div className={listClass}>{watchingShows.map(renderShowCard)}</div>
+              </section>
+            )}
+
+            {caughtUpShows.length + upcomingMovies.length > 0 && (
+              <section className="mb-8">
+                <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">
+                  Waiting for release
+                </h2>
+                <div className={listClass}>
+                  {caughtUpShows.map(renderShowCard)}
+                  {upcomingMovies.map(renderMovieCard)}
+                </div>
               </section>
             )}
 

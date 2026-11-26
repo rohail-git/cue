@@ -20,7 +20,7 @@ import {
   findMovieCollection,
 } from '../utils/containers';
 import { getComicEditionLabel, resolveComicEditionCover } from '../utils/editions';
-import { formatGameMeta, getReadStats, getShowStats, pad2 } from '../utils/stats';
+import { formatGameMeta, getReadStats, getShowStats, isMovieReleased, pad2 } from '../utils/stats';
 
 interface UnifiedQueueRow {
   rowKey: string;
@@ -105,8 +105,9 @@ export function QueueView() {
         const prog = state.showProgress[id];
         if (!show || !prog?.bookmarked) continue;
         const st = getShowStats(show, prog);
-        if (st.isFinished || !st.nextEpisode) continue;
+        if (st.isFinished || st.isCaughtUp || !st.nextEpisode) continue;
         const next = st.nextEpisode;
+        const denom = st.unreleasedEpisodes > 0 ? st.airedEpisodes : st.totalEpisodes;
         const row: UnifiedQueueRow = {
           rowKey: `show-${show.id}`,
           domain: 'watch',
@@ -117,9 +118,9 @@ export function QueueView() {
           badgeClassName: 'bg-watch/15 text-watch',
           posterUrl: show.posterUrl,
           posterTag: next.number === 1 ? 'PREMIERE' : undefined,
-          primaryLine: `${formatEpisodeCodeString(next.season, next.number)} · ${st.nextOrdinal}/${st.totalEpisodes}`,
+          primaryLine: `${formatEpisodeCodeString(next.season, next.number)} · ${st.nextOrdinal}/${denom}`,
           secondaryLine: next.title,
-          progressRatio: st.progressRatio,
+          progressRatio: st.unreleasedEpisodes > 0 ? st.airedProgressRatio : st.progressRatio,
           actionContent: <Check className="w-[17px] h-[17px]" strokeWidth={2.4} />,
           actionAriaLabel: `Watch ${show.title} next episode`,
           flashLabel: 'Watched',
@@ -133,7 +134,7 @@ export function QueueView() {
       for (const id of state.movieOrder) {
         const movie = state.movies[id];
         const prog = state.movieProgress[id];
-        if (!movie || !prog || (prog.watchCount || 0) > 0) continue;
+        if (!movie || !prog || (prog.watchCount || 0) > 0 || !isMovieReleased(movie)) continue;
         const col = findMovieCollection(movie.title, movie.year);
         const colEval = col ? evaluateMovieCollectionProgress(col, state) : null;
         const colIdx = colEval
@@ -171,7 +172,7 @@ export function QueueView() {
         const prog = state.readProgress[id];
         if (!item || !prog?.bookmarked) continue;
         const st = getReadStats(item, prog);
-        if (st.isFinished) continue;
+        if (st.isFinished || st.isCaughtUp || st.nextReleasedUnit === null) continue;
         const displayCover = resolveComicEditionCover(item, prog.edition, prog);
         const editionLabel =
           item.format === 'comic' ? getComicEditionLabel(prog.edition, item, prog) : '';
@@ -187,6 +188,7 @@ export function QueueView() {
           .join(' · ');
         const formatBadge =
           item.format === 'manga' ? 'Manga' : item.format === 'comic' ? 'Comic' : 'Novel';
+        const readDenom = st.unreleasedCount > 0 ? st.releasedTotal : st.total;
         const row: UnifiedQueueRow = {
           rowKey: `read-${item.id}`,
           domain: 'read',
@@ -196,9 +198,9 @@ export function QueueView() {
           badgeLabel: formatBadge,
           badgeClassName: 'bg-read/15 text-read',
           posterUrl: displayCover,
-          primaryLine: `${nextIssueLabel} · ${st.current}/${st.total} ${st.unitLabel}`,
+          primaryLine: `${nextIssueLabel} · ${st.current}/${readDenom} ${st.unitLabel}`,
           secondaryLine: secondaryMeta,
-          progressRatio: st.ratio,
+          progressRatio: st.unreleasedCount > 0 ? st.releasedRatio : st.ratio,
           actionContent: (
             <span className="inline-flex items-center text-xs font-bold tabular-nums px-0.5">
               <Plus className="w-3 h-3 mr-0.5" />1

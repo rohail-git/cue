@@ -7,6 +7,11 @@ import {
   pullCloudLibrary,
   pushCloudLibrary,
 } from '../services/syncApi';
+import {
+  COMIC_ISSUE_CACHE_VERSION,
+  fetchComicSeriesIssues,
+  fetchTvmazeEpisodeSchedule,
+} from '../services/mediaApi';
 import type {
   AppSettings,
   CastMember,
@@ -68,6 +73,9 @@ import {
   getEpisodeKey,
   getSeasonProgress,
   getShowStats,
+  getTodayLocalYmd,
+  isComicIssueReleased,
+  isEpisodeReleased,
 } from '../utils/stats';
 
 const STORAGE_KEY = 'cue_state_v3';
@@ -1212,14 +1220,27 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         if (!season) return prev;
         const prog = prev.showProgress[showId];
         const nextCounts = { ...(prog?.episodeCounts || {}) };
-        const allWatched = season.episodes.every(
+        const now = new Date();
+        const showHasRealAirdates = getAllEpisodes(show).some((ep) =>
+          Boolean(ep.airdate || ep.airstamp)
+        );
+        const releasedEps = season.episodes.filter((ep) =>
+          isEpisodeReleased(ep, now, showHasRealAirdates)
+        );
+        const targetPool = releasedEps.length > 0 ? releasedEps : season.episodes;
+        const allWatched = targetPool.every(
           (ep) => (nextCounts[getEpisodeKey(ep.season, ep.number)] || 0) > 0
         );
-        for (const ep of season.episodes) {
-          const k = getEpisodeKey(ep.season, ep.number);
-          if (allWatched && rewatchIfDone) nextCounts[k] = (nextCounts[k] || 1) + 1;
-          else if (allWatched) nextCounts[k] = 0;
-          else nextCounts[k] = Math.max(1, nextCounts[k] || 0);
+        if (allWatched && !rewatchIfDone) {
+          for (const ep of season.episodes) {
+            nextCounts[getEpisodeKey(ep.season, ep.number)] = 0;
+          }
+        } else {
+          for (const ep of targetPool) {
+            const k = getEpisodeKey(ep.season, ep.number);
+            if (allWatched && rewatchIfDone) nextCounts[k] = (nextCounts[k] || 1) + 1;
+            else nextCounts[k] = Math.max(1, nextCounts[k] || 0);
+          }
         }
         const updatedProg = recomputeShowStatus(show, nextCounts, prog);
         const seasonToast = buildShowSeasonToast(show, seasonNumber, prog, updatedProg);
@@ -1235,7 +1256,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               title: show.title,
               posterUrl: show.posterUrl,
               codeLabel: `Season ${seasonNumber} Complete`,
-              subtitle: `${season.episodes.length} episodes`,
+              subtitle: `${targetPool.length} episodes`,
               loggedAt: new Date().toISOString(),
             })
           : prev.history;
@@ -1255,12 +1276,23 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const markShowAllWatched = useCallback(
     (showId: string) => {
+      let releasedCount = 0;
+      let totalCount = 0;
       commitState((prev) => {
         const show = prev.shows[showId];
         if (!show) return prev;
         const prog = prev.showProgress[showId];
         const nextCounts = { ...(prog?.episodeCounts || {}) };
-        for (const ep of getAllEpisodes(show)) {
+        const allEps = getAllEpisodes(show);
+        totalCount = allEps.length;
+        const now = new Date();
+        const showHasRealAirdates = allEps.some((ep) => Boolean(ep.airdate || ep.airstamp));
+        const releasedEps = allEps.filter((ep) =>
+          isEpisodeReleased(ep, now, showHasRealAirdates)
+        );
+        const targetEps = releasedEps.length > 0 ? releasedEps : allEps;
+        releasedCount = targetEps.length;
+        for (const ep of targetEps) {
           const k = getEpisodeKey(ep.season, ep.number);
           nextCounts[k] = Math.max(1, nextCounts[k] || 0);
         }
@@ -1272,7 +1304,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           },
         };
       });
-      showToast('Marked all episodes watched');
+      showToast(
+        releasedCount < totalCount
+          ? `Marked ${releasedCount} released episodes watched`
+          : 'Marked all episodes watched'
+      );
     },
     [showToast]
   );
@@ -1761,14 +1797,20 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         let touchedUnit = prog?.currentUnit || 0;
 
         if (step > 0) {
+          const now = new Date();
+          const trackComicReleases =
+            item.format === 'comic' &&
+            Boolean(item.issueDetails && Object.keys(item.issueDetails).length > 0);
           for (let s = 0; s < step; s += 1) {
             const set = new Set(nextActive);
             let nextMissing: number | null = null;
             for (let u = 1; u <= item.totalUnits; u += 1) {
-              if (!set.has(u)) {
-                nextMissing = u;
-                break;
+              if (set.has(u)) continue;
+              if (trackComicReleases && !isComicIssueReleased(item.issueDetails?.[u], now)) {
+                continue;
               }
+              nextMissing = u;
+              break;
             }
             if (nextMissing === null) break;
             nextActive.push(nextMissing);
@@ -2333,6 +2375,139 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     },
     []
   );
+
+  const releaseScheduleRefreshedRef = useRef(false);
+  useEffect(() => {
+    if (releaseScheduleRefreshedRef.current) return;
+    releaseScheduleRefreshedRef.current = true;
+    const snap = stateRef.current;
+
+    // 1. Refresh stale bookmarked comic series issue caches so exact releaseDateIso dates are stored
+    const staleComics = snap.readOrder
+      .map((id) => snap.readItems[id])
+      .filter((item): item is ReadItem => {
+        if (!item || item.format !== 'comic') return false;
+        const prog = snap.readProgress[item.id];
+        if (!prog?.bookmarked || (prog.edition && prog.edition !== 'digital')) return false;
+        if (!item.comicSeriesWiki || !item.comicSeriesVolTitle) return false;
+        return !item.issueDetailsKey?.endsWith(`::${COMIC_ISSUE_CACHE_VERSION}`);
+      })
+      .slice(0, 6);
+
+    if (staleComics.length > 0) {
+      void Promise.allSettled(
+        staleComics.map(async (item) => {
+          const { issues, totalIssues } = await fetchComicSeriesIssues(
+            item.comicSeriesWiki!,
+            item.comicSeriesVolTitle!,
+            Math.max(60, item.totalUnits)
+          );
+          if (Object.keys(issues).length > 0) {
+            const prog = stateRef.current.readProgress[item.id];
+            const nextTotal = totalIssues > 0 ? Math.max(totalIssues, item.totalUnits) : item.totalUnits;
+            const detailsKey = `${prog?.editionId || prog?.edition || 'default'}::${nextTotal}::${COMIC_ISSUE_CACHE_VERSION}`;
+            updateReadIssueDetails(
+              item.id,
+              issues,
+              detailsKey,
+              totalIssues > 0 ? totalIssues : undefined
+            );
+          }
+        })
+      );
+    }
+
+    // 2. Refresh airstamps for bookmarked unfinished shows with nearby episodes missing exact timestamps
+    const now = new Date();
+    const todayYmd = getTodayLocalYmd(now);
+    const minDt = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 2);
+    const maxDt = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 14);
+    const minYmd = getTodayLocalYmd(minDt);
+    const maxYmd = getTodayLocalYmd(maxDt);
+
+    const showsNeedingStamp = snap.showOrder
+      .map((id) => snap.shows[id])
+      .filter((show): show is Show => {
+        if (!show) return false;
+        const prog = snap.showProgress[show.id];
+        if (!prog?.bookmarked || prog.status === 'finished') return false;
+        const counts = prog.episodeCounts || {};
+        return getAllEpisodes(show).some((ep) => {
+          if (ep.airstamp) return false;
+          if ((counts[getEpisodeKey(ep.season, ep.number)] || 0) > 0) return false;
+          if (!ep.airdate || !/^\d{4}-\d{2}-\d{2}/.test(ep.airdate)) return false;
+          const ymd = ep.airdate.slice(0, 10);
+          return ymd >= minYmd && ymd <= maxYmd && (ymd === todayYmd || show.tvmazeId !== undefined);
+        });
+      })
+      .slice(0, 6);
+
+    if (showsNeedingStamp.length > 0) {
+      void Promise.allSettled(
+        showsNeedingStamp.map(async (show) => {
+          const freshEps = await fetchTvmazeEpisodeSchedule(show.tvmazeId, show.title);
+          if (freshEps.length === 0) return;
+          setState((prev) => {
+            const cur = prev.shows[show.id];
+            if (!cur) return prev;
+            const seasonMatch = cur.title.match(/\bseason\s*(\d+)\b/i);
+            const fallbackSeason = seasonMatch ? Number(seasonMatch[1]) : 1;
+            const isSingleSeason = cur.seasons.length === 1 && cur.seasons[0].number === 1 && !cur.tvmazeId;
+
+            const lookup = new Map<string, (typeof freshEps)[number]>();
+            for (const f of freshEps) {
+              lookup.set(`${f.season}-${f.number}`, f);
+              if (isSingleSeason && f.season === fallbackSeason) {
+                lookup.set(`1-${f.number}`, f);
+              }
+            }
+
+            let changed = false;
+            const nextSeasons = cur.seasons.map((s) => ({
+              ...s,
+              episodes: s.episodes.map((ep) => {
+                const match = lookup.get(`${ep.season}-${ep.number}`);
+                if (!match) return ep;
+                const nextAirdate = match.airdate || ep.airdate;
+                const nextAirstamp = match.airstamp || ep.airstamp;
+                const nextTitle =
+                  match.title && /^Episode \d+$/i.test(ep.title) ? match.title : ep.title;
+                const nextOverview = !ep.overview && match.overview ? match.overview : ep.overview;
+                if (
+                  nextAirdate === ep.airdate &&
+                  nextAirstamp === ep.airstamp &&
+                  nextTitle === ep.title &&
+                  nextOverview === ep.overview
+                ) {
+                  return ep;
+                }
+                changed = true;
+                return {
+                  ...ep,
+                  airdate: nextAirdate,
+                  ...(nextAirstamp ? { airstamp: nextAirstamp } : {}),
+                  title: nextTitle,
+                  overview: nextOverview,
+                };
+              }),
+            }));
+
+            if (!changed) return prev;
+            return {
+              ...prev,
+              shows: {
+                ...prev.shows,
+                [show.id]: {
+                  ...cur,
+                  seasons: nextSeasons,
+                },
+              },
+            };
+          });
+        })
+      );
+    }
+  }, [updateReadIssueDetails]);
 
   const updateReadEditionCovers = useCallback(
     (

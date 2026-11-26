@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Check, ChevronDown, ChevronRight, Plus, Search, Upload } from 'lucide-react';
+import { BookOpen, Check, ChevronDown, ChevronRight, Clock, Plus, Search, Upload } from 'lucide-react';
 import { BingersMediaRow } from '../components/BingersMediaRow';
 import { FilterSortSheet } from '../components/FilterSortSheet';
 import { MediaImage } from '../components/MediaImage';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
 import { useCueStore } from '../store/useCueStore';
-import type { ReadFilter, ReadItem } from '../types';
+import type { ReadFilter, ReadItem, UpcomingEntry } from '../types';
 import { getComicEditionLabel, resolveComicEditionCover } from '../utils/editions';
 import { classifyReadFormat } from '../utils/mediaImport';
-import { getReadStats } from '../utils/stats';
+import {
+  formatUpcomingReleaseLabel,
+  getDaysUntilRelease,
+  getReadStats,
+  parseComicIssueReleaseYmd,
+} from '../utils/stats';
 
 export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
   const {
@@ -57,7 +62,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     [state.history]
   );
 
-  const { readingList, wantToReadList, finishedList } = useMemo(() => {
+  const { readingList, wantToReadList, caughtUpList, finishedList } = useMemo(() => {
     const sortMode = state.settings.sortBy;
     const all = state.readOrder
       .map((id) => state.readItems[id])
@@ -95,11 +100,13 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     const sortedAll = sortItems(all);
     const reading: ReadItem[] = [];
     const want: ReadItem[] = [];
+    const caughtUp: ReadItem[] = [];
     const done: ReadItem[] = [];
 
     for (const item of sortedAll) {
       const st = getReadStats(item, state.readProgress[item.id]);
       if (st.isFinished) done.push(item);
+      else if (st.isCaughtUp || st.nextReleasedUnit === null) caughtUp.push(item);
       else if (st.current > 0) reading.push(item);
       else want.push(item);
     }
@@ -107,14 +114,41 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     return {
       readingList: reading,
       wantToReadList: want,
+      caughtUpList: caughtUp,
       finishedList: done,
     };
   }, [state.readOrder, state.readItems, state.readProgress, state.settings.sortBy, filter]);
 
-  const upcomingReads = useMemo(
-    () => state.upcoming.filter((u) => u.domain === 'read'),
-    [state.upcoming]
-  );
+  const upcomingReads = useMemo(() => {
+    const items = state.upcoming.filter((u) => u.domain === 'read');
+    const seenReadIds = new Set(items.map((u) => u.mediaId));
+    const derived: UpcomingEntry[] = [];
+    const now = new Date();
+    for (const id of state.readOrder) {
+      if (seenReadIds.has(id)) continue;
+      const item = state.readItems[id];
+      const prog = state.readProgress[id];
+      if (!item || !prog?.bookmarked || item.format !== 'comic') continue;
+      const st = getReadStats(item, prog);
+      const upMeta = st.nextUpcomingMeta;
+      if (!upMeta) continue;
+      const ymd = parseComicIssueReleaseYmd(upMeta);
+      const daysUntil = getDaysUntilRelease(ymd, undefined, now);
+      if (daysUntil === null || daysUntil < 0) continue;
+      const issueLbl = upMeta.issueLabel ? `Issue ${upMeta.issueLabel}` : `Issue #${upMeta.number}`;
+      derived.push({
+        id: `live-read-up-${item.id}-${upMeta.number}`,
+        domain: 'read',
+        kind: 'read',
+        mediaId: item.id,
+        title: item.title,
+        subtitle: `${issueLbl} · ${formatUpcomingReleaseLabel(ymd, undefined, now)}`,
+        daysUntil,
+        artworkUrl: upMeta.coverUrl || resolveComicEditionCover(item, prog.edition, prog),
+      });
+    }
+    return [...items, ...derived].sort((a, b) => a.daysUntil - b.daysUntil);
+  }, [state.upcoming, state.readOrder, state.readItems, state.readProgress]);
 
   const misclassifiedSummary = useMemo(() => {
     let comics = 0;
@@ -150,6 +184,16 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
       item.format === 'comic' && item.issueDetails?.[stats.nextUnit]?.issueLabel
         ? `Issue ${item.issueDetails[stats.nextUnit].issueLabel}`
         : stats.nextUnitShort;
+    const isWaiting = !stats.isFinished && (stats.isCaughtUp || stats.nextReleasedUnit === null);
+    const upMeta = stats.nextUpcomingMeta;
+    const upYmd = parseComicIssueReleaseYmd(upMeta);
+    const upDays = upYmd ? getDaysUntilRelease(upYmd) : null;
+    const upDateLabel = upYmd
+      ? formatUpcomingReleaseLabel(upYmd)
+      : upMeta?.releaseDate || 'TBA';
+    const upIssueLabel =
+      upMeta?.issueLabel ? `Issue ${upMeta.issueLabel}` : stats.nextUpcomingUnit ? `Issue #${stats.nextUpcomingUnit}` : 'Next issue';
+    const readDenom = stats.unreleasedCount > 0 ? stats.releasedTotal : stats.total;
     const secondaryMeta = [
       item.comicPublisher || item.creator,
       editionLabel || item.comicRunLabel || null,
@@ -175,7 +219,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
               alt={item.title}
               className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
             />
-            {!stats.isFinished && (
+            {!stats.isFinished && !isWaiting && (
               <button
                 type="button"
                 onClick={(e) => handleQuickAdvance(e, item.id)}
@@ -193,18 +237,65 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
               <div className="absolute bottom-0 inset-x-0 h-1 bg-black/50">
                 <div
                   className="h-full bg-watched transition-all duration-300"
-                  style={{ width: `${Math.round(stats.ratio * 100)}%` }}
+                  style={{
+                    width: `${Math.round(
+                      (stats.unreleasedCount > 0 ? stats.releasedRatio : stats.ratio) * 100
+                    )}%`,
+                  }}
                 />
               </div>
             )}
           </div>
           <p className="mt-2 text-sm font-semibold text-ink truncate">{item.title}</p>
-          <p className="text-xs text-ink-dim tabular-nums">
+          <p className="text-xs text-ink-dim tabular-nums truncate">
             {stats.isFinished
               ? `Finished${stats.rereadCount > 1 ? ` · x${stats.rereadCount}` : ''}`
-              : `${stats.current}/${stats.total} ${stats.unitLabel}`}
+              : isWaiting
+                ? `${upIssueLabel} · ${upDateLabel}`
+                : `${stats.current}/${readDenom} ${stats.unitLabel}`}
           </p>
         </div>
+      );
+    }
+
+    if (isWaiting) {
+      return (
+        <BingersMediaRow
+          key={item.id}
+          title={item.title}
+          badgeLabel={formatBadge(item.format)}
+          badgeClassName="bg-read/15 text-read"
+          posterUrl={displayCover}
+          primaryLine={
+            stats.current > 0
+              ? `Caught up · ${stats.current}/${stats.releasedTotal} released`
+              : `Next: ${upIssueLabel} · ${upDateLabel}`
+          }
+          secondaryLine={
+            stats.current > 0
+              ? `Next: ${upIssueLabel} · ${upDateLabel}`
+              : secondaryMeta
+          }
+          progressRatio={stats.releasedRatio}
+          showProgress={false}
+          actionDisabled
+          actionContent={
+            upDays !== null && upDays > 0 ? (
+              <span className="flex flex-col items-center px-1">
+                <span className="text-[15px] font-display font-bold text-ink tabular-nums leading-none">
+                  {upDays}
+                </span>
+                <span className="text-[9.5px] text-ink-dim mt-0.5">
+                  {upDays === 1 ? 'day' : 'days'}
+                </span>
+              </span>
+            ) : (
+              <Clock className="w-[16px] h-[16px] text-ink-dim" />
+            )
+          }
+          actionAriaLabel={`${item.title} waiting for release`}
+          onOpen={() => pushRoute({ view: 'read-detail', readId: item.id })}
+        />
       );
     }
 
@@ -218,10 +309,10 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
         primaryLine={
           stats.isFinished
             ? `${stats.total}/${stats.total} ${stats.unitLabel}`
-            : `${nextIssueLabel} · ${stats.current}/${stats.total} ${stats.unitLabel}`
+            : `${nextIssueLabel} · ${stats.current}/${readDenom} ${stats.unitLabel}`
         }
         secondaryLine={secondaryMeta}
-        progressRatio={stats.ratio}
+        progressRatio={stats.unreleasedCount > 0 ? stats.releasedRatio : stats.ratio}
         showProgress={state.settings.showPosterProgress && stats.current > 0}
         isFlashing={flash}
         flashLabel="Read"
@@ -370,6 +461,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
             )}
 
             {readingList.length === 0 &&
+              caughtUpList.length === 0 &&
               wantToReadList.length === 0 &&
               finishedList.length === 0 && (
                 <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center my-4">
@@ -407,6 +499,15 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
                   Currently reading
                 </h2>
                 <div className={listClass}>{readingList.map(renderReadCard)}</div>
+              </section>
+            )}
+
+            {caughtUpList.length > 0 && (
+              <section className="mb-8">
+                <h2 className="font-display font-bold text-[22px] text-ink mb-3.5">
+                  Waiting for release
+                </h2>
+                <div className={listClass}>{caughtUpList.map(renderReadCard)}</div>
               </section>
             )}
 

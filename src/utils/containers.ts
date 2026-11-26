@@ -12,7 +12,12 @@ import {
   normalizeComicEditionId,
   resolveComicEditionTotal,
 } from './editions';
-import { getCompletedReadUnits, getReadStats, getShowStats } from './stats';
+import {
+  getCompletedReadUnits,
+  getReadStats,
+  getShowStats,
+  isMovieReleased,
+} from './stats';
 
 export function normalizeCollectionKey(title: string): string {
   return title
@@ -758,7 +763,7 @@ export function evaluateCustomListProgress(
       const done = Boolean(prog && prog.watchCount > 0);
       ratioSum += done ? 1 : 0;
       if (done) completedItems += 1;
-      else if (!nextItem) {
+      else if (!nextItem && isMovieReleased(m)) {
         nextItem = { kind: 'movie', id: m.id, title: m.title, unitHint: `${m.year} · ${m.runtime}m` };
       }
       if (typeof prog?.rating === 'number' && prog.rating > 0) ratings.push(prog.rating);
@@ -770,7 +775,7 @@ export function evaluateCustomListProgress(
       const st = getReadStats(r, prog);
       ratioSum += st.ratio;
       if (st.isFinished) completedItems += 1;
-      else if (!nextItem) {
+      else if (!nextItem && !st.isCaughtUp && st.nextReleasedUnit !== null) {
         nextItem = { kind: 'read', id: r.id, title: r.title, unitHint: st.nextUnitShort };
       }
       if (typeof prog?.rating === 'number' && prog.rating > 0) ratings.push(prog.rating);

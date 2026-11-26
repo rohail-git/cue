@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronUp,
+  Clock,
   ListPlus,
   Maximize2,
   Minus,
@@ -35,9 +36,12 @@ import {
   cleanDisplayGenres,
   formatAirDate,
   formatEpisodeCode,
+  formatUpcomingReleaseLabel,
+  getAllEpisodes,
   getEpisodeKey,
   getSeasonProgress,
   getShowStats,
+  isEpisodeReleased,
   pad2,
 } from '../utils/stats';
 
@@ -173,6 +177,10 @@ export function ShowDetailView({ showId }: { showId: string }) {
   const activeSeasonObj = show.seasons.find((s) => s.number === selectedSeason) || show.seasons[0];
   const desktopSeasons: Season[] = show.seasons.slice(seasonPairStart, seasonPairStart + 2);
   const showCalcAvg = getShowCalculatedAverage(show, progress);
+  const nowRef = new Date();
+  const showHasRealAirdates = getAllEpisodes(show).some((ep) =>
+    Boolean(ep.airdate || ep.airstamp)
+  );
 
   const renderSeasonColumn = (season: Season, showDropdownOnMobile = false) => {
     const sp = getSeasonProgress(show, season.number, progress);
@@ -180,7 +188,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
     const seasonRating = progress?.seasonRatings?.[season.number];
     const seasonSource = progress?.seasonRatingSource?.[season.number];
     const showSeasonSuggestion =
-      (epAvg && sp.watched === sp.total && !seasonRating) ||
+      (epAvg && sp.airedTotal > 0 && sp.watched === sp.airedTotal && !seasonRating) ||
       (detailMode === 'advanced' && (Boolean(epAvg) || Boolean(seasonRating) || sp.watched > 0));
 
     return (
@@ -219,7 +227,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
               onClick={() => markSeasonWatched(show.id, season.number, true)}
               className="text-xs font-semibold px-2.5 py-1 rounded-full bg-white/6 hover:bg-white/12 text-ink-dim hover:text-ink transition-colors"
             >
-              {sp.watched === sp.total ? '+1 Rewatch' : 'Mark season'}
+              {sp.airedTotal > 0 && sp.watched >= sp.airedTotal ? '+1 Rewatch' : 'Mark season'}
             </button>
           </div>
         </div>
@@ -266,6 +274,10 @@ export function ShowDetailView({ showId }: { showId: string }) {
             const count = progress?.episodeCounts?.[epKey] || 0;
             const epRating = progress?.episodeRatings?.[epKey];
             const isStepperOpen = rewatchStepperEp === epKey;
+            const epReleased = isEpisodeReleased(ep, nowRef, showHasRealAirdates);
+            const epDateLabel = epReleased
+              ? formatAirDate(ep.airdate)
+              : formatUpcomingReleaseLabel(ep.airdate, ep.airstamp, nowRef);
 
             return (
               <div
@@ -282,7 +294,9 @@ export function ShowDetailView({ showId }: { showId: string }) {
                     setActiveEpisodeDrawer(ep);
                   }
                 }}
-                className="py-2.5 flex items-center gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors"
+                className={`py-2.5 flex items-center gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors ${
+                  count === 0 && !epReleased ? 'opacity-70' : ''
+                }`}
               >
                 <div className="w-[88px] h-[50px] rounded-lg overflow-hidden bg-surface shrink-0">
                   <MediaImage
@@ -296,10 +310,15 @@ export function ShowDetailView({ showId }: { showId: string }) {
                   <p className="text-[14.5px] font-medium text-ink truncate leading-snug">
                     {ep.title}
                   </p>
-                  <p className="text-[12.5px] text-ink-dim tabular-nums mt-0.5 flex items-center gap-1.5">
+                  <p className="text-[12.5px] text-ink-dim tabular-nums mt-0.5 flex items-center gap-1.5 flex-wrap">
                     <span>
-                      E{pad2(ep.number)} · {formatAirDate(ep.airdate)}
+                      E{pad2(ep.number)} · {epDateLabel}
                     </span>
+                    {count === 0 && !epReleased && (
+                      <span className="px-1.5 py-0.5 rounded-full bg-white/[0.07] text-[10px] font-semibold text-ink-dim">
+                        Upcoming
+                      </span>
+                    )}
                     {typeof epRating === 'number' && epRating > 0 && (
                       <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-brand">
                         · <Star className="w-3 h-3 fill-brand" />
@@ -557,10 +576,30 @@ export function ShowDetailView({ showId }: { showId: string }) {
               />
               <span>
                 {stats.watchedUnique > 0
-                  ? `${stats.watchedUnique}/${stats.totalEpisodes} watched`
+                  ? `${stats.watchedUnique}/${stats.unreleasedEpisodes > 0 ? `${stats.airedEpisodes} aired` : stats.totalEpisodes} watched`
                   : `Watch ${formatEpisodeCode(stats.nextEpisode.season, stats.nextEpisode.number)}`}
               </span>
             </button>
+          ) : stats.nextUpcomingEpisode ? (
+            <div className="flex-1 h-11 rounded-full border border-white/15 bg-surface text-ink-dim font-medium text-xs sm:text-sm flex items-center justify-center gap-2 px-3 min-w-0">
+              <Clock className="w-4 h-4 text-watch shrink-0" />
+              <span className="truncate">
+                {stats.watchedUnique > 0
+                  ? `Caught up · Next ${formatEpisodeCode(
+                      stats.nextUpcomingEpisode.season,
+                      stats.nextUpcomingEpisode.number
+                    )} (${formatUpcomingReleaseLabel(
+                      stats.nextUpcomingEpisode.airdate,
+                      stats.nextUpcomingEpisode.airstamp,
+                      nowRef
+                    )})`
+                  : `Premieres ${formatUpcomingReleaseLabel(
+                      stats.nextUpcomingEpisode.airdate,
+                      stats.nextUpcomingEpisode.airstamp,
+                      nowRef
+                    )}`}
+              </span>
+            </div>
           ) : (
             <button
               type="button"
@@ -614,7 +653,9 @@ export function ShowDetailView({ showId }: { showId: string }) {
                     {show.rating.toFixed(1)}/10
                   </span>
                   <span className="bg-surface border border-white/[0.08] rounded-full px-3 py-1 text-xs font-medium text-ink-dim tabular-nums">
-                    {stats.watchedUnique}/{stats.totalEpisodes} episodes
+                    {stats.unreleasedEpisodes > 0
+                      ? `${stats.watchedUnique}/${stats.airedEpisodes} aired · ${stats.unreleasedEpisodes} upcoming`
+                      : `${stats.watchedUnique}/${stats.totalEpisodes} episodes`}
                   </span>
                   {typeof progress?.rating === 'number' && progress.rating > 0 && (
                     <span className="bg-surface border border-brand/35 rounded-full px-3 py-1 text-xs font-semibold text-brand inline-flex items-center gap-1 tabular-nums">
@@ -644,7 +685,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
                 {show.seasons.map((season) => {
                   const sp = getSeasonProgress(show, season.number, progress);
                   const isOpen = Boolean(expandedSeasons[season.number]);
-                  const seasonDone = sp.total > 0 && sp.watched === sp.total;
+                  const seasonDone = sp.airedTotal > 0 && sp.watched >= sp.airedTotal;
                   return (
                     <div key={season.number} className="py-2">
                       <div className="flex items-center justify-between gap-3 py-1.5">
@@ -673,7 +714,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
                               seasonDone ? 'text-watched' : 'text-ink-dim'
                             }`}
                           >
-                            {sp.watched}/{sp.total}
+                            {sp.watched}/{sp.unreleased > 0 ? `${sp.airedTotal} aired` : sp.total}
                           </span>
                           <button
                             type="button"
@@ -704,6 +745,10 @@ export function ShowDetailView({ showId }: { showId: string }) {
                             const count = progress?.episodeCounts?.[epKey] || 0;
                             const epRating = progress?.episodeRatings?.[epKey];
                             const isWatched = count > 0;
+                            const epReleased = isEpisodeReleased(ep, nowRef, showHasRealAirdates);
+                            const epDateLabel = epReleased
+                              ? formatAirDate(ep.airdate)
+                              : formatUpcomingReleaseLabel(ep.airdate, ep.airstamp, nowRef);
                             return (
                               <div
                                 key={ep.id}
@@ -720,7 +765,9 @@ export function ShowDetailView({ showId }: { showId: string }) {
                                     setActiveEpisodeDrawer(ep);
                                   }
                                 }}
-                                className="py-2.5 flex items-center gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors"
+                                className={`py-2.5 flex items-center gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors ${
+                                  !isWatched && !epReleased ? 'opacity-70' : ''
+                                }`}
                               >
                                 <div className="w-[84px] h-[48px] rounded-lg overflow-hidden bg-surface shrink-0">
                                   <MediaImage
@@ -733,10 +780,15 @@ export function ShowDetailView({ showId }: { showId: string }) {
                                   <p className="text-[14px] font-medium text-ink truncate leading-snug">
                                     {ep.title}
                                   </p>
-                                  <p className="text-[12px] text-ink-dim tabular-nums mt-0.5 flex items-center gap-1.5">
+                                  <p className="text-[12px] text-ink-dim tabular-nums mt-0.5 flex items-center gap-1.5 flex-wrap">
                                     <span>
-                                      E{pad2(ep.number)} · {formatAirDate(ep.airdate)}
+                                      E{pad2(ep.number)} · {epDateLabel}
                                     </span>
+                                    {!isWatched && !epReleased && (
+                                      <span className="px-1.5 py-0.5 rounded-full bg-white/[0.07] text-[10px] font-semibold text-ink-dim">
+                                        Upcoming
+                                      </span>
+                                    )}
                                     {typeof epRating === 'number' && epRating > 0 && (
                                       <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-brand">
                                         · <Star className="w-3 h-3 fill-brand" />
@@ -805,16 +857,27 @@ export function ShowDetailView({ showId }: { showId: string }) {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between gap-2 text-xs">
                     <span className="font-semibold uppercase tracking-wider text-ink-dim">
-                      Series progress
+                      {stats.unreleasedEpisodes > 0 ? 'Aired progress' : 'Series progress'}
                     </span>
                     <span className="font-bold text-watched tabular-nums">
-                      {Math.round(stats.progressRatio * 100)}%
+                      {Math.round(
+                        (stats.unreleasedEpisodes > 0
+                          ? stats.airedProgressRatio
+                          : stats.progressRatio) * 100
+                      )}
+                      %
                     </span>
                   </div>
                   <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
                     <div
                       className="h-full bg-watched transition-all duration-300"
-                      style={{ width: `${Math.round(stats.progressRatio * 100)}%` }}
+                      style={{
+                        width: `${Math.round(
+                          (stats.unreleasedEpisodes > 0
+                            ? stats.airedProgressRatio
+                            : stats.progressRatio) * 100
+                        )}%`,
+                      }}
                     />
                   </div>
                 </div>
@@ -822,11 +885,17 @@ export function ShowDetailView({ showId }: { showId: string }) {
                 <div className="rounded-2xl bg-background/50 border border-white/[0.05] grid grid-cols-3 divide-x divide-white/[0.06] text-center">
                   <div className="py-3 px-2">
                     <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
-                      Episodes
+                      {stats.unreleasedEpisodes > 0 ? 'Aired' : 'Episodes'}
                     </p>
                     <p className="font-display font-bold text-base sm:text-lg text-watched tabular-nums mt-0.5">
-                      {stats.watchedUnique} / {stats.totalEpisodes}
+                      {stats.watchedUnique} /{' '}
+                      {stats.unreleasedEpisodes > 0 ? stats.airedEpisodes : stats.totalEpisodes}
                     </p>
+                    {stats.unreleasedEpisodes > 0 && (
+                      <p className="text-[10px] text-ink-faint tabular-nums mt-0.5">
+                        +{stats.unreleasedEpisodes} upcoming
+                      </p>
+                    )}
                   </div>
                   <div className="py-3 px-2">
                     <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">

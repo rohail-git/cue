@@ -1,7 +1,14 @@
+import { COMIC_ISSUE_CACHE_VERSION } from '../services/mediaApi';
 import type { CueStoreState, MediaDomain } from '../types';
 import { evaluateCustomListProgress } from './containers';
 import { resolveComicEditionCover } from './editions';
-import { cleanDisplayGenres, formatEpisodeCode, getReadStats, getShowStats } from './stats';
+import {
+  cleanDisplayGenres,
+  formatEpisodeCode,
+  getReadStats,
+  getShowStats,
+  isMovieReleased,
+} from './stats';
 
 export type MindIntent = 'auto' | 'quick' | 'deep' | 'finish';
 
@@ -68,22 +75,21 @@ export function computeCueMind(state: CueStoreState, intent: MindIntent = 'auto'
       bumpGenres(show.genres);
       continue;
     }
+    if (st.isCaughtUp || !st.nextEpisode) continue;
     if (st.watchedUnique > 0) activeWatch += 1;
     if (prog.rating && prog.rating >= 4) bumpGenres(show.genres);
 
-    const remainingEps = Math.max(0, st.totalEpisodes - st.watchedUnique);
-    const nextCode = st.nextEpisode
-      ? formatEpisodeCode(st.nextEpisode.season, st.nextEpisode.number)
-      : 'next ep';
+    const remainingEps = Math.max(0, (st.airedEpisodes || st.totalEpisodes) - st.watchedUnique);
+    const nextCode = formatEpisodeCode(st.nextEpisode.season, st.nextEpisode.number);
 
-    if (st.progressRatio >= 0.7 || (remainingEps > 0 && remainingEps <= 3)) {
+    if (st.airedProgressRatio >= 0.7 || (remainingEps > 0 && remainingEps <= 3)) {
       candidates.push({
         id: `finish-show-${show.id}`,
         intent: 'finish',
         tag: 'Almost done',
         headline: `Finish ${show.title}`,
         reason: `Only ${remainingEps} ${remainingEps === 1 ? 'episode' : 'episodes'} left (${Math.round(
-          st.progressRatio * 100
+          st.airedProgressRatio * 100
         )}% complete) · ${nextCode}.`,
         domain: 'watch',
         actionLabel: `Open ${show.title}`,
@@ -115,6 +121,7 @@ export function computeCueMind(state: CueStoreState, intent: MindIntent = 'auto'
       bumpGenres(m.genres);
       continue;
     }
+    if (!isMovieReleased(m)) continue;
     activeWatch += 1;
     if (windowHint === 'evening' || windowHint === 'night') {
       candidates.push({
@@ -142,7 +149,7 @@ export function computeCueMind(state: CueStoreState, intent: MindIntent = 'auto'
       r.issueDetails &&
       Object.keys(r.issueDetails).length > 0 &&
       r.issueDetailsKey &&
-      !r.issueDetailsKey.endsWith('::ca5')
+      !r.issueDetailsKey.endsWith(`::${COMIC_ISSUE_CACHE_VERSION}`)
     ) {
       staleComicCount += 1;
     }
@@ -151,17 +158,18 @@ export function computeCueMind(state: CueStoreState, intent: MindIntent = 'auto'
       bumpGenres(r.genres);
       continue;
     }
+    if (st.isCaughtUp || st.nextReleasedUnit === null) continue;
     if (st.current > 0) activeRead += 1;
-    const rem = Math.max(0, st.total - st.current);
+    const rem = Math.max(0, st.releasedTotal - st.current);
 
-    if (st.ratio >= 0.68 || (rem > 0 && rem <= 4)) {
+    if (st.releasedRatio >= 0.68 || (rem > 0 && rem <= 4)) {
       candidates.push({
         id: `finish-read-${r.id}`,
         intent: 'finish',
         tag: 'Nearly complete',
         headline: `Wrap up ${r.title}`,
         reason: `${rem} ${rem === 1 ? st.unitSingular : st.unitLabel} left (${Math.round(
-          st.ratio * 100
+          st.releasedRatio * 100
         )}%) · next up is ${st.nextUnitShort}.`,
         domain: 'read',
         actionLabel: 'Continue reading',
@@ -173,7 +181,7 @@ export function computeCueMind(state: CueStoreState, intent: MindIntent = 'auto'
         intent: 'quick',
         tag: windowHint === 'morning' ? 'Coffee read' : '10 min read',
         headline: `Read ${r.title} (${st.nextUnitShort})`,
-        reason: `Bite-sized ${r.format} progress (${st.current}/${st.total} ${st.unitLabel}).`,
+        reason: `Bite-sized ${r.format} progress (${st.current}/${st.releasedTotal} ${st.unitLabel}).`,
         domain: 'read',
         actionLabel: 'Log next',
         target: { kind: 'read', id: r.id, title: r.title, posterUrl: cover },

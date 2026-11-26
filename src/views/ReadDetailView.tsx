@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  Clock,
   Layers,
   ListPlus,
   Maximize2,
@@ -26,6 +27,7 @@ import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import {
+  COMIC_ISSUE_CACHE_VERSION,
   fetchComicEditionMetadata,
   fetchComicIssueDetails,
   fetchComicSeriesIssues,
@@ -45,7 +47,14 @@ import {
   resolveComicEditionCover,
 } from '../utils/editions';
 import { formatRating, getReadUnitsAverage } from '../utils/ratings';
-import { cleanDisplayGenres, getCompletedReadUnits, getReadStats } from '../utils/stats';
+import {
+  cleanDisplayGenres,
+  formatUpcomingReleaseLabel,
+  getCompletedReadUnits,
+  getReadStats,
+  isComicIssueReleased,
+  parseComicIssueReleaseYmd,
+} from '../utils/stats';
 
 const sessionDetailModeByReadId = new Map<string, DetailCardMode>();
 
@@ -156,7 +165,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   useEffect(() => {
     if (!item || item.format !== 'comic') return;
     const total = Math.max(1, item.totalUnits);
-    const detailsKey = `${progress?.editionId || progress?.edition || 'default'}::${total}::ca6`;
+    const detailsKey = `${progress?.editionId || progress?.edition || 'default'}::${total}::${COMIC_ISSUE_CACHE_VERSION}`;
     if (
       item.issueDetailsKey === detailsKey &&
       item.issueDetails &&
@@ -471,6 +480,25 @@ export function ReadDetailView({ readId }: { readId: string }) {
                 <span className="text-watched font-bold text-xs ml-0.5">· x{stats.rereadCount}</span>
               )}
             </button>
+          ) : (stats.isCaughtUp || stats.nextReleasedUnit === null) && stats.nextUpcomingUnit ? (
+            <div className="flex-1 h-11 rounded-full border border-white/15 bg-surface text-ink-dim font-medium text-xs sm:text-sm flex items-center justify-center gap-2 px-3 min-w-0">
+              <Clock className="w-4 h-4 text-read shrink-0" />
+              <span className="truncate">
+                {(() => {
+                  const upMeta = stats.nextUpcomingMeta;
+                  const upLabel = upMeta?.issueLabel
+                    ? `Issue ${upMeta.issueLabel}`
+                    : `Issue #${stats.nextUpcomingUnit}`;
+                  const upYmd = parseComicIssueReleaseYmd(upMeta);
+                  const upDate = upYmd
+                    ? formatUpcomingReleaseLabel(upYmd)
+                    : upMeta?.releaseDate || '';
+                  return stats.current > 0
+                    ? `Caught up · Next ${upLabel}${upDate ? ` (${upDate})` : ''}`
+                    : `Releases ${upDate || upLabel}`;
+                })()}
+              </span>
+            </div>
           ) : (
             <button
               type="button"
@@ -481,7 +509,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
               <span>
                 Log +1 {stats.unitSingular}{' '}
                 <span className="opacity-75 tabular-nums">
-                  ({stats.current}/{stats.total})
+                  ({stats.current}/{stats.unreleasedCount > 0 ? stats.releasedTotal : stats.total})
                 </span>
               </span>
             </button>
@@ -538,7 +566,13 @@ export function ReadDetailView({ readId }: { readId: string }) {
                     {item.rating.toFixed(1)}/5
                   </span>
                   <span className="bg-surface border border-white/[0.08] rounded-full px-3 py-1 text-xs font-medium text-ink-dim tabular-nums">
-                    {stats.current}/{stats.total} {stats.unitLabel} ({Math.round(stats.ratio * 100)}%)
+                    {stats.unreleasedCount > 0
+                      ? `${stats.current}/${stats.releasedTotal} released (${Math.round(
+                          stats.releasedRatio * 100
+                        )}%) · ${stats.unreleasedCount} upcoming`
+                      : `${stats.current}/${stats.total} ${stats.unitLabel} (${Math.round(
+                          stats.ratio * 100
+                        )}%)`}
                   </span>
                   {typeof progress?.rating === 'number' && progress.rating > 0 && (
                     <span className="bg-surface border border-brand/35 rounded-full px-3 py-1 text-xs font-semibold text-brand inline-flex items-center gap-1 tabular-nums">
@@ -613,12 +647,29 @@ export function ReadDetailView({ readId }: { readId: string }) {
                           <button
                             type="button"
                             onClick={() => {
+                              const releasedInBucket = unitNums.filter(
+                                (u) =>
+                                  item.format !== 'comic' ||
+                                  isComicIssueReleased(item.issueDetails?.[u])
+                              );
                               if (simpleBuckets.length === 1) {
                                 if (bucketDone) setReadProgress(item.id, 0);
-                                else markReadFinished(item.id);
+                                else if (releasedInBucket.length === unitNums.length) {
+                                  markReadFinished(item.id);
+                                } else if (releasedInBucket.length > 0) {
+                                  setReadProgress(
+                                    item.id,
+                                    Math.max(stats.current, Math.max(...releasedInBucket))
+                                  );
+                                }
                               } else {
                                 if (bucketDone) setReadProgress(item.id, bucket.start - 1);
-                                else setReadProgress(item.id, Math.max(stats.current, bucket.end));
+                                else if (releasedInBucket.length > 0) {
+                                  setReadProgress(
+                                    item.id,
+                                    Math.max(stats.current, Math.max(...releasedInBucket))
+                                  );
+                                }
                               }
                             }}
                             aria-label={`Toggle ${bucket.label} complete`}
@@ -645,6 +696,8 @@ export function ReadDetailView({ readId }: { readId: string }) {
                           {unitNums.map((u) => {
                             const done = completedSet.has(u);
                             const meta = item.format === 'comic' ? item.issueDetails?.[u] : undefined;
+                            const unitReleased =
+                              item.format !== 'comic' || isComicIssueReleased(meta);
                             const fallbackLabel =
                               item.unit === 'issues' ? `Issue #${u}` : `Chapter ${u}`;
                             const primaryTitle =
@@ -679,7 +732,9 @@ export function ReadDetailView({ readId }: { readId: string }) {
                                     setActiveUnitDrawer(u);
                                   }
                                 }}
-                                className="py-2.5 flex items-center gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors"
+                                className={`py-2.5 flex items-center gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors ${
+                                  !done && !unitReleased ? 'opacity-70' : ''
+                                }`}
                               >
                                 {item.format === 'comic' && (
                                   <button
@@ -716,8 +771,13 @@ export function ReadDetailView({ readId }: { readId: string }) {
                                     {primaryTitle}
                                   </p>
                                   {item.format === 'comic' ? (
-                                    <p className="text-[12px] text-ink-dim tabular-nums mt-0.5 truncate flex items-center gap-1.5">
+                                    <p className="text-[12px] text-ink-dim tabular-nums mt-0.5 flex items-center gap-1.5 flex-wrap">
                                       <span className="truncate">{issueSub}</span>
+                                      {!done && !unitReleased && (
+                                        <span className="px-1.5 py-0.5 rounded-full bg-white/[0.07] text-[10px] font-semibold text-ink-dim shrink-0">
+                                          Upcoming
+                                        </span>
+                                      )}
                                       {done && (
                                         <span className="text-watched font-medium shrink-0">
                                           · Read
@@ -783,7 +843,10 @@ export function ReadDetailView({ readId }: { readId: string }) {
                 </span>
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-bold text-watched tabular-nums">
-                    {Math.round(stats.ratio * 100)}%
+                    {Math.round(
+                      (stats.unreleasedCount > 0 ? stats.releasedRatio : stats.ratio) * 100
+                    )}
+                    %
                   </span>
                   <button
                     type="button"
@@ -828,18 +891,29 @@ export function ReadDetailView({ readId }: { readId: string }) {
               <div className="rounded-2xl bg-background/50 border border-white/[0.05] grid grid-cols-3 divide-x divide-white/[0.06] text-center">
                 <div className="py-3 px-2">
                   <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
-                    {stats.unitLabel}
+                    {stats.unreleasedCount > 0 ? 'Released' : stats.unitLabel}
                   </p>
                   <p className="font-display font-bold text-base sm:text-lg text-watched tabular-nums mt-0.5">
-                    {stats.current} / {stats.total}
+                    {stats.current} / {stats.unreleasedCount > 0 ? stats.releasedTotal : stats.total}
                   </p>
+                  {stats.unreleasedCount > 0 && (
+                    <p className="text-[10px] text-ink-faint tabular-nums mt-0.5">
+                      +{stats.unreleasedCount} upcoming
+                    </p>
+                  )}
                 </div>
                 <div className="py-3 px-2">
                   <p className="text-[10.5px] text-ink-faint uppercase tracking-wider font-semibold">
                     Status
                   </p>
                   <p className="font-display font-bold text-xs sm:text-sm text-ink mt-1.5">
-                    {stats.isFinished ? 'Finished' : stats.current > 0 ? 'Reading' : 'Up next'}
+                    {stats.isFinished
+                      ? 'Finished'
+                      : stats.isCaughtUp
+                        ? 'Caught up'
+                        : stats.current > 0
+                          ? 'Reading'
+                          : 'Up next'}
                   </p>
                 </div>
                 <div className="py-3 px-2">
@@ -891,7 +965,8 @@ export function ReadDetailView({ readId }: { readId: string }) {
                 <button
                   type="button"
                   onClick={() => advanceReadProgress(item.id, 1)}
-                  className="h-9 px-3 rounded-full bg-watched/15 text-xs font-semibold text-watched hover:bg-watched/25 flex items-center gap-1"
+                  disabled={stats.isCaughtUp || stats.nextReleasedUnit === null}
+                  className="h-9 px-3 rounded-full bg-watched/15 text-xs font-semibold text-watched hover:bg-watched/25 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
                 >
                   <Plus className="w-3.5 h-3.5" />1 {stats.unitSingular}
                 </button>
@@ -1097,6 +1172,8 @@ export function ReadDetailView({ readId }: { readId: string }) {
                   const done = completedSet.has(u);
                   const uRating = progress?.unitRatings?.[u];
                   const selected = safeSelectedUnit === u;
+                  const meta = item.format === 'comic' ? item.issueDetails?.[u] : undefined;
+                  const unitReleased = item.format !== 'comic' || isComicIssueReleased(meta);
                   return (
                     <button
                       key={u}
@@ -1108,7 +1185,9 @@ export function ReadDetailView({ readId }: { readId: string }) {
                             (done ? 'bg-watched/25 text-watched' : 'bg-surface-raised text-ink')
                           : done
                             ? 'border-watched/45 bg-watched/15 text-watched'
-                            : 'border-white/8 bg-background/60 text-ink-dim hover:text-ink'
+                            : !unitReleased
+                              ? 'border-dashed border-white/10 bg-background/35 text-ink-faint hover:text-ink-dim'
+                              : 'border-white/8 bg-background/60 text-ink-dim hover:text-ink'
                       }`}
                     >
                       <span>{item.unit === 'issues' ? `#${u}` : u}</span>
@@ -1167,14 +1246,22 @@ export function ReadDetailView({ readId }: { readId: string }) {
                         : `Chapter ${safeSelectedUnit}`}
                     </p>
                     {item.format === 'comic' && (
-                      <p className="text-[11px] text-ink-dim truncate">
-                        {[
-                          item.issueDetails?.[safeSelectedUnit]?.issueLabel ||
-                            `Issue #${safeSelectedUnit}`,
-                          item.issueDetails?.[safeSelectedUnit]?.releaseDate,
-                        ]
-                          .filter(Boolean)
-                          .join(' · ')}
+                      <p className="text-[11px] text-ink-dim flex items-center gap-1.5 flex-wrap">
+                        <span className="truncate">
+                          {[
+                            item.issueDetails?.[safeSelectedUnit]?.issueLabel ||
+                              `Issue #${safeSelectedUnit}`,
+                            item.issueDetails?.[safeSelectedUnit]?.releaseDate,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
+                        {!completedSet.has(safeSelectedUnit) &&
+                          !isComicIssueReleased(item.issueDetails?.[safeSelectedUnit]) && (
+                            <span className="px-1.5 py-0.5 rounded-full bg-white/[0.07] text-[10px] font-semibold text-ink-dim shrink-0">
+                              Upcoming
+                            </span>
+                          )}
                       </p>
                     )}
                   </div>

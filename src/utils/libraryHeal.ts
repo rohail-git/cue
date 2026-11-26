@@ -1,4 +1,9 @@
-import { normalizeTitleKey, searchByIsbn, searchLiveMedia } from '../services/mediaApi';
+import {
+  COMIC_ISSUE_CACHE_VERSION,
+  normalizeTitleKey,
+  searchByIsbn,
+  searchLiveMedia,
+} from '../services/mediaApi';
 import type { CueStoreState } from '../types';
 import { resolveComicEditionCover } from './editions';
 
@@ -151,7 +156,7 @@ export async function scanAndRepairLibrary(
         r.issueDetails &&
         Object.keys(r.issueDetails).length > 0 &&
         r.issueDetailsKey &&
-        !r.issueDetailsKey.endsWith('::ca5')
+        !r.issueDetailsKey.endsWith(`::${COMIC_ISSUE_CACHE_VERSION}`)
     );
     candidates.push({
       kind: 'read',

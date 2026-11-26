@@ -33,6 +33,7 @@ export interface ComicIssueMeta {
   issueLabel?: string;
   title?: string;
   releaseDate?: string;
+  releaseDateIso?: string;
   coverUrl?: string;
   synopsis?: string;
   writers?: string;
@@ -63,6 +64,7 @@ export interface Episode {
   number: number;
   title: string;
   airdate: string;
+  airstamp?: string;
   runtime: number;
   stillUrl: string;
   overview: string;
