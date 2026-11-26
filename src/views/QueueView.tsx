@@ -19,8 +19,15 @@ import {
   evaluateMovieCollectionProgress,
   findMovieCollection,
 } from '../utils/containers';
+import { computeTasteProfile } from '../utils/cueMind';
 import { getComicEditionLabel, resolveComicEditionCover } from '../utils/editions';
 import { formatGameMeta, getReadStats, getShowStats, isMovieReleased, pad2 } from '../utils/stats';
+
+let sessionInitialMindSide: 'continue' | 'discover' = 'continue';
+
+export function requestQueueCueMindSide(side: 'continue' | 'discover') {
+  sessionInitialMindSide = side;
+}
 
 interface UnifiedQueueRow {
   rowKey: string;
@@ -63,8 +70,15 @@ export function QueueView() {
   } = useCueStore();
 
   const [domainFilter, setDomainFilter] = useState<'all' | MediaDomain>('all');
+  const [mindSide, setMindSide] = useState<'continue' | 'discover'>(() => sessionInitialMindSide);
   const [justLogged, setJustLogged] = useState<Record<string, boolean>>({});
   const timersRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    setMindSide(sessionInitialMindSide);
+  }, []);
+
+  const tasteProfile = useMemo(() => computeTasteProfile(state), [state]);
 
   useEffect(() => {
     return () => {
@@ -352,8 +366,16 @@ export function QueueView() {
         </div>
       </div>
 
-      {/* Cue Mind: Live Intelligence & Health Telemetry */}
-      <CueMindCard />
+      {/* Cue Mind: Hidden on first boot (<5 entries); unlocks automatically at 5+ entries */}
+      {tasteProfile.isUnlocked && (
+        <CueMindCard
+          initialSide={mindSide}
+          onSideChange={(s) => {
+            sessionInitialMindSide = s;
+            setMindSide(s);
+          }}
+        />
+      )}
 
       {isEmpty && (
         <div className="rounded-[22px] bg-surface border border-white/[0.06] p-8 text-center my-4">

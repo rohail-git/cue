@@ -66,6 +66,7 @@ import {
 } from '../utils/mediaImport';
 import { getSeasonEpisodeAverage } from '../utils/ratings';
 import {
+  cleanDisplayGenres,
   formatEpisodeCode,
   formatGameMeta,
   getAllEpisodes,
@@ -103,6 +104,9 @@ function loadInitialState(): CueStoreState {
         }
         if (!parsed.collectionRatings) {
           parsed.collectionRatings = {};
+        }
+        if (!parsed.mindFeedback) {
+          parsed.mindFeedback = { dismissedIds: [], dismissedGenres: {}, acceptedCount: 0 };
         }
         if (parsed.settings && !parsed.settings.detailMode) {
           parsed.settings.detailMode = 'simple';
@@ -351,6 +355,8 @@ interface CueContextValue {
   addJournalEntry: (input: Omit<JournalEntry, 'id' | 'createdAt'>) => void;
   deleteJournalEntry: (entryId: string) => void;
   markAllNotificationsRead: () => void;
+  dismissMindRecommendation: (itemId: string, genres?: string[]) => void;
+  recordMindDiscoverAccept: (genres?: string[]) => void;
   createCustomList: (
     name: string,
     description: string,
@@ -4231,6 +4237,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             readProgress: resetReadState(prev),
             gameProgress: resetPlayState(prev),
             history: [],
+            mindFeedback: { dismissedIds: [], dismissedGenres: {}, acceptedCount: 0 },
+            settings: {
+              ...prev.settings,
+              cueMindIntroDismissed: false,
+            },
           };
         });
         showToast('Reset all progress data');
@@ -4267,6 +4278,47 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     },
     [showToast]
   );
+
+  const dismissMindRecommendation = useCallback((itemId: string, genres: string[] = []) => {
+    commitState((prev) => {
+      const mf = prev.mindFeedback || { dismissedIds: [], dismissedGenres: {}, acceptedCount: 0 };
+      const nextIds = [itemId, ...mf.dismissedIds.filter((id) => id !== itemId)].slice(0, 120);
+      const nextGenres = { ...(mf.dismissedGenres || {}) };
+      for (const g of cleanDisplayGenres(genres)) {
+        nextGenres[g] = (nextGenres[g] || 0) + 1;
+      }
+      return {
+        ...prev,
+        mindFeedback: {
+          ...mf,
+          dismissedIds: nextIds,
+          dismissedGenres: nextGenres,
+        },
+      };
+    });
+  }, []);
+
+  const recordMindDiscoverAccept = useCallback((genres: string[] = []) => {
+    commitState((prev) => {
+      const mf = prev.mindFeedback || { dismissedIds: [], dismissedGenres: {}, acceptedCount: 0 };
+      const nextGenres = { ...(mf.dismissedGenres || {}) };
+      for (const g of cleanDisplayGenres(genres)) {
+        if (nextGenres[g]) {
+          const dec = nextGenres[g] - 1;
+          if (dec > 0) nextGenres[g] = dec;
+          else delete nextGenres[g];
+        }
+      }
+      return {
+        ...prev,
+        mindFeedback: {
+          ...mf,
+          dismissedGenres: nextGenres,
+          acceptedCount: (mf.acceptedCount || 0) + 1,
+        },
+      };
+    });
+  }, []);
 
   const clearAllData = useCallback(() => {
     if (pushTimerRef.current) window.clearTimeout(pushTimerRef.current);
@@ -4388,6 +4440,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         addJournalEntry,
         deleteJournalEntry,
         markAllNotificationsRead,
+        dismissMindRecommendation,
+        recordMindDiscoverAccept,
         createCustomList,
         toggleItemInList,
         updateProfile,

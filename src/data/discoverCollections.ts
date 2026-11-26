@@ -237,3 +237,36 @@ export function getDiscoverCollections(
   if (scope === 'all') return ALL_DISCOVER_COLLECTIONS;
   return ALL_DISCOVER_COLLECTIONS.filter((c) => c.domains.includes(scope));
 }
+
+/** Returns all curated titles from generatedMedia mapped as Discover candidates. */
+export function getAllCuratedDiscoverCandidates(): LiveSearchResult[] {
+  const out: LiveSearchResult[] = [];
+  const seen = new Set<string>();
+  const pushRef = (ref: { kind: 'show' | 'movie' | 'read' | 'game'; id: string }) => {
+    const key = `${ref.kind}:${ref.id}`;
+    if (seen.has(key)) return;
+    const mapped = mapRef(ref);
+    if (!mapped) return;
+    seen.add(key);
+    out.push(mapped);
+  };
+
+  for (const s of generated.shows as Show[]) pushRef({ kind: 'show', id: s.id });
+  for (const m of generated.movies as Movie[]) pushRef({ kind: 'movie', id: m.id });
+  for (const r of (generated.readItems || []) as ReadItem[]) pushRef({ kind: 'read', id: r.id });
+  for (const g of (generated.games || []) as GameItem[]) pushRef({ kind: 'game', id: g.id });
+
+  return out;
+}
+
+/** Finds curated thematic collections containing a given title or id. */
+export function getCollectionsForTitle(title: string, id?: string): DiscoverCollection[] {
+  const norm = title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return ALL_DISCOVER_COLLECTIONS.filter((col) =>
+    col.items.some((item) => {
+      if (id && item.id === id) return true;
+      const itemNorm = item.title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      return norm.length > 0 && itemNorm === norm;
+    })
+  );
+}

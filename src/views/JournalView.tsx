@@ -29,6 +29,7 @@ import type {
 } from '../types';
 import { evaluateCustomListProgress } from '../utils/containers';
 import { resolveComicEditionCover } from '../utils/editions';
+import { requestQueueCueMindSide } from './QueueView';
 import type { JournalStatsScope } from '../utils/journalAnalytics';
 import {
   computeAllMediaStats,
@@ -46,6 +47,7 @@ export function JournalView() {
   const {
     state,
     pushRoute,
+    switchTab,
     setNotificationsOpen,
     setSettingsOpen,
     addJournalEntry,
@@ -377,6 +379,10 @@ export function JournalView() {
               state={state}
               scope={advancedScope}
               onScopeChange={handleAdvancedScopeChange}
+              onOpenCueMind={(side) => {
+                requestQueueCueMindSide(side);
+                switchTab('queue');
+              }}
               onOpenItem={(item) => {
                 if (item.kind === 'show') pushRoute({ view: 'show-detail', showId: item.id });
                 else if (item.kind === 'movie') pushRoute({ view: 'movie-detail', movieId: item.id });

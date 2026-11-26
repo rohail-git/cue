@@ -305,6 +305,12 @@ export type PlayFilter = 'all' | 'playing' | 'backlog' | 'completed' | 'dropped'
 
 export type DetailCardMode = 'simple' | 'advanced';
 
+export interface CueMindFeedback {
+  dismissedIds: string[];
+  dismissedGenres?: Record<string, number>;
+  acceptedCount?: number;
+}
+
 export interface AppSettings {
   accentColor: string;
   watchLayout: LayoutMode;
@@ -316,6 +322,7 @@ export interface AppSettings {
   sortBy: SortMode;
   showPosterProgress: boolean;
   detailMode?: DetailCardMode;
+  cueMindIntroDismissed?: boolean;
   tmdbApiKey: string;
 }
 
@@ -354,6 +361,7 @@ export interface CueStoreState {
   journalEntries: JournalEntry[];
   lists: CustomList[];
   collectionRatings?: Record<string, CollectionRating>;
+  mindFeedback?: CueMindFeedback;
   profile: UserProfile;
   notifications: AppNotification[];
   settings: AppSettings;

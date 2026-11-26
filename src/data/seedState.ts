@@ -817,6 +817,11 @@ export function createSeedState(): CueStoreState {
     journalEntries,
     lists,
     collectionRatings: {},
+    mindFeedback: {
+      dismissedIds: [],
+      dismissedGenres: {},
+      acceptedCount: 0,
+    },
     profile: {
       name: 'Alex',
       handle: '@alex',
@@ -836,6 +841,7 @@ export function createSeedState(): CueStoreState {
       sortBy: 'recent',
       showPosterProgress: true,
       detailMode: 'simple',
+      cueMindIntroDismissed: false,
       tmdbApiKey: '',
     },
   };
@@ -860,6 +866,11 @@ export function createEmptyState(): CueStoreState {
     journalEntries: [],
     lists: [],
     collectionRatings: {},
+    mindFeedback: {
+      dismissedIds: [],
+      dismissedGenres: {},
+      acceptedCount: 0,
+    },
     profile: {
       name: 'You',
       handle: '@you',
@@ -879,6 +890,7 @@ export function createEmptyState(): CueStoreState {
       sortBy: 'recent',
       showPosterProgress: true,
       detailMode: 'simple',
+      cueMindIntroDismissed: false,
       tmdbApiKey: '',
     },
   };
