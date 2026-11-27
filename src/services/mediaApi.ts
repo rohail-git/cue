@@ -38,7 +38,12 @@ import {
   type PreparedImportEntry,
   type ResolvedImdbTitle,
 } from '../utils/mediaImport';
-import { extractSeriesTitleFromPageTitle, makeComicAtomicId } from '../utils/atoms';
+import {
+  extractReadItemIsbn,
+  extractSeriesTitleFromPageTitle,
+  isCollectedComicItem,
+  makeComicAtomicId,
+} from '../utils/atoms';
 import { resilientFetch as fetch } from '../utils/safeFetch';
 
 export type SearchMediaFilter =
@@ -151,6 +156,9 @@ const MINOR_TITLE_WORDS = new Set([
 const UPPERCASE_TITLE_TOKENS = new Set([
   'dc',
   'tpb',
+  'tp',
+  'hc',
+  'ogn',
   'usa',
   'uk',
   'ny',
@@ -5862,24 +5870,73 @@ export async function enrichImportCandidate(
     }
 
     if (candidate.kind === 'read') {
-      const hits = await searchLiveMedia(candidate.title, candidate.mediaType, tmdbApiKey);
-      const best = pickBestMatch(hits, 'read');
+      const fallbackRead = buildFallbackReadItem(candidate);
+      let readItem: ReadItem = fallbackRead;
+
+      let hits = await searchLiveMedia(candidate.title, candidate.mediaType, tmdbApiKey);
+      let best = pickBestMatch(hits, 'read');
+      if (!best && candidate.mediaType === 'comic') {
+        const cleanedQuery = stripEditionAffixes(candidate.title);
+        if (cleanedQuery && cleanedQuery.toLowerCase() !== candidate.title.toLowerCase()) {
+          hits = await searchLiveMedia(cleanedQuery, 'comic', tmdbApiKey);
+          best = pickBestMatch(hits, 'read');
+        }
+      }
       if (best) {
-        const read = hydrateLiveReadItem(best);
-        return {
-          candidate,
-          selected: !candidate.existingId,
-          read: {
-            ...read,
-            coverUrl: read.coverUrl || candidate.posterUrl || '',
-            backdropUrl: read.backdropUrl || candidate.posterUrl || '',
-          },
+        const liveRead = hydrateLiveReadItem(best);
+        readItem = {
+          ...liveRead,
+          title: candidate.mediaType === 'comic' ? formatDisplayTitle(candidate.title) : liveRead.title,
+          coverUrl: liveRead.coverUrl || candidate.posterUrl || '',
+          backdropUrl: liveRead.backdropUrl || candidate.posterUrl || '',
+          comicPublisher: liveRead.comicPublisher || fallbackRead.comicPublisher,
+          comicKind: isCollectedComicItem(fallbackRead) ? 'collection' : liveRead.comicKind,
         };
       }
+
+      if (readItem.format === 'comic') {
+        if (isCollectedComicItem(readItem)) {
+          const col = await fetchComicCollectionIssues({
+            title: candidate.title,
+            isbn: extractReadItemIsbn(readItem),
+            overview: readItem.overview,
+            publisher: readItem.comicPublisher,
+            wiki: readItem.comicSeriesWiki,
+            pageTitle: readItem.comicSeriesVolTitle,
+            limit: Math.max(80, readItem.totalUnits),
+          });
+          if (Object.keys(col.issues).length > 0) {
+            const total = col.totalIssues || readItem.totalUnits;
+            readItem = {
+              ...readItem,
+              comicKind: 'collection',
+              totalUnits: total,
+              issueDetails: col.issues,
+              issueDetailsKey: `default::${total}::${COMIC_ISSUE_CACHE_VERSION}`,
+            };
+          }
+        } else if (readItem.comicKind === 'series' && readItem.comicSeriesWiki && readItem.comicSeriesVolTitle) {
+          const { issues, totalIssues } = await fetchComicSeriesIssues(
+            readItem.comicSeriesWiki,
+            readItem.comicSeriesVolTitle,
+            Math.max(80, readItem.totalUnits)
+          );
+          if (Object.keys(issues).length > 0) {
+            const total = totalIssues || readItem.totalUnits;
+            readItem = {
+              ...readItem,
+              totalUnits: total,
+              issueDetails: issues,
+              issueDetailsKey: `default::${total}::${COMIC_ISSUE_CACHE_VERSION}`,
+            };
+          }
+        }
+      }
+
       return {
         candidate,
         selected: !candidate.existingId,
-        read: buildFallbackReadItem(candidate),
+        read: readItem,
       };
     }
 

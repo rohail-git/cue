@@ -65,14 +65,15 @@ export function extractReadItemIsbn(
   return undefined;
 }
 
-/** Returns true if a ReadItem represents a collected comic edition (Omnibus, TPB, HC, ISBN, etc.). */
+/** Returns true if a ReadItem represents a collected comic edition (Omnibus, TPB, TP, HC, DC Compact, ISBN, etc.). */
 export function isCollectedComicItem(
   item: Pick<ReadItem, 'format' | 'comicKind' | 'id' | 'isbn' | 'overview' | 'title'>
 ): boolean {
   if (item.format !== 'comic') return false;
+  if (item.comicKind === 'series') return false;
   if (item.comicKind === 'collection') return true;
   if (extractReadItemIsbn(item)) return true;
-  return /\b(?:omnibus|compendium|complete collection|epic collection|tpb|trade paperback|hardcover|deluxe edition|absolute|box set|collected)\b/i.test(
+  return /\b(?:omnibus|compendium|complete\s+collection|epic\s+collection|dc\s+compact(?:\s+comics)?|compact\s+(?:comics|edition)|tpb|tp|trade\s+paperback|hardcover|hc|deluxe\s+edition|absolute|box\s+set|collected|vol(?:ume)?\.?\s*\d+|book\s+(?:one|two|three|four|five|\d+))\b/i.test(
     item.title
   );
 }

@@ -25,6 +25,7 @@ import {
   applyResolvedImdbBatch,
   type ImportCandidate,
   type ImportConflictPolicy,
+  normalizeImportTitle,
   type ParsedImportBatch,
   parseImportFile,
   type PreparedImportEntry,
@@ -918,6 +919,13 @@ export function SmartImportModal() {
                           )}
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-ink truncate">{c.title}</p>
+                            {c.existingId &&
+                              c.existingTitle &&
+                              normalizeImportTitle(c.existingTitle) !== normalizeImportTitle(c.title) && (
+                                <p className="text-[10.5px] text-ink-dim truncate">
+                                  Matches existing: <span className="text-ink">{c.existingTitle}</span>
+                                </p>
+                              )}
                             <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                               {c.kind === 'read' || parsed.source === 'text-finished-log' ? (
                                 <button

@@ -6890,7 +6890,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           ? cappedHistory.slice(cappedHistory.length - MAX_HISTORY_ENTRIES)
           : cappedHistory;
 
-      const nextBatchState: CueStoreState = {
+      let nextBatchState: CueStoreState = {
         ...prev,
         shows: nextShows,
         movies: nextMovies,
@@ -6906,6 +6906,27 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         gameProgress: nextGameProgress,
         history: trimmedHistory,
       };
+
+      // Reconcile any newly imported comics that have hydrated atomic issueDetails
+      const addedReadSet = new Set(newReadIds);
+      for (const rid of newReadIds) {
+        const addedComic = nextBatchState.readItems[rid];
+        if (!addedComic || addedComic.format !== 'comic' || !addedComic.issueDetails) continue;
+        const reconciled = reconcileHydratedComicItemWithAtoms(nextBatchState, rid, addedComic);
+        for (const [otherId, nextProg] of Object.entries(reconciled.readProgress)) {
+          if (!addedReadSet.has(otherId) && nextProg !== nextBatchState.readProgress[otherId]) {
+            if (prevReadProgressBackup[otherId] === undefined) {
+              prevReadProgressBackup[otherId] = prev.readProgress[otherId] ?? null;
+            }
+          }
+        }
+        nextBatchState = {
+          ...nextBatchState,
+          atomicReadUnits: reconciled.atomicReadUnits,
+          readProgress: reconciled.readProgress,
+        };
+      }
+
       stateRef.current = nextBatchState;
       setState(nextBatchState);
 

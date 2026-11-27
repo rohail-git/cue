@@ -93,7 +93,7 @@ export function normalizeImportTitle(raw: string): string {
     .toLowerCase()
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[:\-–—_.,!?'"]/g, ' ')
+    .replace(/[:/\\\-–—_.,!?'"]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -2508,24 +2508,90 @@ export function canonicalImportReadKey(rawTitle: string): string {
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/\([^)]*\)/g, ' ')
-    .replace(/\[[^\]]*\]/g, ' ');
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/[/\\]/g, ' ');
 
   const colonIdx = s.indexOf(':');
   if (colonIdx > 4) {
     const afterColon = s.slice(colonIdx + 1);
-    const volSuffix = afterColon.match(/\b(?:vol(?:ume)?\.?\s*\d+|book\s+\d+|#\d+)\b/i);
+    const volSuffix = afterColon.match(
+      /\b(?:vol(?:ume)?\.?\s*\d+|book\s+(?:\d+|one|two|three|four|five)|#\d+)\b/i
+    );
     s = volSuffix ? `${s.slice(0, colonIdx)} ${volSuffix[0]}` : s.slice(0, colonIdx);
   }
 
   return s
     .replace(/\b(?:volume)\b/g, 'vol')
+    .replace(/\bbook\s+one\b/g, ' ')
+    .replace(/\bbook\s+two\b/g, 'vol 2')
+    .replace(/\bbook\s+three\b/g, 'vol 3')
+    .replace(/\bbook\s+four\b/g, 'vol 4')
+    .replace(/\bbook\s+five\b/g, 'vol 5')
+    .replace(/\b(?:vol\.?\s*1|book\s+1)\b/g, ' ')
     .replace(
-      /\b(?:omnibus|compendium|complete collection|epic collection|deluxe edition|collector'?s? edition|trade paperback|tpb|hardcover|hc|paperback|box set|edition|printing)\b/g,
+      /\b(?:dc\s+compact(?:\s+comics)?(?:\s+edition)?|compact\s+(?:comics|edition)|omnibus|compendium|complete\s+collection|epic\s+collection|deluxe\s+edition|collector'?s?\s+edition|trade\s+paperback|tpb|tp|hardcover|hc|paperback|box\s+set|edition|printing)\b/g,
       ' '
     )
     .replace(/[:\-–—_.,!?'"]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+export function canonicalComicSeriesBaseKey(rawTitle: string): string {
+  return canonicalImportReadKey(rawTitle)
+    .replace(/\b(?:vol\.?\s*\d+|book\s+\d+|#\d+)\b.*$/i, ' ')
+    .replace(/\bby\s+[a-z0-9\s.&]+$/i, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function inferComicEditionFromTitle(
+  rawTitle: string
+): 'compact' | 'omnibus' | 'hardcover' | 'tpb' | undefined {
+  const lower = rawTitle.toLowerCase();
+  if (/\b(?:dc\s+compact|compact\s+(?:comics|edition))\b/.test(lower)) return 'compact';
+  if (/\bomnibus\b/.test(lower)) return 'omnibus';
+  if (/\b(?:hc|hardcover|deluxe\s+edition|absolute)\b/.test(lower)) return 'hardcover';
+  if (/\b(?:tp|tpb|trade\s+paperback)\b/.test(lower)) return 'tpb';
+  return undefined;
+}
+
+function extractExplicitComicVolNumber(rawTitle: string): number | undefined {
+  const lower = rawTitle.toLowerCase();
+  const wordNums: Record<string, number> = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+  };
+  const m = lower.match(/\b(?:vol(?:ume)?\.?\s*|book\s+)(\d+|one|two|three|four|five|six)\b/i);
+  if (!m) return undefined;
+  return wordNums[m[1].toLowerCase()] ?? Number(m[1]);
+}
+
+function inferComicPublisher(title: string, explicitCreator?: string): string | undefined {
+  if (explicitCreator && explicitCreator !== 'Author') return explicitCreator;
+  const t = normalizeFoldLower(title);
+  if (
+    /\b(?:dc compact|superman|batman|wonder woman|green lantern|the flash|flash:|justice league|catwoman|poison ivy|watchmen|absolute power|harley quinn|aquaman|nightwing|teen titans)\b/.test(
+      t
+    )
+  ) {
+    return 'DC Comics';
+  }
+  if (
+    /\b(?:avengers|x-men|spider-man|thor|hulk|captain america|daredevil|wolverine|hawkeye|the vision|secret wars|fantastic four|venom|young avengers|war of kings|ultimates|iron man|moon knight|black panther|punisher)\b/.test(
+      t
+    )
+  ) {
+    return 'Marvel Comics';
+  }
+  if (/\b(?:he-man|hellboy|sin city)\b/.test(t)) return 'Dark Horse Comics';
+  if (/\b(?:power rangers|marian heretic)\b/.test(t)) return 'BOOM! Studios';
+  if (/\b(?:invincible|walking dead|spawn|night fever|monstress)\b/.test(t)) return 'Image Comics';
+  return undefined;
 }
 
 export function annotateImportDuplicates(
@@ -2561,13 +2627,41 @@ export function annotateImportDuplicates(
   const readByTitle = new Map<string, { id: string; title: string }>();
   const readByCanonical = new Map<string, { id: string; title: string }>();
   const readByIsbn = new Map<string, { id: string; title: string }>();
+  const readBySeriesBase = new Map<
+    string,
+    Array<{
+      id: string;
+      title: string;
+      format: ReadItem['format'];
+      comicKind?: 'series' | 'collection';
+      edition?: string;
+      editionTitle?: string;
+      volNum?: number;
+    }>
+  >();
+
   for (const id of state.readOrder) {
     const r = state.readItems[id];
     if (!r) continue;
+    const rp = state.readProgress[id];
     const norm = normalizeImportTitle(r.title);
     if (norm && !readByTitle.has(norm)) readByTitle.set(norm, { id, title: r.title });
     const canon = canonicalImportReadKey(r.title);
     if (canon && !readByCanonical.has(canon)) readByCanonical.set(canon, { id, title: r.title });
+    const baseKey = canonicalComicSeriesBaseKey(r.title);
+    if (baseKey) {
+      const list = readBySeriesBase.get(baseKey) || [];
+      list.push({
+        id,
+        title: r.title,
+        format: r.format,
+        comicKind: r.comicKind,
+        edition: rp?.edition || inferComicEditionFromTitle(r.title),
+        editionTitle: rp?.editionTitle,
+        volNum: extractExplicitComicVolNumber(r.title),
+      });
+      readBySeriesBase.set(baseKey, list);
+    }
     const isbnFromField = r.isbn ? extractCleanIsbn(r.isbn) : '';
     const isbnFromId = extractCleanIsbn(id.match(/(97[89]\d{10}|\d{9}[0-9Xx])/)?.[1] || '');
     for (const code of [isbnFromField, isbnFromId]) {
@@ -2616,9 +2710,34 @@ export function annotateImportDuplicates(
       return match ? { ...c, existingId: match.id, existingTitle: match.title } : c;
     }
     if (c.kind === 'read') {
-      const match =
+      const directMatch =
         readByTitle.get(cNorm) || readByCanonical.get(canonicalImportReadKey(c.title));
-      return match ? { ...c, existingId: match.id, existingTitle: match.title } : c;
+      if (directMatch) {
+        return { ...c, existingId: directMatch.id, existingTitle: directMatch.title };
+      }
+      if (c.mediaType === 'comic') {
+        const baseKey = canonicalComicSeriesBaseKey(c.title);
+        const candEdition = inferComicEditionFromTitle(c.title);
+        const candVol = extractExplicitComicVolNumber(c.title);
+        const baseMatches = readBySeriesBase.get(baseKey) || [];
+        const matched = baseMatches.find((existing) => {
+          if (existing.format !== 'comic') return false;
+          // Exact same edition type (e.g. DC Compact TPB in library vs DC Compact Comics Edition TP in import)
+          if (candEdition && existing.edition === candEdition) {
+            return !candVol || !existing.volNum || candVol === existing.volNum;
+          }
+          // Single-edition / Book One / Vol. 1 trade matches the parent comic series in library (not Vol. 2+ or Omnibus)
+          const isSingleBookOrVol1 = (!candVol || candVol === 1) && candEdition !== 'omnibus';
+          if (isSingleBookOrVol1 && existing.comicKind === 'series') {
+            return true;
+          }
+          return false;
+        });
+        if (matched) {
+          return { ...c, existingId: matched.id, existingTitle: matched.title };
+        }
+      }
+      return c;
     }
     const match = gameByTitle.get(cNorm);
     return match ? { ...c, existingId: match.id, existingTitle: match.title } : c;
@@ -2701,20 +2820,29 @@ export function buildFallbackReadItem(c: ImportCandidate): ReadItem {
   const totalUnits = c.totalUnits || (format === 'comic' ? 12 : format === 'manga' ? 100 : 24);
   const cover = c.posterUrl || '';
   const cleanIsbn = c.externalConst ? extractCleanIsbn(c.externalConst) : '';
+  const inferredPub = format === 'comic' ? inferComicPublisher(c.title, c.creator) : undefined;
+  const isCollected =
+    format === 'comic' &&
+    /\b(?:omnibus|compendium|complete\s+collection|epic\s+collection|dc\s+compact(?:\s+comics)?|compact\s+(?:comics|edition)|tpb|tp|trade\s+paperback|hardcover|hc|deluxe\s+edition|absolute|box\s+set|collected|vol(?:ume)?\.?\s*\d+|book\s+(?:one|two|three|four|five|\d+))\b/i.test(
+      c.title
+    );
+  const resolvedCreator = c.creator || inferredPub || 'Author';
   return {
     id,
     format,
     unit: format === 'comic' ? 'issues' : 'chapters',
     title: c.title,
-    creator: c.creator || 'Author',
+    creator: resolvedCreator,
     year: c.year,
     totalUnits,
     baseTotalUnits: totalUnits,
-    genres: c.genres.length > 0 ? c.genres : ['Fiction'],
+    genres: c.genres.length > 0 ? c.genres : [format === 'comic' ? 'Comics' : 'Fiction'],
     rating: c.communityRating ? Number((c.communityRating / 2).toFixed(1)) : 4.3,
     coverUrl: cover,
     backdropUrl: cover,
-    overview: c.overview || `${c.title} by ${c.creator || 'Author'}.`,
+    overview: c.overview || `${c.title} · ${resolvedCreator}.`,
+    ...(isCollected ? { comicKind: 'collection' as const } : {}),
+    ...(inferredPub ? { comicPublisher: inferredPub } : {}),
     ...(cleanIsbn ? { isbn: cleanIsbn } : {}),
   };
 }
