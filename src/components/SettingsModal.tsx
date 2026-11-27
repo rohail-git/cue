@@ -25,6 +25,7 @@ import {
   exportFinishedLogTxt,
   exportLibraryCsv,
 } from '../utils/mediaExport';
+import { RecentImportsList } from './RecentImportsList';
 import {
   fetchLiveHealth,
   scanAndRepairLibrary,
@@ -42,6 +43,9 @@ export function SettingsModal() {
     updateSettings,
     patchMediaMetadata,
     exportLibraryJson,
+    recentImports,
+    undoImportById,
+    dismissImportRecord,
     selectiveReset,
     clearAllData,
     showToast,
@@ -577,6 +581,16 @@ export function SettingsModal() {
                 </button>
               </div>
             </div>
+
+            {recentImports.length > 0 && (
+              <div className="pt-2 border-t border-white/8">
+                <RecentImportsList
+                  records={recentImports}
+                  onUndo={undoImportById}
+                  onDismiss={dismissImportRecord}
+                />
+              </div>
+            )}
           </section>
 
           {/* Reset Progress Data vs Remove All Data */}

@@ -30,12 +30,14 @@ import type {
   GameChapterUnit,
   GameItem,
   GamePlatform,
+  GameProgress,
   GameWatchStatus,
   GeneralizedComicEditionId,
   HistoryEntry,
   JournalEntry,
   MediaDomain,
   Movie,
+  MovieProgress,
   MovieWatchStatus,
   OwnershipStatus,
   PersonalMood,
@@ -87,6 +89,14 @@ import {
   normalizeImportDateIso,
   type PreparedImportEntry,
 } from '../utils/mediaImport';
+import {
+  clearImportHistory,
+  type ImportBatchRecord,
+  loadImportHistory,
+  MAX_IMPORT_HISTORY,
+  rollbackImportRecord,
+  saveImportHistory,
+} from '../utils/importHistory';
 import {
   applyAutoRating,
   getGameChaptersAverage,
@@ -547,11 +557,15 @@ interface CueContextValue {
   updateSettings: (patch: Partial<AppSettings>) => void;
   exportLibraryJson: () => string;
   importLibraryJson: (rawJson: string) => { ok: boolean; summary: string };
-  restoreCueBackup: (backupState: CueStoreState) => void;
+  restoreCueBackup: (backupState: CueStoreState, fileName?: string) => void;
   importSmartBatch: (
     entries: PreparedImportEntry[],
-    policy: ImportConflictPolicy
+    policy: ImportConflictPolicy,
+    meta?: { sourceLabel?: string; fileName?: string }
   ) => { added: number; updated: number; skipped: number };
+  recentImports: ImportBatchRecord[];
+  undoImportById: (importId: string) => void;
+  dismissImportRecord: (importId: string) => void;
   undoLastImport: () => void;
   selectiveReset: (scope: 'watch' | 'read' | 'play' | 'all') => void;
   clearAllData: () => void;
@@ -613,6 +627,11 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const [settingsOpen, setSettingsOpenRaw] = useState(false);
   const [insightsOpen, setInsightsOpenRaw] = useState(false);
   const [importModalOpen, setImportModalOpenRaw] = useState(false);
+  const [recentImports, setRecentImports] = useState<ImportBatchRecord[]>(() =>
+    loadImportHistory()
+  );
+  const recentImportsRef = useRef<ImportBatchRecord[]>(recentImports);
+  recentImportsRef.current = recentImports;
   const lastPreImportStateRef = useRef<CueStoreState | null>(null);
   const routeStackRef = useRef<RouteView[]>(routeStack);
   routeStackRef.current = routeStack;
@@ -6289,30 +6308,119 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     );
   }, [state]);
 
+  const commitImportHistory = useCallback((nextRecords: ImportBatchRecord[]) => {
+    const capped = nextRecords.slice(0, MAX_IMPORT_HISTORY);
+    recentImportsRef.current = capped;
+    setRecentImports(capped);
+    saveImportHistory(capped);
+  }, []);
+
+  const dismissImportRecord = useCallback(
+    (importId: string) => {
+      commitImportHistory(recentImportsRef.current.filter((r) => r.id !== importId));
+    },
+    [commitImportHistory]
+  );
+
+  const undoImportById = useCallback(
+    (importId: string) => {
+      const target = recentImportsRef.current.find((r) => r.id === importId);
+      if (!target) {
+        const fallbackSnapshot = lastPreImportStateRef.current;
+        if (!fallbackSnapshot) return;
+        lastPreImportStateRef.current = null;
+        stateRef.current = fallbackSnapshot;
+        setState(fallbackSnapshot);
+        showToast('Import undone');
+        return;
+      }
+
+      if (target.kind === 'backup-restore' && !target.fullSnapshot) {
+        const fallbackSnapshot = lastPreImportStateRef.current;
+        if (!fallbackSnapshot) {
+          showToast('Pre-backup snapshot unavailable');
+          return;
+        }
+        lastPreImportStateRef.current = null;
+        stateRef.current = fallbackSnapshot;
+        setState(fallbackSnapshot);
+        commitImportHistory(recentImportsRef.current.filter((r) => r.id !== importId));
+        showToast('Restored pre-backup library');
+        return;
+      }
+
+      const { nextState, removedCount, restoredCount } = rollbackImportRecord(
+        stateRef.current,
+        target
+      );
+      lastPreImportStateRef.current = null;
+      stateRef.current = nextState;
+      setState(nextState);
+      commitImportHistory(recentImportsRef.current.filter((r) => r.id !== importId));
+
+      if (target.kind === 'backup-restore') {
+        showToast('Restored pre-backup library');
+      } else {
+        const parts: string[] = [];
+        if (removedCount > 0) parts.push(`Removed ${removedCount}`);
+        if (restoredCount > 0) parts.push(`restored ${restoredCount}`);
+        showToast(parts.length > 0 ? `Undid import · ${parts.join(' · ')}` : 'Import undone');
+      }
+    },
+    [commitImportHistory, showToast]
+  );
+
   const undoLastImport = useCallback(() => {
-    const snapshot = lastPreImportStateRef.current;
-    if (!snapshot) return;
-    lastPreImportStateRef.current = null;
-    stateRef.current = snapshot;
-    setState(snapshot);
-    showToast('Import undone');
-  }, [showToast]);
+    if (lastPreImportStateRef.current) {
+      const snapshot = lastPreImportStateRef.current;
+      lastPreImportStateRef.current = null;
+      stateRef.current = snapshot;
+      setState(snapshot);
+      showToast('Undone');
+      return;
+    }
+    const latest = recentImportsRef.current[0];
+    if (latest) {
+      undoImportById(latest.id);
+    }
+  }, [showToast, undoImportById]);
 
   const restoreCueBackup = useCallback(
-    (backupState: CueStoreState) => {
+    (backupState: CueStoreState, fileName?: string) => {
+      const preBackup = stateRef.current;
       const normalized = normalizeLoadedCueState({ ...backupState });
-      lastPreImportStateRef.current = stateRef.current;
+      const record: ImportBatchRecord = {
+        id: `imp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        importedAt: new Date().toISOString(),
+        sourceLabel: 'Cue Backup JSON',
+        fileName,
+        kind: 'backup-restore',
+        addedCount: 0,
+        updatedCount: 0,
+        skippedCount: 0,
+        addedShowIds: [],
+        addedMovieIds: [],
+        addedReadIds: [],
+        addedGameIds: [],
+        addedHistoryIds: [],
+        fullSnapshot: preBackup,
+      };
+      lastPreImportStateRef.current = preBackup;
       stateRef.current = normalized;
       setState(normalized);
-      showToast('Restored cue library backup', 'Undo', undoLastImport, { tone: 'undo' });
+      commitImportHistory([record, ...recentImportsRef.current]);
+      showToast('Restored cue library backup', 'Undo', () => undoImportById(record.id), {
+        tone: 'undo',
+      });
     },
-    [showToast, undoLastImport]
+    [commitImportHistory, showToast, undoImportById]
   );
 
   const importSmartBatch = useCallback(
     (
       rawEntries: PreparedImportEntry[],
-      policy: ImportConflictPolicy
+      policy: ImportConflictPolicy,
+      meta?: { sourceLabel?: string; fileName?: string }
     ): { added: number; updated: number; skipped: number } => {
       const selectedEntries = rawEntries.filter((e) => e.selected);
       if (selectedEntries.length === 0) {
@@ -6341,6 +6449,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       const newReadIds: string[] = [];
       const newGameIds: string[] = [];
       const historyAdds: HistoryEntry[] = [];
+
+      const prevReadItemsBackup: Record<string, ReadItem> = {};
+      const prevShowProgressBackup: Record<string, ShowProgress | null> = {};
+      const prevMovieProgressBackup: Record<string, MovieProgress | null> = {};
+      const prevReadProgressBackup: Record<string, ReadProgress | null> = {};
+      const prevGameProgressBackup: Record<string, GameProgress | null> = {};
 
       let added = 0;
       let updated = 0;
@@ -6434,7 +6548,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 }
                 if (changed) patched.seasonFinishedAt = nextSeasons;
               }
-              if (changed) nextShowProgress[existingId] = patched;
+              if (changed) {
+                if (prevShowProgressBackup[existingId] === undefined) {
+                  prevShowProgressBackup[existingId] = ep;
+                }
+                nextShowProgress[existingId] = patched;
+              }
             }
           } else if (c.kind === 'movie' && nextMovies[existingId]) {
             const mp = nextMovieProgress[existingId];
@@ -6474,10 +6593,16 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 changed = true;
               }
             }
-            if (changed) nextMovieProgress[existingId] = patched;
+            if (changed) {
+              if (prevMovieProgressBackup[existingId] === undefined) {
+                prevMovieProgressBackup[existingId] = mp ?? null;
+              }
+              nextMovieProgress[existingId] = patched;
+            }
           } else if (c.kind === 'read' && nextReadItems[existingId]) {
             const rp = nextReadProgress[existingId];
             const item = nextReadItems[existingId];
+            let readItemChanged = false;
             const targetFormat: ReadItem['format'] | undefined =
               c.mediaType === 'comic'
                 ? 'comic'
@@ -6487,6 +6612,9 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                     ? 'novel'
                     : undefined;
             if (targetFormat && item.format !== targetFormat && (item.format === 'novel' || policy === 'merge_missing')) {
+              if (!prevReadItemsBackup[existingId]) {
+                prevReadItemsBackup[existingId] = prev.readItems[existingId];
+              }
               const nextUnit = targetFormat === 'comic' ? 'issues' : 'chapters';
               const formatGenre =
                 targetFormat === 'comic' ? 'Comics' : targetFormat === 'manga' ? 'Manga' : 'Fiction';
@@ -6500,9 +6628,13 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 genres: [formatGenre, ...filteredGenres],
               };
               changed = true;
+              readItemChanged = true;
             }
             const nextCover = c.posterUrl || entry.read?.coverUrl || '';
             if (!nextReadItems[existingId].coverUrl && nextCover) {
+              if (!readItemChanged && !prevReadItemsBackup[existingId]) {
+                prevReadItemsBackup[existingId] = prev.readItems[existingId];
+              }
               nextReadItems[existingId] = {
                 ...nextReadItems[existingId],
                 coverUrl: nextCover,
@@ -6511,10 +6643,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               changed = true;
             }
             if (rp) {
+              let rpChanged = false;
               const patched = { ...rp };
               if (!patched.rating && c.userRating) {
                 patched.rating = c.userRating;
                 changed = true;
+                rpChanged = true;
               }
               if (rp.status === 'want_to_read' && c.completed) {
                 const updatedItem = nextReadItems[existingId];
@@ -6525,11 +6659,13 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 patched.finishedAt = patched.finishedAt || primaryIso;
                 patched.lastReadAt = patched.lastReadAt || primaryIso;
                 changed = true;
+                rpChanged = true;
               }
               if (c.completed && primaryIso) {
                 if (!patched.finishedAt) {
                   patched.finishedAt = primaryIso;
                   changed = true;
+                  rpChanged = true;
                 }
                 const { runs, addedCount } = mergeImportRuns(
                   patched.completedRuns,
@@ -6541,9 +6677,15 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                   patched.completedRuns = runs;
                   patched.rereadCount = Math.max(patched.rereadCount || 0, runs.length);
                   changed = true;
+                  rpChanged = true;
                 }
               }
-              if (changed) nextReadProgress[existingId] = patched;
+              if (rpChanged) {
+                if (prevReadProgressBackup[existingId] === undefined) {
+                  prevReadProgressBackup[existingId] = rp;
+                }
+                nextReadProgress[existingId] = patched;
+              }
             }
           } else if (c.kind === 'game' && nextGames[existingId]) {
             const gp = nextGameProgress[existingId];
@@ -6578,7 +6720,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                   changed = true;
                 }
               }
-              if (changed) nextGameProgress[existingId] = patched;
+              if (changed) {
+                if (prevGameProgressBackup[existingId] === undefined) {
+                  prevGameProgressBackup[existingId] = gp;
+                }
+                nextGameProgress[existingId] = patched;
+              }
             }
           }
 
@@ -6736,7 +6883,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         }
       });
 
-      const cappedHistory = [...(prev.history || []), ...historyAdds.slice(-15)];
+      const keptHistoryAdds = historyAdds.slice(-15);
+      const cappedHistory = [...(prev.history || []), ...keptHistoryAdds];
       const trimmedHistory =
         cappedHistory.length > MAX_HISTORY_ENTRIES
           ? cappedHistory.slice(cappedHistory.length - MAX_HISTORY_ENTRIES)
@@ -6761,17 +6909,56 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       stateRef.current = nextBatchState;
       setState(nextBatchState);
 
+      let recordedImportId: string | undefined;
+      if (added > 0 || updated > 0) {
+        const record: ImportBatchRecord = {
+          id: `imp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          importedAt: new Date().toISOString(),
+          sourceLabel: meta?.sourceLabel || 'Smart Import',
+          fileName: meta?.fileName,
+          kind: 'smart-import',
+          addedCount: added,
+          updatedCount: updated,
+          skippedCount: skipped,
+          addedShowIds: newShowIds,
+          addedMovieIds: newMovieIds,
+          addedReadIds: newReadIds,
+          addedGameIds: newGameIds,
+          addedHistoryIds: keptHistoryAdds.map((h) => h.id),
+          ...(Object.keys(prevReadItemsBackup).length > 0
+            ? { prevReadItems: prevReadItemsBackup }
+            : {}),
+          ...(Object.keys(prevShowProgressBackup).length > 0
+            ? { prevShowProgress: prevShowProgressBackup }
+            : {}),
+          ...(Object.keys(prevMovieProgressBackup).length > 0
+            ? { prevMovieProgress: prevMovieProgressBackup }
+            : {}),
+          ...(Object.keys(prevReadProgressBackup).length > 0
+            ? { prevReadProgress: prevReadProgressBackup }
+            : {}),
+          ...(Object.keys(prevGameProgressBackup).length > 0
+            ? { prevGameProgress: prevGameProgressBackup }
+            : {}),
+        };
+        recordedImportId = record.id;
+        commitImportHistory([record, ...recentImportsRef.current]);
+      }
+
       const summaryParts: string[] = [];
       if (added > 0) summaryParts.push(`Added ${added}`);
       if (updated > 0) summaryParts.push(`Updated ${updated}`);
       if (skipped > 0) summaryParts.push(`${skipped} skipped`);
-      showToast(summaryParts.join(' · ') || 'Nothing changed', 'Undo', undoLastImport, {
-        tone: 'undo',
-      });
+      showToast(
+        summaryParts.join(' · ') || 'Nothing changed',
+        recordedImportId ? 'Undo' : undefined,
+        recordedImportId ? () => undoImportById(recordedImportId!) : undefined,
+        { tone: 'undo' }
+      );
 
       return { added, updated, skipped };
     },
-    [showToast, undoLastImport]
+    [commitImportHistory, showToast, undoImportById]
   );
 
   const autoClassifyReadLibrary = useCallback((): { comics: number; manga: number } => {
@@ -7063,9 +7250,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem(SYNC_CODE_KEY);
       localStorage.removeItem(SYNC_TS_KEY);
       localStorage.removeItem(LOCAL_EDIT_TS_KEY);
+      clearImportHistory();
     } catch {
       // ignore storage errors
     }
+    recentImportsRef.current = [];
+    setRecentImports([]);
     setSyncCode(null);
     setLastSyncedAt(null);
     setSyncStatus('idle');
@@ -7212,6 +7402,9 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         importLibraryJson,
         restoreCueBackup,
         importSmartBatch,
+        recentImports,
+        undoImportById,
+        dismissImportRecord,
         undoLastImport,
         selectiveReset,
         clearAllData,

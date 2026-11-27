@@ -19,6 +19,7 @@ import {
   resolveImdbIdsBatch,
 } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
+import { RecentImportsList } from './RecentImportsList';
 import {
   annotateImportDuplicates,
   applyResolvedImdbBatch,
@@ -38,6 +39,9 @@ export function SmartImportModal() {
     setImportModalOpen,
     importSmartBatch,
     restoreCueBackup,
+    recentImports,
+    undoImportById,
+    dismissImportRecord,
     showToast,
   } = useCueStore();
 
@@ -332,7 +336,7 @@ export function SmartImportModal() {
     if (!parsed) return;
 
     if (parsed.source === 'cue-backup' && parsed.cueBackupState) {
-      restoreCueBackup(parsed.cueBackupState);
+      restoreCueBackup(parsed.cueBackupState, fileName || undefined);
       setImportModalOpen(false);
       return;
     }
@@ -373,7 +377,10 @@ export function SmartImportModal() {
         return;
       }
 
-      importSmartBatch(prepared, policy);
+      importSmartBatch(prepared, policy, {
+        sourceLabel: parsed.sourceLabel,
+        fileName: fileName || undefined,
+      });
       setImporting(false);
       setParsed(null);
       setRawInput('');
@@ -518,6 +525,17 @@ export function SmartImportModal() {
                   </div>
                 )}
               </div>
+
+              {recentImports.length > 0 && (
+                <div className="pt-2 border-t border-white/8">
+                  <RecentImportsList
+                    records={recentImports}
+                    onUndo={undoImportById}
+                    onDismiss={dismissImportRecord}
+                    maxItems={3}
+                  />
+                </div>
+              )}
             </div>
           )}
 
