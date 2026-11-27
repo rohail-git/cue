@@ -21,24 +21,17 @@ import { YearWrappedModal } from '../components/YearWrappedModal';
 import { useCueStore } from '../store/useCueStore';
 import type {
   DetailCardMode,
-  GameItem,
   MediaDomain,
-  Movie,
   PersonalMood,
-  ReadItem,
-  Show,
 } from '../types';
 import { evaluateCustomListProgress } from '../utils/containers';
-import { resolveComicEditionCover } from '../utils/editions';
 import { requestQueueCueMindSide } from './QueueView';
 import type { JournalStatsScope } from '../utils/journalAnalytics';
+import { buildRecentEntries } from '../utils/recentEntries';
 import {
   computeAllMediaStats,
-  formatGameMeta,
   formatReadStatSummary,
   formatRelativeTime,
-  getReadStats,
-  getShowStats,
 } from '../utils/stats';
 
 let sessionJournalMode: DetailCardMode | null = null;
@@ -179,39 +172,37 @@ export function JournalView() {
     setComposeOpen(true);
   };
 
-  const watchShelf = useMemo(() => {
-    const items: Array<{ kind: 'show' | 'movie'; id: string; title: string; year: number; poster: string; ratio?: number }> = [];
+  const recentEntries = useMemo(() => buildRecentEntries(state, 18), [state]);
+
+  const totalLibraryCount = useMemo(() => {
+    let count = 0;
     for (const id of state.showOrder) {
-      const s: Show | undefined = state.shows[id];
-      const prog = state.showProgress[id];
-      if (!s || !prog?.bookmarked) continue;
-      const st = getShowStats(s, prog);
-      items.push({ kind: 'show', id: s.id, title: s.title, year: s.year, poster: s.posterUrl, ratio: st.progressRatio });
+      if (state.shows[id] && state.showProgress[id]?.bookmarked) count += 1;
     }
     for (const id of state.movieOrder) {
-      const m: Movie | undefined = state.movies[id];
-      const prog = state.movieProgress[id];
-      if (!m || !prog) continue;
-      items.push({ kind: 'movie', id: m.id, title: m.title, year: m.year, poster: m.posterUrl, ratio: prog.watchCount > 0 ? 1 : 0 });
+      if (state.movies[id] && state.movieProgress[id]) count += 1;
     }
-    return items;
-  }, [state.showOrder, state.shows, state.showProgress, state.movieOrder, state.movies, state.movieProgress]);
-
-  const readShelf = useMemo(
-    () =>
-      state.readOrder
-        .map((id) => state.readItems[id])
-        .filter((r): r is ReadItem => Boolean(r) && Boolean(state.readProgress[r.id]?.bookmarked)),
-    [state.readOrder, state.readItems, state.readProgress]
-  );
-
-  const playShelf = useMemo(
-    () =>
-      state.gameOrder
-        .map((id) => state.games[id])
-        .filter((g): g is GameItem => Boolean(g) && Boolean(state.gameProgress[g.id]?.bookmarked)),
-    [state.gameOrder, state.games, state.gameProgress]
-  );
+    for (const id of state.readOrder) {
+      if (state.readItems[id] && state.readProgress[id]?.bookmarked) count += 1;
+    }
+    for (const id of state.gameOrder) {
+      if (state.games[id] && state.gameProgress[id]?.bookmarked) count += 1;
+    }
+    return count;
+  }, [
+    state.showOrder,
+    state.shows,
+    state.showProgress,
+    state.movieOrder,
+    state.movies,
+    state.movieProgress,
+    state.readOrder,
+    state.readItems,
+    state.readProgress,
+    state.gameOrder,
+    state.games,
+    state.gameProgress,
+  ]);
 
   const visibleEntries = useMemo(() => {
     if (diaryFilter === 'all') return state.journalEntries;
@@ -617,155 +608,76 @@ export function JournalView() {
           </div>
         </section>
 
-        {/* Watch Shelf */}
-        <section className="mb-7">
-          <button
-            type="button"
-            onClick={() => pushRoute({ view: 'library-watch' })}
-            className="flex items-center gap-1 font-display font-bold text-[20px] text-ink hover:text-brand transition-colors mb-3"
-          >
-            <span>Watch</span>
-            <ChevronRight className="w-5 h-5 text-ink-dim" />
-          </button>
+        {/* Single Cross-Media Recent Entries Row + Link to Dedicated Library Page */}
+        <section className="mb-8">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <h2 className="font-display font-bold text-[20px] text-ink">Recent Entries</h2>
+            <button
+              type="button"
+              onClick={() => pushRoute({ view: 'library-all' })}
+              className="inline-flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-full bg-surface border border-white/10 text-ink hover:bg-surface-raised transition-colors shrink-0"
+            >
+              <span>Library ({totalLibraryCount})</span>
+              <ChevronRight className="w-3.5 h-3.5 text-ink-dim" />
+            </button>
+          </div>
 
-          {watchShelf.length === 0 ? (
-            <p className="text-xs text-ink-faint">No Watch titles added yet.</p>
+          {recentEntries.length === 0 ? (
+            <p className="text-xs text-ink-faint">No entries logged yet.</p>
           ) : (
-            <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
-              {watchShelf.map((item) => (
-                <button
-                  key={`${item.kind}-${item.id}`}
-                  type="button"
-                  onClick={() =>
-                    item.kind === 'show'
-                      ? pushRoute({ view: 'show-detail', showId: item.id })
-                      : pushRoute({ view: 'movie-detail', movieId: item.id })
-                  }
-                  className="w-[116px] sm:w-[134px] shrink-0 text-left group"
-                >
-                  <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
-                    <MediaImage
-                      src={item.poster}
-                      alt={item.title}
-                      className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                    />
-                    {state.settings.showPosterProgress && (item.ratio || 0) > 0 && (
-                      <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
-                        <div
-                          className="h-full bg-watch"
-                          style={{ width: `${Math.round((item.ratio || 0) * 100)}%` }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  <p className="mt-2 text-[13px] font-medium text-ink line-clamp-2 leading-snug">
-                    {item.title}
-                  </p>
-                  <p className="text-[12px] text-ink-dim tabular-nums mt-0.5">{item.year}</p>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {/* Read Shelf */}
-        <section className="mb-7">
-          <button
-            type="button"
-            onClick={() => pushRoute({ view: 'library-read' })}
-            className="flex items-center gap-1 font-display font-bold text-[20px] text-ink hover:text-read transition-colors mb-3"
-          >
-            <span>Read</span>
-            <ChevronRight className="w-5 h-5 text-ink-dim" />
-          </button>
-
-          {readShelf.length === 0 ? (
-            <p className="text-xs text-ink-faint">No Read titles added yet.</p>
-          ) : (
-            <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
-              {readShelf.map((item) => {
-                const st = getReadStats(item, state.readProgress[item.id]);
+            <div className="flex items-start gap-3 overflow-x-auto no-scrollbar pb-1">
+              {recentEntries.map((item) => {
+                const badgeClass =
+                  item.domain === 'watch'
+                    ? 'text-watch'
+                    : item.domain === 'read'
+                      ? 'text-read'
+                      : 'text-play';
+                const barClass =
+                  item.domain === 'watch'
+                    ? 'bg-watch'
+                    : item.domain === 'read'
+                      ? 'bg-read'
+                      : 'bg-play';
+                const domainLabel =
+                  item.domain === 'watch' ? 'Watch' : item.domain === 'read' ? 'Read' : 'Play';
                 return (
                   <button
-                    key={item.id}
+                    key={item.key}
                     type="button"
-                    onClick={() => pushRoute({ view: 'read-detail', readId: item.id })}
-                    className="w-[116px] sm:w-[134px] shrink-0 text-left group"
+                    onClick={() => {
+                      if (item.kind === 'show') pushRoute({ view: 'show-detail', showId: item.id });
+                      else if (item.kind === 'movie') pushRoute({ view: 'movie-detail', movieId: item.id });
+                      else if (item.kind === 'read') pushRoute({ view: 'read-detail', readId: item.id });
+                      else pushRoute({ view: 'game-detail', gameId: item.id });
+                    }}
+                    className="w-[116px] sm:w-[134px] shrink-0 flex flex-col items-stretch justify-start self-start text-left group"
                   >
-                    <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
+                    <div className="relative aspect-[2/3] w-full rounded-[16px] overflow-hidden bg-surface border border-white/8">
                       <MediaImage
-                        src={resolveComicEditionCover(
-                          item,
-                          state.readProgress[item.id]?.edition,
-                          state.readProgress[item.id]
-                        )}
+                        src={item.poster}
                         alt={item.title}
                         className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
                       />
-                      {state.settings.showPosterProgress && st.current > 0 && (
+                      <span
+                        className={`absolute top-1.5 left-1.5 px-1.5 py-[2px] rounded bg-[#0F1318]/85 border border-white/10 text-[9px] font-semibold uppercase tracking-wide leading-none ${badgeClass}`}
+                      >
+                        {domainLabel}
+                      </span>
+                      {state.settings.showPosterProgress && item.ratio > 0 && (
                         <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
                           <div
-                            className="h-full bg-read"
-                            style={{ width: `${Math.round(st.ratio * 100)}%` }}
+                            className={`h-full ${barClass}`}
+                            style={{ width: `${Math.round(item.ratio * 100)}%` }}
                           />
                         </div>
                       )}
                     </div>
-                    <p className="mt-2 text-[13px] font-medium text-ink line-clamp-2 leading-snug">
+                    <p className="mt-2 w-full text-[13px] font-medium text-ink line-clamp-2 leading-snug">
                       {item.title}
                     </p>
-                    <p className="text-[12px] text-ink-dim truncate tabular-nums mt-0.5">{item.creator}</p>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
-        {/* Play Shelf */}
-        <section className="mb-7">
-          <button
-            type="button"
-            onClick={() => pushRoute({ view: 'library-play' })}
-            className="flex items-center gap-1 font-display font-bold text-[20px] text-ink hover:text-play transition-colors mb-3"
-          >
-            <span>Play</span>
-            <ChevronRight className="w-5 h-5 text-ink-dim" />
-          </button>
-
-          {playShelf.length === 0 ? (
-            <p className="text-xs text-ink-faint">No Play titles added yet.</p>
-          ) : (
-            <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
-              {playShelf.map((game) => {
-                const prog = state.gameProgress[game.id];
-                return (
-                  <button
-                    key={game.id}
-                    type="button"
-                    onClick={() => pushRoute({ view: 'game-detail', gameId: game.id })}
-                    className="w-[116px] sm:w-[134px] shrink-0 text-left group"
-                  >
-                    <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
-                      <MediaImage
-                        src={game.coverUrl}
-                        alt={game.title}
-                        className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                      />
-                      {state.settings.showPosterProgress && (prog?.completionPct || 0) > 0 && (
-                        <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
-                          <div
-                            className="h-full bg-play"
-                            style={{ width: `${prog?.completionPct || 0}%` }}
-                          />
-                        </div>
-                      )}
-                    </div>
-                    <p className="mt-2 text-[13px] font-medium text-ink line-clamp-2 leading-snug">
-                      {game.title}
-                    </p>
-                    <p className="text-[12px] text-ink-dim truncate tabular-nums mt-0.5">
-                      {formatGameMeta(game, prog, { includeDeveloper: false })}
+                    <p className="w-full text-[11.5px] text-ink-dim truncate tabular-nums mt-0.5">
+                      {item.subtitle}
                     </p>
                   </button>
                 );

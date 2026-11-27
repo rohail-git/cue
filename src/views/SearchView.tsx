@@ -502,8 +502,8 @@ export function SearchView() {
         }}
         className={`group text-left cursor-pointer ${
           layout === 'rail'
-            ? 'w-[112px] sm:w-[136px] md:w-[150px] shrink-0 snap-start'
-            : 'min-w-0'
+            ? 'w-[112px] sm:w-[136px] md:w-[150px] shrink-0 snap-start self-start'
+            : 'min-w-0 self-start'
         }`}
       >
         <div className="relative aspect-[2/3] rounded-[14px] sm:rounded-[16px] overflow-hidden bg-surface border border-white/8">
@@ -555,7 +555,7 @@ export function SearchView() {
       key={col.id}
       type="button"
       onClick={() => setExpandedCollection(col)}
-      className={`group text-left ${
+      className={`group flex flex-col items-stretch justify-start self-start text-left ${
         layout === 'rail' ? 'w-[252px] sm:w-[292px] shrink-0 snap-start' : 'w-full'
       }`}
     >
@@ -1061,7 +1061,7 @@ export function SearchView() {
             </button>
           </div>
 
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3 sm:gap-4">
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3 sm:gap-4 items-start">
             {expandedCollection.items.map((item) => renderPosterCard(item, true, 'grid'))}
           </div>
         </div>
@@ -1081,7 +1081,7 @@ export function SearchView() {
             </h2>
           </div>
 
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3 sm:gap-4">
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3 sm:gap-4 items-start">
             {expandedRail.items.map((item) =>
               renderPosterCard(item, expandedRail.showMediaBadge, 'grid')
             )}
@@ -1103,7 +1103,7 @@ export function SearchView() {
             </h2>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 items-start">
             {activeCollections.map((col) => renderCollectionCard(col, 'grid'))}
           </div>
         </div>
@@ -1142,7 +1142,7 @@ export function SearchView() {
                   <ChevronRight className="w-4 h-4 text-ink-dim group-hover:text-brand group-hover:translate-x-0.5 transition-all" />
                 </button>
 
-                <div className="flex gap-3 overflow-x-auto no-scrollbar -mx-4 px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0 pb-1 snap-x snap-proximity">
+                <div className="flex items-start gap-3 overflow-x-auto no-scrollbar -mx-4 px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0 pb-1 snap-x snap-proximity">
                   {rail.items.map((item) =>
                     renderPosterCard(item, rail.showMediaBadge, 'rail')
                   )}
@@ -1164,7 +1164,7 @@ export function SearchView() {
                 <ChevronRight className="w-4 h-4 text-ink-dim group-hover:text-brand group-hover:translate-x-0.5 transition-all" />
               </button>
 
-              <div className="flex gap-3.5 overflow-x-auto no-scrollbar -mx-4 px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0 pb-1 snap-x snap-proximity">
+              <div className="flex items-start gap-3.5 overflow-x-auto no-scrollbar -mx-4 px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0 pb-1 snap-x snap-proximity">
                 {activeCollections.map((col) => renderCollectionCard(col, 'rail'))}
               </div>
             </section>

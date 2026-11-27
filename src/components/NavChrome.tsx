@@ -38,7 +38,7 @@ export function NavChrome() {
           ? 'read'
           : route.view === 'play' || route.view === 'library-play'
             ? 'play'
-            : route.view === 'journal'
+            : route.view === 'journal' || route.view === 'library-all'
               ? 'journal'
               : route.view === 'search'
                 ? 'search'

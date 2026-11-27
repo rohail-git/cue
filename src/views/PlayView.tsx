@@ -365,7 +365,7 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
     : 'backlog';
 
   const listClass = isPosterLayout
-    ? 'grid grid-cols-3 sm:grid-cols-4 gap-3.5'
+    ? 'grid grid-cols-3 sm:grid-cols-4 gap-3.5 items-start'
     : 'space-y-3';
 
   return (

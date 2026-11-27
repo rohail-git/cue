@@ -421,6 +421,7 @@ export type RouteView =
   | { view: 'read-detail'; readId: string }
   | { view: 'read-editions'; readId: string }
   | { view: 'game-detail'; gameId: string }
+  | { view: 'library-all' }
   | { view: 'library-watch' }
   | { view: 'library-read' }
   | { view: 'library-play' }

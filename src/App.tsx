@@ -61,6 +61,8 @@ function CueShell() {
         return <ReadEditionsView readId={route.readId} />;
       case 'game-detail':
         return <GameDetailView gameId={route.gameId} />;
+      case 'library-all':
+        return <LibraryGridView mode="all" />;
       case 'library-watch':
         return <LibraryGridView mode="watch" />;
       case 'library-read':

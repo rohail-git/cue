@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -18,13 +18,16 @@ import type { GameItem, Movie, ReadItem, Show } from '../types';
 import { getMediaCollectionBadge } from '../utils/collection';
 import { evaluateCustomListProgress } from '../utils/containers';
 import { resolveComicEditionCover } from '../utils/editions';
+import { parseActivityTimestampMs } from '../utils/recentEntries';
 import { getReadStats, getShowStats } from '../utils/stats';
+
+type LibraryDomainTab = 'all' | 'watch' | 'read' | 'play';
 
 export function LibraryGridView({
   mode,
   listId,
 }: {
-  mode: 'watch' | 'read' | 'play' | 'list';
+  mode: 'all' | 'watch' | 'read' | 'play' | 'list';
   listId?: string;
 }) {
   const {
@@ -42,6 +45,9 @@ export function LibraryGridView({
     rateCollection,
     setCollectionFinishedDate,
   } = useCueStore();
+  const [activeTab, setActiveTab] = useState<LibraryDomainTab>(
+    mode === 'list' ? 'all' : mode
+  );
   const [filter, setFilter] = useState<'all' | 'active' | 'queued' | 'done' | 'owned' | 'wishlist'>('all');
   const [stepSeriesDraft, setStepSeriesDraft] = useState('');
   const [stepNumDraft, setStepNumDraft] = useState('');
@@ -49,6 +55,22 @@ export function LibraryGridView({
   const [selectedMap, setSelectedMap] = useState<
     Record<string, { kind: 'show' | 'movie' | 'read' | 'game'; id: string }>
   >({});
+
+  useEffect(() => {
+    if (mode !== 'list') {
+      setActiveTab(mode);
+      setFilter('all');
+      setSelectMode(false);
+      setSelectedMap({});
+    }
+  }, [mode]);
+
+  const handleDomainTabChange = (nextTab: LibraryDomainTab) => {
+    setActiveTab(nextTab);
+    setFilter('all');
+    setSelectMode(false);
+    setSelectedMap({});
+  };
 
   useModalBackHandler(selectMode, () => {
     setSelectMode(false);
@@ -367,7 +389,7 @@ export function LibraryGridView({
             )}
           </div>
         ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4 items-start">
           {list.items.map((ref) => {
             const title =
               ref.kind === 'show'
@@ -402,7 +424,7 @@ export function LibraryGridView({
             if (!title) return null;
 
             return (
-              <div key={`${ref.kind}-${ref.id}`} className="group relative text-left">
+              <div key={`${ref.kind}-${ref.id}`} className="group relative text-left self-start">
                 <button
                   type="button"
                   onClick={() => {
@@ -411,7 +433,7 @@ export function LibraryGridView({
                     else if (ref.kind === 'read') pushRoute({ view: 'read-detail', readId: ref.id });
                     else pushRoute({ view: 'game-detail', gameId: ref.id });
                   }}
-                  className="w-full text-left"
+                  className="w-full flex flex-col items-stretch justify-start self-start text-left"
                 >
                   <div className="aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
                     <MediaImage
@@ -442,42 +464,332 @@ export function LibraryGridView({
     );
   }
 
-  if (mode === 'watch') {
-    const shows = state.showOrder
-      .map((id) => state.shows[id])
-      .filter((s): s is Show => Boolean(s) && Boolean(state.showProgress[s.id]?.bookmarked))
-      .map((s) => {
-        const st = getShowStats(s, state.showProgress[s.id]);
-        const col = getMediaCollectionBadge('show', s, state.showProgress[s.id]);
-        return {
-          kind: 'show' as const,
-          id: s.id,
-          title: s.title,
-          year: s.year,
-          poster: s.posterUrl,
-          ratio: st.progressRatio,
-          bucket: st.isFinished ? 'done' : st.watchedUnique > 0 ? 'active' : 'queued',
-          col,
-        };
-      });
-    const movies = state.movieOrder
-      .map((id) => state.movies[id])
-      .filter((m): m is Movie => Boolean(m) && Boolean(state.movieProgress[m.id]))
-      .map((m) => {
-        const watched = (state.movieProgress[m.id]?.watchCount || 0) > 0;
-        const col = getMediaCollectionBadge('movie', m, state.movieProgress[m.id]);
-        return {
-          kind: 'movie' as const,
-          id: m.id,
-          title: m.title,
-          year: m.year,
-          poster: m.posterUrl,
-          ratio: watched ? 1 : 0,
-          bucket: watched ? 'done' : 'queued',
-          col,
-        };
-      });
-    const allWatch = [...shows, ...movies];
+  const shows = state.showOrder
+    .map((id) => state.shows[id])
+    .filter((s): s is Show => Boolean(s) && Boolean(state.showProgress[s.id]?.bookmarked))
+    .map((s) => {
+      const prog = state.showProgress[s.id];
+      const st = getShowStats(s, prog);
+      const col = getMediaCollectionBadge('show', s, prog);
+      const activityMs = Math.max(
+        parseActivityTimestampMs(prog?.finishedAt),
+        parseActivityTimestampMs(prog?.lastWatchedAt)
+      );
+      return {
+        kind: 'show' as const,
+        domain: 'watch' as const,
+        id: s.id,
+        title: s.title,
+        year: s.year,
+        subtitle: String(s.year),
+        poster: s.posterUrl,
+        ratio: st.progressRatio,
+        bucket: st.isFinished ? ('done' as const) : st.watchedUnique > 0 ? ('active' as const) : ('queued' as const),
+        col,
+        activityMs,
+      };
+    });
+
+  const movies = state.movieOrder
+    .map((id) => state.movies[id])
+    .filter((m): m is Movie => Boolean(m) && Boolean(state.movieProgress[m.id]))
+    .map((m) => {
+      const prog = state.movieProgress[m.id];
+      const watched = (prog?.watchCount || 0) > 0;
+      const col = getMediaCollectionBadge('movie', m, prog);
+      const activityMs = parseActivityTimestampMs(prog?.watchedAt);
+      return {
+        kind: 'movie' as const,
+        domain: 'watch' as const,
+        id: m.id,
+        title: m.title,
+        year: m.year,
+        subtitle: String(m.year),
+        poster: m.posterUrl,
+        ratio: watched ? 1 : 0,
+        bucket: watched ? ('done' as const) : ('queued' as const),
+        col,
+        activityMs,
+      };
+    });
+
+  const allWatch = [...shows, ...movies];
+
+  const allReads = state.readOrder
+    .map((id) => state.readItems[id])
+    .filter((r): r is ReadItem => Boolean(r) && Boolean(state.readProgress[r.id]?.bookmarked));
+
+  const allGames = state.gameOrder
+    .map((id) => state.games[id])
+    .filter((g): g is GameItem => Boolean(g) && Boolean(state.gameProgress[g.id]?.bookmarked));
+
+  const totalLibraryCount = allWatch.length + allReads.length + allGames.length;
+
+  const renderDomainTabs = () => (
+    <div className="flex items-center gap-2 overflow-x-auto no-scrollbar mb-4">
+      {(
+        [
+          {
+            id: 'all' as const,
+            label: `All (${totalLibraryCount})`,
+            activeClass: 'bg-white/15 border-white/30 text-ink',
+          },
+          {
+            id: 'watch' as const,
+            label: `Watch (${allWatch.length})`,
+            activeClass: 'bg-watch/15 border-watch/40 text-watch',
+          },
+          {
+            id: 'read' as const,
+            label: `Read (${allReads.length})`,
+            activeClass: 'bg-read/15 border-read/40 text-read',
+          },
+          {
+            id: 'play' as const,
+            label: `Play (${allGames.length})`,
+            activeClass: 'bg-play/15 border-play/40 text-play',
+          },
+        ] as const
+      ).map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          onClick={() => handleDomainTabChange(tab.id)}
+          className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
+            activeTab === tab.id
+              ? tab.activeClass
+              : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+          }`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (activeTab === 'all') {
+    const readEntries = allReads.map((r) => {
+      const prog = state.readProgress[r.id];
+      const st = getReadStats(r, prog);
+      const col = getMediaCollectionBadge('read', r, prog, state.atomicReadUnits);
+      const activityMs = Math.max(
+        parseActivityTimestampMs(prog?.finishedAt),
+        parseActivityTimestampMs(prog?.lastReadAt)
+      );
+      return {
+        kind: 'read' as const,
+        domain: 'read' as const,
+        id: r.id,
+        title: r.title,
+        year: r.year,
+        subtitle: `${r.format} · ${r.creator}`,
+        poster: resolveComicEditionCover(r, prog?.edition, prog),
+        ratio: st.ratio,
+        bucket: st.isFinished ? ('done' as const) : st.current > 0 ? ('active' as const) : ('queued' as const),
+        col,
+        activityMs,
+      };
+    });
+
+    const gameEntries = allGames.map((g) => {
+      const prog = state.gameProgress[g.id];
+      const col = getMediaCollectionBadge('game', g, prog);
+      const status = prog?.status;
+      const activityMs = Math.max(
+        parseActivityTimestampMs(prog?.finishedAt),
+        parseActivityTimestampMs(prog?.lastPlayedAt)
+      );
+      return {
+        kind: 'game' as const,
+        domain: 'play' as const,
+        id: g.id,
+        title: g.title,
+        year: g.year,
+        subtitle: `${prog?.hoursPlayed || 0}h · ${prog?.platform || g.platforms[0] || ''}`.trim(),
+        poster: g.coverUrl,
+        ratio: Math.max(0, Math.min(1, (prog?.completionPct || 0) / 100)),
+        bucket:
+          status === 'completed'
+            ? ('done' as const)
+            : status === 'playing'
+              ? ('active' as const)
+              : ('queued' as const),
+        col,
+        activityMs,
+      };
+    });
+
+    const allUnified = [...allWatch, ...readEntries, ...gameEntries].sort(
+      (a, b) => b.activityMs - a.activityMs
+    );
+    const ownedAllCount = allUnified.filter((x) => x.col.hasAnyOwned).length;
+    const wishAllCount = allUnified.filter((x) => x.col.hasAnyWishlist).length;
+    const combinedAll = allUnified.filter((x) => {
+      if (filter === 'all') return true;
+      if (filter === 'owned') return x.col.hasAnyOwned;
+      if (filter === 'wishlist') return x.col.hasAnyWishlist;
+      return x.bucket === filter;
+    });
+
+    return (
+      <div className="min-h-dvh pb-20 pt-4 md:pt-24 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto">
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            type="button"
+            onClick={goBack}
+            aria-label="Back"
+            className="md:hidden glass-btn h-10 w-10 rounded-full flex items-center justify-center text-ink shrink-0"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <h1 className="font-display font-bold text-2xl text-ink">
+            Library ({combinedAll.length})
+          </h1>
+        </div>
+        {renderDomainTabs()}
+        <div className="flex items-center justify-between gap-2 mb-5">
+          <div className="flex gap-2 overflow-x-auto no-scrollbar">
+            {[
+              { id: 'all', label: 'All' },
+              { id: 'active', label: 'In Progress' },
+              { id: 'queued', label: 'Queued' },
+              { id: 'done', label: 'Finished' },
+              ...(ownedAllCount > 0 ? [{ id: 'owned', label: `Owned (${ownedAllCount})` }] : []),
+              ...(wishAllCount > 0 ? [{ id: 'wishlist', label: `Wishlist (${wishAllCount})` }] : []),
+            ].map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setFilter(f.id as typeof filter)}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
+                  filter === f.id
+                    ? 'bg-brand border-brand text-brand-ink'
+                    : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setSelectMode((v) => !v);
+              setSelectedMap({});
+            }}
+            className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 inline-flex items-center gap-1.5 ${
+              selectMode
+                ? 'bg-white text-[#131519] border-white'
+                : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+            }`}
+          >
+            <CheckSquare className="w-3.5 h-3.5" />
+            <span>{selectMode ? 'Cancel' : 'Select'}</span>
+          </button>
+        </div>
+        {combinedAll.length === 0 ? (
+          <p className="text-xs text-ink-faint py-6">No matching titles in your library.</p>
+        ) : (
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4 items-start">
+            {combinedAll.map((item) => {
+              const isSel = Boolean(selectedMap[`${item.kind}:${item.id}`]);
+              const domainTone =
+                item.domain === 'watch'
+                  ? { badge: 'text-watch', border: 'border-watch ring-watch', bar: 'bg-watch', label: 'Watch' }
+                  : item.domain === 'read'
+                    ? { badge: 'text-read', border: 'border-read ring-read', bar: 'bg-read', label: 'Read' }
+                    : { badge: 'text-play', border: 'border-play ring-play', bar: 'bg-play', label: 'Play' };
+              return (
+                <button
+                  key={`${item.kind}-${item.id}`}
+                  type="button"
+                  onClick={() => {
+                    if (selectMode) {
+                      toggleBulkItem(item.kind, item.id);
+                      return;
+                    }
+                    if (item.kind === 'show') pushRoute({ view: 'show-detail', showId: item.id });
+                    else if (item.kind === 'movie') pushRoute({ view: 'movie-detail', movieId: item.id });
+                    else if (item.kind === 'read') pushRoute({ view: 'read-detail', readId: item.id });
+                    else pushRoute({ view: 'game-detail', gameId: item.id });
+                  }}
+                  className="w-full flex flex-col items-stretch justify-start self-start text-left group"
+                >
+                  <div
+                    className={`relative aspect-[2/3] w-full rounded-[16px] overflow-hidden bg-surface border transition-all ${
+                      selectMode && isSel
+                        ? `${domainTone.border} ring-2`
+                        : 'border-white/8'
+                    }`}
+                  >
+                    <MediaImage
+                      src={item.poster}
+                      alt={item.title}
+                      className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+                    />
+                    {!selectMode && (
+                      <span
+                        className={`absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-black/75 border border-white/15 text-[9.5px] font-semibold uppercase leading-none ${domainTone.badge}`}
+                      >
+                        {item.col.shortTag || domainTone.label}
+                      </span>
+                    )}
+                    {selectMode && (
+                      <span
+                        className={`absolute top-2 right-2 h-6 w-6 rounded-full border flex items-center justify-center ${
+                          isSel
+                            ? 'bg-brand border-brand text-brand-ink'
+                            : 'bg-black/65 border-white/30 text-transparent'
+                        }`}
+                      >
+                        <Check className="w-3.5 h-3.5" strokeWidth={2.8} />
+                      </span>
+                    )}
+                    {item.ratio > 0 && (
+                      <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
+                        <div
+                          className={`h-full ${domainTone.bar}`}
+                          style={{ width: `${Math.round(item.ratio * 100)}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <p className="mt-2 w-full text-sm font-medium text-ink truncate">{item.title}</p>
+                  <p className="w-full text-xs text-ink-dim truncate capitalize tabular-nums">
+                    {item.subtitle}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {selectMode && (
+          <BulkActionBar
+            selectedCount={Object.keys(selectedMap).length}
+            totalCount={combinedAll.length}
+            lists={state.lists}
+            onSelectAll={() => {
+              const all: Record<string, { kind: 'show' | 'movie' | 'read' | 'game'; id: string }> = {};
+              for (const x of combinedAll) all[`${x.kind}:${x.id}`] = { kind: x.kind, id: x.id };
+              setSelectedMap(all);
+            }}
+            onClear={() => setSelectedMap({})}
+            onCancel={() => {
+              setSelectMode(false);
+              setSelectedMap({});
+            }}
+            onAction={(act, lId) => {
+              bulkUpdateItems(Object.values(selectedMap), act, lId);
+              setSelectMode(false);
+              setSelectedMap({});
+            }}
+          />
+        )}
+      </div>
+    );
+  }
+
+  if (activeTab === 'watch') {
     const ownedWatchCount = allWatch.filter((x) => x.col.hasAnyOwned).length;
     const wishWatchCount = allWatch.filter((x) => x.col.hasAnyWishlist).length;
     const combined = allWatch.filter((x) => {
@@ -502,6 +814,7 @@ export function LibraryGridView({
             Watch Library ({combined.length})
           </h1>
         </div>
+        {renderDomainTabs()}
         <div className="flex items-center justify-between gap-2 mb-5 overflow-x-auto no-scrollbar">
           <div className="flex gap-2">
             {[
@@ -542,7 +855,7 @@ export function LibraryGridView({
             <span>{selectMode ? 'Cancel' : 'Select'}</span>
           </button>
         </div>
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4 items-start">
           {combined.map((item) => {
             const isSel = Boolean(selectedMap[`${item.kind}:${item.id}`]);
             return (
@@ -557,7 +870,7 @@ export function LibraryGridView({
                 if (item.kind === 'show') pushRoute({ view: 'show-detail', showId: item.id });
                 else pushRoute({ view: 'movie-detail', movieId: item.id });
               }}
-              className="text-left group"
+              className="w-full flex flex-col items-stretch justify-start self-start text-left group"
             >
               <div
                 className={`relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border transition-all ${
@@ -625,10 +938,8 @@ export function LibraryGridView({
     );
   }
 
-  if (mode === 'read') {
-    const allBookmarked = state.readOrder
-      .map((id) => state.readItems[id])
-      .filter((r): r is ReadItem => Boolean(r) && Boolean(state.readProgress[r.id]?.bookmarked));
+  if (activeTab === 'read') {
+    const allBookmarked = allReads;
 
     let ownedComicCount = 0;
     let wishlistComicCount = 0;
@@ -678,6 +989,7 @@ export function LibraryGridView({
             Read Library ({items.length})
           </h1>
         </div>
+        {renderDomainTabs()}
         <div className="flex items-center justify-between gap-2 mb-5">
           <div className="flex gap-2 overflow-x-auto no-scrollbar">
             {readFilters.map((f) => (
@@ -711,7 +1023,7 @@ export function LibraryGridView({
             <span>{selectMode ? 'Cancel' : 'Select'}</span>
           </button>
         </div>
-        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4 items-start">
           {items.map((item) => {
             const st = getReadStats(item, state.readProgress[item.id]);
             const colSummary = getMediaCollectionBadge(
@@ -733,7 +1045,7 @@ export function LibraryGridView({
                   }
                   pushRoute({ view: 'read-detail', readId: item.id });
                 }}
-                className="text-left group"
+                className="w-full flex flex-col items-stretch justify-start self-start text-left group"
               >
                 <div
                   className={`relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border transition-all ${
@@ -807,10 +1119,6 @@ export function LibraryGridView({
     );
   }
 
-  const allGames = state.gameOrder
-    .map((id) => state.games[id])
-    .filter((g): g is GameItem => Boolean(g) && Boolean(state.gameProgress[g.id]?.bookmarked));
-
   let ownedPlayCount = 0;
   let wishPlayCount = 0;
   for (const g of allGames) {
@@ -844,6 +1152,7 @@ export function LibraryGridView({
           Play Library ({games.length})
         </h1>
       </div>
+      {renderDomainTabs()}
       <div className="flex items-center justify-between gap-2 mb-5">
         <div className="flex gap-2 overflow-x-auto no-scrollbar">
           {[
@@ -884,7 +1193,7 @@ export function LibraryGridView({
           <span>{selectMode ? 'Cancel' : 'Select'}</span>
         </button>
       </div>
-      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4 items-start">
         {games.map((game) => {
           const prog = state.gameProgress[game.id];
           const gameCol = getMediaCollectionBadge('game', game, prog);
@@ -900,7 +1209,7 @@ export function LibraryGridView({
                 }
                 pushRoute({ view: 'game-detail', gameId: game.id });
               }}
-              className="text-left group"
+              className="w-full flex flex-col items-stretch justify-start self-start text-left group"
             >
               <div
                 className={`relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border transition-all ${
