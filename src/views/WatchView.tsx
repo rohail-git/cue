@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Clock, Search, Tv, Upload } from 'lucide-react';
+import { Check, CheckSquare, ChevronDown, ChevronRight, Clock, Search, Tv, Upload } from 'lucide-react';
 import { BingersMediaRow } from '../components/BingersMediaRow';
+import { BulkActionBar } from '../components/BulkActionBar';
 import { FilterSortSheet } from '../components/FilterSortSheet';
 import { MediaImage } from '../components/MediaImage';
 import { ReleaseAlertBanner } from '../components/ReleaseAlertBanner';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
-import { useCueStore } from '../store/useCueStore';
+import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { HistoryEntry, Movie, Show, UpcomingEntry, WatchFilter } from '../types';
 import {
   formatEpisodeCode,
@@ -26,11 +27,33 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
     updateSettings,
     watchNextEpisode,
     toggleMovieWatched,
+    bulkUpdateItems,
   } = useCueStore();
 
   const [justChecked, setJustChecked] = useState<Record<string, boolean>>({});
   const [showFinished, setShowFinished] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedMap, setSelectedMap] = useState<
+    Record<string, { kind: 'show' | 'movie'; id: string }>
+  >({});
   const timersRef = useRef<number[]>([]);
+
+  useModalBackHandler(selectMode, () => {
+    setSelectMode(false);
+    setSelectedMap({});
+  });
+
+  const toggleBulkItem = (kind: 'show' | 'movie', id: string) => {
+    const k = `${kind}:${id}`;
+    setSelectedMap((prev) => {
+      if (prev[k]) {
+        const copy = { ...prev };
+        delete copy[k];
+        return copy;
+      }
+      return { ...prev, [k]: { kind, id } };
+    });
+  };
 
   useEffect(() => {
     return () => {
@@ -225,24 +248,44 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
       : 'TBA';
 
     if (isPosterLayout) {
+      const isSel = Boolean(selectedMap[`show:${show.id}`]);
       return (
         <div
           key={show.id}
           role="button"
           tabIndex={0}
-          onClick={() => pushRoute({ view: 'show-detail', showId: show.id })}
+          onClick={() =>
+            selectMode ? toggleBulkItem('show', show.id) : pushRoute({ view: 'show-detail', showId: show.id })
+          }
           onKeyDown={(e) => {
-            if (e.key === 'Enter') pushRoute({ view: 'show-detail', showId: show.id });
+            if (e.key === 'Enter') {
+              if (selectMode) toggleBulkItem('show', show.id);
+              else pushRoute({ view: 'show-detail', showId: show.id });
+            }
           }}
           className="group cursor-pointer text-left"
         >
-          <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
+          <div
+            className={`relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border transition-all ${
+              selectMode && isSel ? 'border-watch ring-2 ring-watch' : 'border-white/8'
+            }`}
+          >
             <MediaImage
               src={show.posterUrl}
               alt={show.title}
               className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
             />
-            {!stats.isFinished && !isWaiting && (
+            {selectMode ? (
+              <span
+                className={`absolute top-2 right-2 h-7 w-7 rounded-full border flex items-center justify-center ${
+                  isSel
+                    ? 'bg-watch border-watch text-[#0E1A1E]'
+                    : 'bg-black/65 border-white/30 text-transparent'
+                }`}
+              >
+                <Check className="w-4 h-4" strokeWidth={2.8} />
+              </span>
+            ) : !stats.isFinished && !isWaiting && (
               <button
                 type="button"
                 onClick={(e) => handleQuickWatchShow(e, show.id)}
@@ -348,12 +391,32 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
         showProgress={state.settings.showPosterProgress}
         isFlashing={flash}
         flashLabel="Watched"
-        actionContent={<Check className="w-[17px] h-[17px]" strokeWidth={2.4} />}
-        actionAriaLabel={`Mark ${show.title} next episode watched`}
-        actionDisabled={stats.isFinished}
-        actionActive={stats.isFinished}
-        onAction={!stats.isFinished ? (e) => handleQuickWatchShow(e, show.id) : undefined}
-        onOpen={() => pushRoute({ view: 'show-detail', showId: show.id })}
+        actionContent={
+          selectMode ? (
+            <Check
+              className={`w-[17px] h-[17px] ${selectedMap[`show:${show.id}`] ? 'text-watch' : 'text-ink-faint'}`}
+              strokeWidth={2.6}
+            />
+          ) : (
+            <Check className="w-[17px] h-[17px]" strokeWidth={2.4} />
+          )
+        }
+        actionAriaLabel={selectMode ? `Select ${show.title}` : `Mark ${show.title} next episode watched`}
+        actionDisabled={!selectMode && stats.isFinished}
+        actionActive={selectMode ? Boolean(selectedMap[`show:${show.id}`]) : stats.isFinished}
+        onAction={
+          selectMode
+            ? (e) => {
+                e.stopPropagation();
+                toggleBulkItem('show', show.id);
+              }
+            : !stats.isFinished
+              ? (e) => handleQuickWatchShow(e, show.id)
+              : undefined
+        }
+        onOpen={() =>
+          selectMode ? toggleBulkItem('show', show.id) : pushRoute({ view: 'show-detail', showId: show.id })
+        }
       />
     );
   };
@@ -364,23 +427,44 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
     const flash = Boolean(justChecked[movie.id]);
 
     if (isPosterLayout) {
+      const isSel = Boolean(selectedMap[`movie:${movie.id}`]);
       return (
         <div
           key={movie.id}
           role="button"
           tabIndex={0}
-          onClick={() => pushRoute({ view: 'movie-detail', movieId: movie.id })}
+          onClick={() =>
+            selectMode ? toggleBulkItem('movie', movie.id) : pushRoute({ view: 'movie-detail', movieId: movie.id })
+          }
           onKeyDown={(e) => {
-            if (e.key === 'Enter') pushRoute({ view: 'movie-detail', movieId: movie.id });
+            if (e.key === 'Enter') {
+              if (selectMode) toggleBulkItem('movie', movie.id);
+              else pushRoute({ view: 'movie-detail', movieId: movie.id });
+            }
           }}
           className="group cursor-pointer text-left"
         >
-          <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
+          <div
+            className={`relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border transition-all ${
+              selectMode && isSel ? 'border-watch ring-2 ring-watch' : 'border-white/8'
+            }`}
+          >
             <MediaImage
               src={movie.posterUrl}
               alt={movie.title}
               className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
             />
+            {selectMode ? (
+              <span
+                className={`absolute top-2 right-2 h-7 w-7 rounded-full border flex items-center justify-center ${
+                  isSel
+                    ? 'bg-watch border-watch text-[#0E1A1E]'
+                    : 'bg-black/65 border-white/30 text-transparent'
+                }`}
+              >
+                <Check className="w-4 h-4" strokeWidth={2.8} />
+              </span>
+            ) : (
             <button
               type="button"
               onClick={(e) => handleQuickWatchMovie(e, movie.id)}
@@ -393,6 +477,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
             >
               <Check className="w-4 h-4" />
             </button>
+            )}
           </div>
           <p className="mt-2 text-sm font-semibold text-ink truncate">{movie.title}</p>
           <p className="text-xs text-ink-dim tabular-nums">
@@ -416,16 +501,32 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
         isFlashing={flash}
         flashLabel="Watched"
         actionContent={
-          isWatched && prog.watchCount > 1 ? (
+          selectMode ? (
+            <Check
+              className={`w-[17px] h-[17px] ${selectedMap[`movie:${movie.id}`] ? 'text-watch' : 'text-ink-faint'}`}
+              strokeWidth={2.6}
+            />
+          ) : isWatched && prog.watchCount > 1 ? (
             <span className="text-xs font-bold text-watched tabular-nums">x{prog.watchCount}</span>
           ) : (
             <Check className="w-[17px] h-[17px]" strokeWidth={2.4} />
           )
         }
-        actionAriaLabel={`Toggle ${movie.title} watched`}
-        actionActive={isWatched}
-        onAction={(e) => handleQuickWatchMovie(e, movie.id)}
-        onOpen={() => pushRoute({ view: 'movie-detail', movieId: movie.id })}
+        actionAriaLabel={selectMode ? `Select ${movie.title}` : `Toggle ${movie.title} watched`}
+        actionActive={selectMode ? Boolean(selectedMap[`movie:${movie.id}`]) : isWatched}
+        onAction={
+          selectMode
+            ? (e) => {
+                e.stopPropagation();
+                toggleBulkItem('movie', movie.id);
+              }
+            : (e) => handleQuickWatchMovie(e, movie.id)
+        }
+        onOpen={() =>
+          selectMode
+            ? toggleBulkItem('movie', movie.id)
+            : pushRoute({ view: 'movie-detail', movieId: movie.id })
+        }
       />
     );
   };
@@ -503,24 +604,41 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
       >
         {/* Category Sub-Filter Pills */}
         {!calendarMode && (
-          <div className="flex items-center gap-2 mb-5 overflow-x-auto no-scrollbar">
-            {filterTabs.map((t) => {
-              const active = filter === t.id;
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => updateSettings({ watchFilter: t.id })}
-                  className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
-                    active
-                      ? 'bg-brand border-brand text-brand-ink'
-                      : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
-                  }`}
-                >
-                  {t.label}
-                </button>
-              );
-            })}
+          <div className="flex items-center justify-between gap-2 mb-5 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-2">
+              {filterTabs.map((t) => {
+                const active = filter === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => updateSettings({ watchFilter: t.id })}
+                    className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
+                      active
+                        ? 'bg-brand border-brand text-brand-ink'
+                        : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectMode((v) => !v);
+                setSelectedMap({});
+              }}
+              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 inline-flex items-center gap-1.5 transition-colors ${
+                selectMode
+                  ? 'bg-white border-white text-[#131519]'
+                  : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+              }`}
+            >
+              <CheckSquare className="w-3.5 h-3.5" />
+              <span>{selectMode ? 'Cancel' : 'Select'}</span>
+            </button>
           </div>
         )}
 
@@ -663,6 +781,40 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
       </ScrollUpHistoryFeed>
 
       <FilterSortSheet domain="watch" />
+      {selectMode && !calendarMode && (
+        <BulkActionBar
+          selectedCount={Object.keys(selectedMap).length}
+          totalCount={
+            watchingShows.length +
+            caughtUpShows.length +
+            notStartedShows.length +
+            finishedShows.length +
+            watchlistMovies.length +
+            watchedMovies.length
+          }
+          lists={state.lists}
+          onSelectAll={() => {
+            const all: Record<string, { kind: 'show' | 'movie'; id: string }> = {};
+            for (const s of [...watchingShows, ...caughtUpShows, ...notStartedShows, ...finishedShows]) {
+              all[`show:${s.id}`] = { kind: 'show', id: s.id };
+            }
+            for (const m of [...watchlistMovies, ...watchedMovies]) {
+              all[`movie:${m.id}`] = { kind: 'movie', id: m.id };
+            }
+            setSelectedMap(all);
+          }}
+          onClear={() => setSelectedMap({})}
+          onCancel={() => {
+            setSelectMode(false);
+            setSelectedMap({});
+          }}
+          onAction={(act, lId) => {
+            bulkUpdateItems(Object.values(selectedMap), act, lId);
+            setSelectMode(false);
+            setSelectedMap({});
+          }}
+        />
+      )}
     </>
   );
 }
