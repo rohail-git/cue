@@ -1,8 +1,18 @@
 import { useState } from 'react';
-import { ChevronLeft, Pin, Trash2 } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  CheckSquare,
+  ChevronLeft,
+  Pin,
+  Plus,
+  Trash2,
+} from 'lucide-react';
+import { BulkActionBar } from '../components/BulkActionBar';
 import { MediaImage } from '../components/MediaImage';
 import { RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
-import { useCueStore } from '../store/useCueStore';
+import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { GameItem, Movie, ReadItem, Show } from '../types';
 import { evaluateCustomListProgress } from '../utils/containers';
 import { resolveComicEditionCover } from '../utils/editions';
@@ -22,9 +32,37 @@ export function LibraryGridView({
     toggleItemInList,
     toggleListPinnedToQueue,
     deleteCustomList,
+    reorderListItem,
+    addReadingOrderStep,
+    removeReadingOrderStep,
+    toggleReadingOrderStep,
+    bulkUpdateItems,
     rateCollection,
   } = useCueStore();
   const [filter, setFilter] = useState<'all' | 'active' | 'queued' | 'done'>('all');
+  const [stepSeriesDraft, setStepSeriesDraft] = useState('');
+  const [stepNumDraft, setStepNumDraft] = useState('');
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedMap, setSelectedMap] = useState<
+    Record<string, { kind: 'show' | 'movie' | 'read' | 'game'; id: string }>
+  >({});
+
+  useModalBackHandler(selectMode, () => {
+    setSelectMode(false);
+    setSelectedMap({});
+  });
+
+  const toggleBulkItem = (kind: 'show' | 'movie' | 'read' | 'game', id: string) => {
+    const k = `${kind}:${id}`;
+    setSelectedMap((prev) => {
+      if (prev[k]) {
+        const copy = { ...prev };
+        delete copy[k];
+        return copy;
+      }
+      return { ...prev, [k]: { kind, id } };
+    });
+  };
 
   if (mode === 'list' && listId) {
     const list = state.lists.find((l) => l.id === listId);
@@ -132,6 +170,182 @@ export function LibraryGridView({
           )}
         </section>
 
+        {(list.isOrdered || (list.steps && list.steps.length > 0)) ? (
+          <div className="space-y-4">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const num = Number(stepNumDraft);
+                if (!stepSeriesDraft.trim() || !Number.isFinite(num) || num < 1) return;
+                addReadingOrderStep(list.id, stepSeriesDraft, num);
+                setStepNumDraft(String(num + 1));
+              }}
+              className="rounded-2xl bg-surface border border-white/[0.06] p-3 flex items-center gap-2 flex-wrap"
+            >
+              <input
+                type="text"
+                placeholder="Series title (e.g. House of X)"
+                value={stepSeriesDraft}
+                onChange={(e) => setStepSeriesDraft(e.target.value)}
+                className="flex-1 min-w-[150px] rounded-xl bg-background border border-white/10 px-3 py-2 text-xs text-ink placeholder:text-ink-faint outline-none focus:border-read"
+              />
+              <input
+                type="number"
+                min={1}
+                placeholder="Issue #"
+                value={stepNumDraft}
+                onChange={(e) => setStepNumDraft(e.target.value)}
+                className="w-24 rounded-xl bg-background border border-white/10 px-3 py-2 text-xs text-ink placeholder:text-ink-faint outline-none focus:border-read tabular-nums"
+              />
+              <button
+                type="submit"
+                disabled={!stepSeriesDraft.trim() || !stepNumDraft}
+                className="px-3.5 py-2 rounded-xl bg-read text-[#1D160A] text-xs font-bold inline-flex items-center gap-1 disabled:opacity-40"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add issue step</span>
+              </button>
+            </form>
+
+            {list.steps && list.steps.length > 0 && (
+              <div className="space-y-2">
+                {list.steps.map((step, idx) => {
+                  const done = (state.atomicReadUnits?.[step.atomicId]?.count || 0) > 0;
+                  return (
+                    <div
+                      key={step.id}
+                      className="rounded-2xl bg-surface border border-white/[0.06] px-3.5 py-2.5 flex items-center justify-between gap-2.5"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="w-6 text-[11px] font-bold text-ink-faint tabular-nums shrink-0">
+                          #{idx + 1}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => toggleReadingOrderStep(list.id, step.id)}
+                          aria-label={`Toggle ${step.title}`}
+                          className={`h-7 w-7 rounded-full border flex items-center justify-center shrink-0 transition-colors ${
+                            done
+                              ? 'bg-watched border-watched text-[#131519]'
+                              : 'border-white/20 text-ink-dim hover:border-watched'
+                          }`}
+                        >
+                          <Check className="w-3.5 h-3.5" strokeWidth={2.6} />
+                        </button>
+                        <div className="min-w-0">
+                          <p
+                            className={`text-sm font-semibold truncate ${
+                              done ? 'text-ink-dim line-through' : 'text-ink'
+                            }`}
+                          >
+                            {step.title}
+                          </p>
+                          <p className="text-[11px] text-ink-dim truncate">
+                            {step.seriesTitle} · Issue #{step.issueNumber}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          disabled={idx === 0}
+                          onClick={() => reorderListItem(list.id, idx, idx - 1, 'steps')}
+                          aria-label={`Move ${step.title} up`}
+                          className="p-1.5 rounded-lg text-ink-faint hover:text-ink disabled:opacity-25"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === list.steps!.length - 1}
+                          onClick={() => reorderListItem(list.id, idx, idx + 1, 'steps')}
+                          aria-label={`Move ${step.title} down`}
+                          className="p-1.5 rounded-lg text-ink-faint hover:text-ink disabled:opacity-25"
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeReadingOrderStep(list.id, step.id)}
+                          aria-label={`Remove ${step.title}`}
+                          className="p-1.5 rounded-lg text-ink-faint hover:text-red-400"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {list.items.length > 0 && (
+              <div className="space-y-2 pt-2">
+                {list.items.map((ref, idx) => {
+                  const title =
+                    ref.kind === 'show'
+                      ? state.shows[ref.id]?.title
+                      : ref.kind === 'movie'
+                        ? state.movies[ref.id]?.title
+                        : ref.kind === 'read'
+                          ? state.readItems[ref.id]?.title
+                          : state.games[ref.id]?.title;
+                  if (!title) return null;
+                  return (
+                    <div
+                      key={`${ref.kind}-${ref.id}`}
+                      className="rounded-2xl bg-surface border border-white/[0.06] px-3.5 py-2.5 flex items-center justify-between gap-2.5"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (ref.kind === 'show') pushRoute({ view: 'show-detail', showId: ref.id });
+                          else if (ref.kind === 'movie') pushRoute({ view: 'movie-detail', movieId: ref.id });
+                          else if (ref.kind === 'read') pushRoute({ view: 'read-detail', readId: ref.id });
+                          else pushRoute({ view: 'game-detail', gameId: ref.id });
+                        }}
+                        className="flex items-center gap-2.5 min-w-0 text-left flex-1"
+                      >
+                        <span className="w-6 text-[11px] font-bold text-ink-faint tabular-nums shrink-0">
+                          #{idx + 1}
+                        </span>
+                        <span className="text-sm font-semibold text-ink truncate">{title}</span>
+                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          disabled={idx === 0}
+                          onClick={() => reorderListItem(list.id, idx, idx - 1, 'items')}
+                          aria-label={`Move ${title} up`}
+                          className="p-1.5 rounded-lg text-ink-faint hover:text-ink disabled:opacity-25"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === list.items.length - 1}
+                          onClick={() => reorderListItem(list.id, idx, idx + 1, 'items')}
+                          aria-label={`Move ${title} down`}
+                          className="p-1.5 rounded-lg text-ink-faint hover:text-ink disabled:opacity-25"
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleItemInList(list.id, ref.kind, ref.id)}
+                          aria-label={`Remove ${title}`}
+                          className="p-1.5 rounded-lg text-ink-faint hover:text-red-400"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ) : (
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
           {list.items.map((ref) => {
             const title =
@@ -202,6 +416,7 @@ export function LibraryGridView({
             );
           })}
         </div>
+        )}
       </div>
     );
   }
@@ -254,45 +469,84 @@ export function LibraryGridView({
             Watch Library ({combined.length})
           </h1>
         </div>
-        <div className="flex gap-2 mb-5 overflow-x-auto no-scrollbar">
-          {[
-            { id: 'all', label: 'All' },
-            { id: 'active', label: 'Watching' },
-            { id: 'queued', label: 'Cued' },
-            { id: 'done', label: 'Finished' },
-          ].map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => setFilter(f.id as typeof filter)}
-              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
-                filter === f.id
-                  ? 'bg-brand border-brand text-brand-ink'
-                  : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
+        <div className="flex items-center justify-between gap-2 mb-5 overflow-x-auto no-scrollbar">
+          <div className="flex gap-2">
+            {[
+              { id: 'all', label: 'All' },
+              { id: 'active', label: 'Watching' },
+              { id: 'queued', label: 'Cued' },
+              { id: 'done', label: 'Finished' },
+            ].map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setFilter(f.id as typeof filter)}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
+                  filter === f.id
+                    ? 'bg-brand border-brand text-brand-ink'
+                    : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setSelectMode((v) => !v);
+              setSelectedMap({});
+            }}
+            className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 inline-flex items-center gap-1.5 ${
+              selectMode
+                ? 'bg-white text-[#131519] border-white'
+                : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+            }`}
+          >
+            <CheckSquare className="w-3.5 h-3.5" />
+            <span>{selectMode ? 'Cancel' : 'Select'}</span>
+          </button>
         </div>
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
-          {combined.map((item) => (
+          {combined.map((item) => {
+            const isSel = Boolean(selectedMap[`${item.kind}:${item.id}`]);
+            return (
             <button
               key={`${item.kind}-${item.id}`}
               type="button"
-              onClick={() =>
-                item.kind === 'show'
-                  ? pushRoute({ view: 'show-detail', showId: item.id })
-                  : pushRoute({ view: 'movie-detail', movieId: item.id })
-              }
+              onClick={() => {
+                if (selectMode) {
+                  toggleBulkItem(item.kind, item.id);
+                  return;
+                }
+                if (item.kind === 'show') pushRoute({ view: 'show-detail', showId: item.id });
+                else pushRoute({ view: 'movie-detail', movieId: item.id });
+              }}
               className="text-left group"
             >
-              <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
+              <div
+                className={`relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border transition-all ${
+                  selectMode && isSel
+                    ? 'border-brand ring-2 ring-brand'
+                    : 'border-white/8'
+                }`}
+              >
                 <MediaImage
                   src={item.poster}
                   alt={item.title}
                   className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
                 />
+                {selectMode && (
+                  <span
+                    className={`absolute top-2 right-2 h-6 w-6 rounded-full border flex items-center justify-center ${
+                      isSel
+                        ? 'bg-brand border-brand text-brand-ink'
+                        : 'bg-black/65 border-white/30 text-transparent'
+                    }`}
+                  >
+                    <Check className="w-3.5 h-3.5" strokeWidth={2.8} />
+                  </span>
+                )}
                 {item.ratio > 0 && (
                   <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
                     <div className="h-full bg-watched" style={{ width: `${Math.round(item.ratio * 100)}%` }} />
@@ -302,8 +556,31 @@ export function LibraryGridView({
               <p className="mt-2 text-sm font-medium text-ink truncate">{item.title}</p>
               <p className="text-xs text-ink-dim tabular-nums">{item.year}</p>
             </button>
-          ))}
+            );
+          })}
         </div>
+        {selectMode && (
+          <BulkActionBar
+            selectedCount={Object.keys(selectedMap).length}
+            totalCount={combined.length}
+            lists={state.lists}
+            onSelectAll={() => {
+              const all: Record<string, { kind: 'show' | 'movie' | 'read' | 'game'; id: string }> = {};
+              for (const x of combined) all[`${x.kind}:${x.id}`] = { kind: x.kind, id: x.id };
+              setSelectedMap(all);
+            }}
+            onClear={() => setSelectedMap({})}
+            onCancel={() => {
+              setSelectMode(false);
+              setSelectedMap({});
+            }}
+            onAction={(act, lId) => {
+              bulkUpdateItems(Object.values(selectedMap), act, lId);
+              setSelectMode(false);
+              setSelectedMap({});
+            }}
+          />
+        )}
       </div>
     );
   }
@@ -335,38 +612,68 @@ export function LibraryGridView({
             Read Library ({items.length})
           </h1>
         </div>
-        <div className="flex gap-2 mb-5">
-          {[
-            { id: 'all', label: 'All' },
-            { id: 'active', label: 'Reading' },
-            { id: 'queued', label: 'Want to read' },
-            { id: 'done', label: 'Finished' },
-          ].map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => setFilter(f.id as typeof filter)}
-              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
-                filter === f.id
-                  ? 'bg-brand border-brand text-brand-ink'
-                  : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
+        <div className="flex items-center justify-between gap-2 mb-5">
+          <div className="flex gap-2 overflow-x-auto no-scrollbar">
+            {[
+              { id: 'all', label: 'All' },
+              { id: 'active', label: 'Reading' },
+              { id: 'queued', label: 'Want to read' },
+              { id: 'done', label: 'Finished' },
+            ].map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setFilter(f.id as typeof filter)}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
+                  filter === f.id
+                    ? 'bg-brand border-brand text-brand-ink'
+                    : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setSelectMode((v) => !v);
+              setSelectedMap({});
+            }}
+            className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 inline-flex items-center gap-1.5 ${
+              selectMode
+                ? 'bg-white text-[#131519] border-white'
+                : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+            }`}
+          >
+            <CheckSquare className="w-3.5 h-3.5" />
+            <span>{selectMode ? 'Cancel' : 'Select'}</span>
+          </button>
         </div>
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
           {items.map((item) => {
             const st = getReadStats(item, state.readProgress[item.id]);
+            const isSel = Boolean(selectedMap[`read:${item.id}`]);
             return (
               <button
                 key={item.id}
                 type="button"
-                onClick={() => pushRoute({ view: 'read-detail', readId: item.id })}
+                onClick={() => {
+                  if (selectMode) {
+                    toggleBulkItem('read', item.id);
+                    return;
+                  }
+                  pushRoute({ view: 'read-detail', readId: item.id });
+                }}
                 className="text-left group"
               >
-                <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
+                <div
+                  className={`relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border transition-all ${
+                    selectMode && isSel
+                      ? 'border-read ring-2 ring-read'
+                      : 'border-white/8'
+                  }`}
+                >
                   <MediaImage
                     src={resolveComicEditionCover(
                       item,
@@ -376,6 +683,17 @@ export function LibraryGridView({
                     alt={item.title}
                     className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
                   />
+                  {selectMode && (
+                    <span
+                      className={`absolute top-2 right-2 h-6 w-6 rounded-full border flex items-center justify-center ${
+                        isSel
+                          ? 'bg-read border-read text-[#1D160A]'
+                          : 'bg-black/65 border-white/30 text-transparent'
+                      }`}
+                    >
+                      <Check className="w-3.5 h-3.5" strokeWidth={2.8} />
+                    </span>
+                  )}
                   {st.current > 0 && (
                     <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
                       <div className="h-full bg-watched" style={{ width: `${Math.round(st.ratio * 100)}%` }} />
@@ -390,6 +708,28 @@ export function LibraryGridView({
             );
           })}
         </div>
+        {selectMode && (
+          <BulkActionBar
+            selectedCount={Object.keys(selectedMap).length}
+            totalCount={items.length}
+            lists={state.lists}
+            onSelectAll={() => {
+              const all: Record<string, { kind: 'show' | 'movie' | 'read' | 'game'; id: string }> = {};
+              for (const x of items) all[`read:${x.id}`] = { kind: 'read', id: x.id };
+              setSelectedMap(all);
+            }}
+            onClear={() => setSelectedMap({})}
+            onCancel={() => {
+              setSelectMode(false);
+              setSelectedMap({});
+            }}
+            onAction={(act, lId) => {
+              bulkUpdateItems(Object.values(selectedMap), act, lId);
+              setSelectMode(false);
+              setSelectedMap({});
+            }}
+          />
+        )}
       </div>
     );
   }
@@ -420,43 +760,84 @@ export function LibraryGridView({
           Play Library ({games.length})
         </h1>
       </div>
-      <div className="flex gap-2 mb-5">
-        {[
-          { id: 'all', label: 'All' },
-          { id: 'active', label: 'Playing' },
-          { id: 'queued', label: 'Backlog' },
-          { id: 'done', label: 'Completed' },
-        ].map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            onClick={() => setFilter(f.id as typeof filter)}
-            className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
-              filter === f.id
-                ? 'bg-brand border-brand text-brand-ink'
-                : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
+      <div className="flex items-center justify-between gap-2 mb-5">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar">
+          {[
+            { id: 'all', label: 'All' },
+            { id: 'active', label: 'Playing' },
+            { id: 'queued', label: 'Backlog' },
+            { id: 'done', label: 'Completed' },
+          ].map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setFilter(f.id as typeof filter)}
+              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 ${
+                filter === f.id
+                  ? 'bg-brand border-brand text-brand-ink'
+                  : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setSelectMode((v) => !v);
+            setSelectedMap({});
+          }}
+          className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 inline-flex items-center gap-1.5 ${
+            selectMode
+              ? 'bg-white text-[#131519] border-white'
+              : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+          }`}
+        >
+          <CheckSquare className="w-3.5 h-3.5" />
+          <span>{selectMode ? 'Cancel' : 'Select'}</span>
+        </button>
       </div>
       <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
         {games.map((game) => {
           const prog = state.gameProgress[game.id];
+          const isSel = Boolean(selectedMap[`game:${game.id}`]);
           return (
             <button
               key={game.id}
               type="button"
-              onClick={() => pushRoute({ view: 'game-detail', gameId: game.id })}
+              onClick={() => {
+                if (selectMode) {
+                  toggleBulkItem('game', game.id);
+                  return;
+                }
+                pushRoute({ view: 'game-detail', gameId: game.id });
+              }}
               className="text-left group"
             >
-              <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
+              <div
+                className={`relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border transition-all ${
+                  selectMode && isSel
+                    ? 'border-play ring-2 ring-play'
+                    : 'border-white/8'
+                }`}
+              >
                 <MediaImage
                   src={game.coverUrl}
                   alt={game.title}
                   className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
                 />
+                {selectMode && (
+                  <span
+                    className={`absolute top-2 right-2 h-6 w-6 rounded-full border flex items-center justify-center ${
+                      isSel
+                        ? 'bg-play border-play text-[#161124]'
+                        : 'bg-black/65 border-white/30 text-transparent'
+                    }`}
+                  >
+                    <Check className="w-3.5 h-3.5" strokeWidth={2.8} />
+                  </span>
+                )}
                 {(prog?.completionPct || 0) > 0 && (
                   <div className="absolute bottom-0 inset-x-0 h-[3px] bg-black/50">
                     <div className="h-full bg-watched" style={{ width: `${prog?.completionPct || 0}%` }} />
@@ -471,6 +852,28 @@ export function LibraryGridView({
           );
         })}
       </div>
+      {selectMode && (
+        <BulkActionBar
+          selectedCount={Object.keys(selectedMap).length}
+          totalCount={games.length}
+          lists={state.lists}
+          onSelectAll={() => {
+            const all: Record<string, { kind: 'show' | 'movie' | 'read' | 'game'; id: string }> = {};
+            for (const g of games) all[`game:${g.id}`] = { kind: 'game', id: g.id };
+            setSelectedMap(all);
+          }}
+          onClear={() => setSelectedMap({})}
+          onCancel={() => {
+            setSelectMode(false);
+            setSelectedMap({});
+          }}
+          onAction={(act, lId) => {
+            bulkUpdateItems(Object.values(selectedMap), act, lId);
+            setSelectMode(false);
+            setSelectedMap({});
+          }}
+        />
+      )}
     </div>
   );
 }

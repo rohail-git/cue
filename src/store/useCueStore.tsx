@@ -12,6 +12,8 @@ import {
   fetchComicCollectionIssues,
   fetchComicSeriesIssues,
   fetchTvmazeEpisodeSchedule,
+  hydrateLiveReadItem,
+  searchByIsbn,
 } from '../services/mediaApi';
 import type {
   AppSettings,
@@ -19,7 +21,9 @@ import type {
   ComicEditionId,
   ComicEditionRecord,
   ComicIssueMeta,
+  CompletionRun,
   CueStoreState,
+  CustomListStep,
   GameChapterSource,
   GameChapterUnit,
   GameItem,
@@ -66,6 +70,7 @@ import {
   extractReadItemIsbn,
   getComicIssueAtomicId,
   isCollectedComicItem,
+  makeComicAtomicId,
   reconcileHydratedComicItemWithAtoms,
   syncAtomicReadUnitsAcrossState,
 } from '../utils/atoms';
@@ -116,6 +121,9 @@ function normalizeLoadedCueState(raw: CueStoreState): CueStoreState {
   }
   if (!raw.atomicReadUnits) {
     raw.atomicReadUnits = {};
+  }
+  if (!Array.isArray(raw.pendingIsbnScans)) {
+    raw.pendingIsbnScans = [];
   }
   if (raw.settings && !raw.settings.detailMode) {
     raw.settings.detailMode = 'simple';
@@ -378,6 +386,23 @@ interface CueContextValue {
     id: string,
     dateValue: string | undefined
   ) => void;
+  addCompletionRun: (
+    kind: 'show' | 'movie' | 'read' | 'game',
+    id: string,
+    dateYmd: string,
+    note?: string
+  ) => void;
+  updateCompletionRunDate: (
+    kind: 'show' | 'movie' | 'read' | 'game',
+    id: string,
+    runId: string,
+    dateYmd: string
+  ) => void;
+  deleteCompletionRun: (
+    kind: 'show' | 'movie' | 'read' | 'game',
+    id: string,
+    runId: string
+  ) => void;
   resetGameProgress: (gameId: string) => void;
 
   // Collection & List actions
@@ -388,6 +413,28 @@ interface CueContextValue {
   ) => void;
   toggleListPinnedToQueue: (listId: string) => void;
   deleteCustomList: (listId: string) => void;
+  createCuratedReadingOrder: (
+    templateId: 'hox-pox' | 'secret-wars-2015' | 'annihilation'
+  ) => string;
+  reorderListItem: (
+    listId: string,
+    fromIndex: number,
+    toIndex: number,
+    target?: 'items' | 'steps'
+  ) => void;
+  addReadingOrderStep: (listId: string, seriesTitle: string, issueNumber: number) => void;
+  removeReadingOrderStep: (listId: string, stepId: string) => void;
+  toggleReadingOrderStep: (listId: string, stepId: string) => void;
+
+  // Bulk Edit & Offline ISBN Queue
+  bulkUpdateItems: (
+    items: Array<{ kind: 'show' | 'movie' | 'read' | 'game'; id: string }>,
+    action: 'finish' | 'active' | 'queue' | 'remove' | 'add_to_list',
+    listId?: string
+  ) => void;
+  queuePendingIsbnScan: (isbn: string) => void;
+  removePendingIsbnScan: (isbn: string) => void;
+  flushPendingIsbnScans: () => Promise<number>;
 
   // Live catalog additions
   addLiveShowToStore: (show: Show, andBookmark?: boolean) => void;
@@ -415,7 +462,8 @@ interface CueContextValue {
     name: string,
     description: string,
     initialItem?: { kind: 'show' | 'movie' | 'read' | 'game'; id: string },
-    initialItems?: Array<{ kind: 'show' | 'movie' | 'read' | 'game'; id: string }>
+    initialItems?: Array<{ kind: 'show' | 'movie' | 'read' | 'game'; id: string }>,
+    options?: { isOrdered?: boolean; steps?: CustomListStep[] }
   ) => void;
   toggleItemInList: (
     listId: string,
@@ -4349,7 +4397,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       name: string,
       description: string,
       initialItem?: { kind: 'show' | 'movie' | 'read' | 'game'; id: string },
-      initialItems?: Array<{ kind: 'show' | 'movie' | 'read' | 'game'; id: string }>
+      initialItems?: Array<{ kind: 'show' | 'movie' | 'read' | 'game'; id: string }>,
+      options?: { isOrdered?: boolean; steps?: CustomListStep[] }
     ) => {
       const items =
         initialItems && initialItems.length > 0
@@ -4365,6 +4414,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             name: name.trim(),
             description: description.trim(),
             items,
+            ...(options?.isOrdered ? { isOrdered: true } : {}),
+            ...(options?.steps ? { steps: options.steps } : {}),
             createdAt: new Date().toISOString(),
           },
           ...prev.lists,
@@ -4374,6 +4425,777 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     },
     [showToast]
   );
+
+  const buildRunIso = (dateYmd: string): string => {
+    const trimmed = dateYmd.trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? `${trimmed}T12:00:00.000Z` : trimmed;
+  };
+
+  const addCompletionRun = useCallback(
+    (
+      kind: 'show' | 'movie' | 'read' | 'game',
+      id: string,
+      dateYmd: string,
+      note?: string
+    ) => {
+      const runIso = buildRunIso(dateYmd);
+      const cleanNote = note?.trim() || undefined;
+      commitState((prev) => {
+        const makeNewRun = (): CompletionRun => ({
+          id: `run-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          finishedAt: runIso,
+          ...(cleanNote ? { note: cleanNote } : {}),
+        });
+        const mergeRuns = (existingRuns: CompletionRun[] | undefined, baseFinish?: string): CompletionRun[] => {
+          const seeded =
+            existingRuns && existingRuns.length > 0
+              ? [...existingRuns]
+              : baseFinish
+                ? [{ id: `run-initial`, finishedAt: baseFinish }]
+                : [];
+          return [...seeded, makeNewRun()].sort((a, b) => a.finishedAt.localeCompare(b.finishedAt));
+        };
+
+        if (kind === 'show') {
+          const prog = prev.showProgress[id];
+          const show = prev.shows[id];
+          if (!prog) return prev;
+          const nextRuns = mergeRuns(prog.completedRuns, prog.finishedAt || prog.lastWatchedAt);
+          const latestFinish = nextRuns[nextRuns.length - 1]?.finishedAt || runIso;
+          return {
+            ...prev,
+            showProgress: {
+              ...prev.showProgress,
+              [id]: {
+                ...prog,
+                status: 'finished',
+                finishedAt: latestFinish,
+                completedRuns: nextRuns,
+              },
+            },
+            history: appendHistory(prev.history, {
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              domain: 'watch',
+              mediaKind: 'show',
+              mediaId: id,
+              title: show?.title || 'Series',
+              posterUrl: show?.posterUrl || '',
+              codeLabel: `Run #${nextRuns.length}`,
+              subtitle: cleanNote || 'Rewatch logged',
+              loggedAt: runIso,
+            }),
+          };
+        }
+        if (kind === 'movie') {
+          const prog = prev.movieProgress[id];
+          const movie = prev.movies[id];
+          if (!prog) return prev;
+          const nextRuns = mergeRuns(prog.completedRuns, prog.watchedAt);
+          const latestFinish = nextRuns[nextRuns.length - 1]?.finishedAt || runIso;
+          return {
+            ...prev,
+            movieProgress: {
+              ...prev.movieProgress,
+              [id]: {
+                ...prog,
+                status: 'watched',
+                watchCount: Math.max(prog.watchCount || 1, nextRuns.length),
+                watchedAt: latestFinish,
+                completedRuns: nextRuns,
+              },
+            },
+            history: appendHistory(prev.history, {
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              domain: 'watch',
+              mediaKind: 'movie',
+              mediaId: id,
+              title: movie?.title || 'Movie',
+              posterUrl: movie?.posterUrl || '',
+              codeLabel: `Run #${nextRuns.length}`,
+              subtitle: cleanNote || 'Rewatch logged',
+              loggedAt: runIso,
+            }),
+          };
+        }
+        if (kind === 'read') {
+          const prog = prev.readProgress[id];
+          const item = prev.readItems[id];
+          if (!prog) return prev;
+          const nextRuns = mergeRuns(prog.completedRuns, prog.finishedAt || prog.lastReadAt);
+          const latestFinish = nextRuns[nextRuns.length - 1]?.finishedAt || runIso;
+          return {
+            ...prev,
+            readProgress: {
+              ...prev.readProgress,
+              [id]: {
+                ...prog,
+                status: 'finished',
+                rereadCount: Math.max(prog.rereadCount || 1, nextRuns.length),
+                finishedAt: latestFinish,
+                completedRuns: nextRuns,
+              },
+            },
+            history: appendHistory(prev.history, {
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              domain: 'read',
+              mediaKind: 'read',
+              mediaId: id,
+              title: item?.title || 'Book',
+              posterUrl: item?.coverUrl || '',
+              codeLabel: `Run #${nextRuns.length}`,
+              subtitle: cleanNote || 'Reread logged',
+              loggedAt: runIso,
+            }),
+          };
+        }
+        const prog = prev.gameProgress[id];
+        const game = prev.games[id];
+        if (!prog) return prev;
+        const nextRuns = mergeRuns(prog.completedRuns, prog.finishedAt || prog.lastPlayedAt);
+        const latestFinish = nextRuns[nextRuns.length - 1]?.finishedAt || runIso;
+        return {
+          ...prev,
+          gameProgress: {
+            ...prev.gameProgress,
+            [id]: {
+              ...prog,
+              status: 'completed',
+              playthroughCount: Math.max(prog.playthroughCount || 1, nextRuns.length),
+              finishedAt: latestFinish,
+              completedRuns: nextRuns,
+            },
+          },
+          history: appendHistory(prev.history, {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            domain: 'play',
+            mediaKind: 'game',
+            mediaId: id,
+            title: game?.title || 'Game',
+            posterUrl: game?.coverUrl || '',
+            codeLabel: `Run #${nextRuns.length}`,
+            subtitle: cleanNote || 'Replay logged',
+            loggedAt: runIso,
+          }),
+        };
+      });
+      showToast('Completion run logged');
+    },
+    [showToast]
+  );
+
+  const updateCompletionRunDate = useCallback(
+    (kind: 'show' | 'movie' | 'read' | 'game', id: string, runId: string, dateYmd: string) => {
+      const runIso = buildRunIso(dateYmd);
+      commitState((prev) => {
+        const updateList = (runs: CompletionRun[] | undefined) =>
+          (runs || [])
+            .map((r) => (r.id === runId ? { ...r, finishedAt: runIso } : r))
+            .sort((a, b) => a.finishedAt.localeCompare(b.finishedAt));
+
+        if (kind === 'show') {
+          const prog = prev.showProgress[id];
+          if (!prog) return prev;
+          const nextRuns = updateList(prog.completedRuns);
+          return {
+            ...prev,
+            showProgress: {
+              ...prev.showProgress,
+              [id]: {
+                ...prog,
+                completedRuns: nextRuns,
+                finishedAt: nextRuns[nextRuns.length - 1]?.finishedAt || prog.finishedAt,
+              },
+            },
+          };
+        }
+        if (kind === 'movie') {
+          const prog = prev.movieProgress[id];
+          if (!prog) return prev;
+          const nextRuns = updateList(prog.completedRuns);
+          return {
+            ...prev,
+            movieProgress: {
+              ...prev.movieProgress,
+              [id]: {
+                ...prog,
+                completedRuns: nextRuns,
+                watchedAt: nextRuns[nextRuns.length - 1]?.finishedAt || prog.watchedAt,
+              },
+            },
+          };
+        }
+        if (kind === 'read') {
+          const prog = prev.readProgress[id];
+          if (!prog) return prev;
+          const nextRuns = updateList(prog.completedRuns);
+          return {
+            ...prev,
+            readProgress: {
+              ...prev.readProgress,
+              [id]: {
+                ...prog,
+                completedRuns: nextRuns,
+                finishedAt: nextRuns[nextRuns.length - 1]?.finishedAt || prog.finishedAt,
+              },
+            },
+          };
+        }
+        const prog = prev.gameProgress[id];
+        if (!prog) return prev;
+        const nextRuns = updateList(prog.completedRuns);
+        return {
+          ...prev,
+          gameProgress: {
+            ...prev.gameProgress,
+            [id]: {
+              ...prog,
+              completedRuns: nextRuns,
+              finishedAt: nextRuns[nextRuns.length - 1]?.finishedAt || prog.finishedAt,
+            },
+          },
+        };
+      });
+    },
+    []
+  );
+
+  const deleteCompletionRun = useCallback(
+    (kind: 'show' | 'movie' | 'read' | 'game', id: string, runId: string) => {
+      commitState((prev) => {
+        const prune = (runs: CompletionRun[] | undefined) => (runs || []).filter((r) => r.id !== runId);
+        if (kind === 'show') {
+          const prog = prev.showProgress[id];
+          if (!prog) return prev;
+          const nextRuns = prune(prog.completedRuns);
+          return {
+            ...prev,
+            showProgress: {
+              ...prev.showProgress,
+              [id]: {
+                ...prog,
+                completedRuns: nextRuns.length > 0 ? nextRuns : undefined,
+                finishedAt: nextRuns[nextRuns.length - 1]?.finishedAt || prog.finishedAt,
+              },
+            },
+          };
+        }
+        if (kind === 'movie') {
+          const prog = prev.movieProgress[id];
+          if (!prog) return prev;
+          const nextRuns = prune(prog.completedRuns);
+          return {
+            ...prev,
+            movieProgress: {
+              ...prev.movieProgress,
+              [id]: {
+                ...prog,
+                completedRuns: nextRuns.length > 0 ? nextRuns : undefined,
+                watchCount: nextRuns.length > 0 ? nextRuns.length : prog.watchCount,
+                watchedAt: nextRuns[nextRuns.length - 1]?.finishedAt || prog.watchedAt,
+              },
+            },
+          };
+        }
+        if (kind === 'read') {
+          const prog = prev.readProgress[id];
+          if (!prog) return prev;
+          const nextRuns = prune(prog.completedRuns);
+          return {
+            ...prev,
+            readProgress: {
+              ...prev.readProgress,
+              [id]: {
+                ...prog,
+                completedRuns: nextRuns.length > 0 ? nextRuns : undefined,
+                rereadCount: nextRuns.length > 0 ? nextRuns.length : prog.rereadCount,
+                finishedAt: nextRuns[nextRuns.length - 1]?.finishedAt || prog.finishedAt,
+              },
+            },
+          };
+        }
+        const prog = prev.gameProgress[id];
+        if (!prog) return prev;
+        const nextRuns = prune(prog.completedRuns);
+        return {
+          ...prev,
+          gameProgress: {
+            ...prev.gameProgress,
+            [id]: {
+              ...prog,
+              completedRuns: nextRuns.length > 0 ? nextRuns : undefined,
+              playthroughCount: nextRuns.length > 0 ? nextRuns.length : prog.playthroughCount,
+              finishedAt: nextRuns[nextRuns.length - 1]?.finishedAt || prog.finishedAt,
+            },
+          },
+        };
+      });
+    },
+    []
+  );
+
+  const createCuratedReadingOrder = useCallback(
+    (templateId: 'hox-pox' | 'secret-wars-2015' | 'annihilation') => {
+      const id = `list-ro-${templateId}-${Date.now()}`;
+      const makeStep = (seriesTitle: string, volNum: number, issueNum: number): CustomListStep => ({
+        id: `step-${seriesTitle.toLowerCase().replace(/[^a-z0-9]/g, '')}-${volNum}-${issueNum}-${Math.random().toString(36).slice(2, 6)}`,
+        title: `${seriesTitle} #${issueNum}`,
+        seriesTitle,
+        issueNumber: issueNum,
+        atomicId: makeComicAtomicId('marvel', `${seriesTitle} Vol ${volNum} ${issueNum}`),
+      });
+
+      const preset =
+        templateId === 'hox-pox'
+          ? {
+              name: 'House of X / Powers of X',
+              description: 'Jonathan Hickman chronological Krakoa launch reading order',
+              steps: [
+                makeStep('House of X', 1, 1),
+                makeStep('Powers of X', 1, 1),
+                makeStep('House of X', 1, 2),
+                makeStep('Powers of X', 1, 2),
+                makeStep('Powers of X', 1, 3),
+                makeStep('House of X', 1, 3),
+                makeStep('House of X', 1, 4),
+                makeStep('Powers of X', 1, 4),
+                makeStep('House of X', 1, 5),
+                makeStep('Powers of X', 1, 5),
+                makeStep('House of X', 1, 6),
+                makeStep('Powers of X', 1, 6),
+              ],
+            }
+          : templateId === 'secret-wars-2015'
+            ? {
+                name: 'Secret Wars (2015)',
+                description: 'Battleworld core event & Prelude chronological reading order',
+                steps: [
+                  makeStep('Avengers', 5, 43),
+                  makeStep('New Avengers', 3, 33),
+                  makeStep('Avengers', 5, 44),
+                  makeStep('Secret Wars', 2, 1),
+                  makeStep('Secret Wars', 2, 2),
+                  makeStep('Secret Wars', 2, 3),
+                  makeStep('Secret Wars', 2, 4),
+                  makeStep('Secret Wars', 2, 5),
+                  makeStep('Secret Wars', 2, 6),
+                  makeStep('Secret Wars', 2, 7),
+                  makeStep('Secret Wars', 2, 8),
+                  makeStep('Secret Wars', 2, 9),
+                ],
+              }
+            : {
+                name: 'Annihilation Cosmic Saga',
+                description: 'Dan Abnett & Keith Giffen cosmic Marvel reading order',
+                steps: [
+                  makeStep('Annihilation: Prologue', 1, 1),
+                  makeStep('Annihilation: Nova', 1, 1),
+                  makeStep('Annihilation: Nova', 1, 2),
+                  makeStep('Annihilation: Silver Surfer', 1, 1),
+                  makeStep('Annihilation: Super-Skrull', 1, 1),
+                  makeStep('Annihilation', 1, 1),
+                  makeStep('Annihilation', 1, 2),
+                  makeStep('Annihilation', 1, 3),
+                  makeStep('Annihilation', 1, 4),
+                  makeStep('Annihilation', 1, 5),
+                  makeStep('Annihilation', 1, 6),
+                ],
+              };
+
+      commitState((prev) => ({
+        ...prev,
+        lists: [
+          {
+            id,
+            name: preset.name,
+            description: preset.description,
+            items: [],
+            isOrdered: true,
+            steps: preset.steps,
+            createdAt: new Date().toISOString(),
+          },
+          ...prev.lists,
+        ],
+      }));
+      showToast(`Created "${preset.name}" reading order`);
+      return id;
+    },
+    [showToast]
+  );
+
+  const reorderListItem = useCallback(
+    (
+      listId: string,
+      fromIndex: number,
+      toIndex: number,
+      target: 'items' | 'steps' = 'items'
+    ) => {
+      if (fromIndex === toIndex) return;
+      commitState((prev) => ({
+        ...prev,
+        lists: prev.lists.map((l) => {
+          if (l.id !== listId) return l;
+          if (target === 'steps') {
+            const arr = [...(l.steps || [])];
+            if (fromIndex < 0 || toIndex < 0 || fromIndex >= arr.length || toIndex >= arr.length) return l;
+            const [moved] = arr.splice(fromIndex, 1);
+            arr.splice(toIndex, 0, moved);
+            return { ...l, isOrdered: true, steps: arr };
+          }
+          const arr = [...l.items];
+          if (fromIndex < 0 || toIndex < 0 || fromIndex >= arr.length || toIndex >= arr.length) return l;
+          const [moved] = arr.splice(fromIndex, 1);
+          arr.splice(toIndex, 0, moved);
+          return { ...l, isOrdered: true, items: arr };
+        }),
+      }));
+    },
+    []
+  );
+
+  const addReadingOrderStep = useCallback(
+    (listId: string, seriesTitle: string, issueNumber: number) => {
+      const cleanSeries = seriesTitle.trim();
+      const num = Math.max(1, Math.round(issueNumber));
+      if (!cleanSeries) return;
+      commitState((prev) => {
+        const matchedRead = prev.readOrder
+          .map((id) => prev.readItems[id])
+          .find((r) => r && r.title.toLowerCase().includes(cleanSeries.toLowerCase()));
+        const wiki = matchedRead?.comicSeriesWiki || 'marvel';
+        const volStr = matchedRead?.comicSeriesVolTitle
+          ? `${matchedRead.comicSeriesVolTitle} ${num}`
+          : `${cleanSeries} Vol 1 ${num}`;
+        const step: CustomListStep = {
+          id: `step-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          title: `${cleanSeries} #${num}`,
+          seriesTitle: cleanSeries,
+          issueNumber: num,
+          atomicId: makeComicAtomicId(wiki, volStr),
+          ...(matchedRead ? { readItemId: matchedRead.id } : {}),
+        };
+        return {
+          ...prev,
+          lists: prev.lists.map((l) =>
+            l.id === listId
+              ? { ...l, isOrdered: true, steps: [...(l.steps || []), step] }
+              : l
+          ),
+        };
+      });
+      showToast(`Added ${cleanSeries} #${num}`);
+    },
+    [showToast]
+  );
+
+  const removeReadingOrderStep = useCallback((listId: string, stepId: string) => {
+    commitState((prev) => ({
+      ...prev,
+      lists: prev.lists.map((l) =>
+        l.id === listId
+          ? { ...l, steps: (l.steps || []).filter((s) => s.id !== stepId) }
+          : l
+      ),
+    }));
+  }, []);
+
+  const toggleReadingOrderStep = useCallback(
+    (listId: string, stepId: string) => {
+      const nowIso = new Date().toISOString();
+      let toggledLabel = '';
+      let nextCompleted = false;
+      commitState((prev) => {
+        const list = prev.lists.find((l) => l.id === listId);
+        const step = list?.steps?.find((s) => s.id === stepId);
+        if (!step) return prev;
+        toggledLabel = step.title;
+        const wasDone = (prev.atomicReadUnits?.[step.atomicId]?.count || 0) > 0;
+        nextCompleted = !wasDone;
+        const synced = syncAtomicReadUnitsAcrossState(
+          prev,
+          '',
+          [
+            {
+              atomicId: step.atomicId,
+              completed: nextCompleted,
+              seriesTitle: step.seriesTitle,
+              issueLabel: `#${step.issueNumber}`,
+            },
+          ],
+          [],
+          nowIso
+        );
+        return {
+          ...prev,
+          atomicReadUnits: synced.atomicReadUnits,
+          readProgress: synced.readProgress,
+          history: nextCompleted
+            ? appendHistory(prev.history, {
+                id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                domain: 'read',
+                mediaKind: 'read',
+                mediaId: step.readItemId || listId,
+                title: list?.name || step.seriesTitle,
+                posterUrl: '',
+                codeLabel: `#${step.issueNumber}`,
+                subtitle: step.title,
+                loggedAt: nowIso,
+              })
+            : prev.history,
+        };
+      });
+      if (toggledLabel) {
+        showToast(nextCompleted ? `${toggledLabel} read` : `${toggledLabel} unmarked`, undefined, undefined, {
+          domain: 'read',
+        });
+      }
+    },
+    [showToast]
+  );
+
+  const bulkUpdateItems = useCallback(
+    (
+      items: Array<{ kind: 'show' | 'movie' | 'read' | 'game'; id: string }>,
+      action: 'finish' | 'active' | 'queue' | 'remove' | 'add_to_list',
+      listId?: string
+    ) => {
+      if (items.length === 0) return;
+      const nowIso = new Date().toISOString();
+      commitState((prev) => {
+        lastPreImportStateRef.current = prev;
+        const nextShows = { ...prev.showProgress };
+        const nextMovies = { ...prev.movieProgress };
+        const nextReads = { ...prev.readProgress };
+        const nextGames = { ...prev.gameProgress };
+        let nextLists = prev.lists;
+
+        if (action === 'add_to_list' && listId) {
+          nextLists = prev.lists.map((l) => {
+            if (l.id !== listId) return l;
+            const existingKeys = new Set(l.items.map((x) => `${x.kind}:${x.id}`));
+            const additions = items.filter((x) => !existingKeys.has(`${x.kind}:${x.id}`));
+            return additions.length > 0 ? { ...l, items: [...l.items, ...additions] } : l;
+          });
+          return { ...prev, lists: nextLists };
+        }
+
+        for (const ref of items) {
+          if (ref.kind === 'show') {
+            const s = prev.shows[ref.id];
+            const p = nextShows[ref.id];
+            if (!s || !p) continue;
+            if (action === 'remove') {
+              nextShows[ref.id] = { ...p, bookmarked: false };
+            } else if (action === 'finish') {
+              const epCounts = { ...p.episodeCounts };
+              for (const ep of getAllEpisodes(s)) {
+                const k = getEpisodeKey(ep.season, ep.number);
+                epCounts[k] = Math.max(1, epCounts[k] || 0);
+              }
+              nextShows[ref.id] = {
+                ...p,
+                status: 'finished',
+                episodeCounts: epCounts,
+                finishedAt: p.finishedAt || nowIso,
+                lastWatchedAt: nowIso,
+              };
+            } else if (action === 'active') {
+              nextShows[ref.id] = { ...p, status: 'watching', bookmarked: true };
+            } else if (action === 'queue') {
+              nextShows[ref.id] = {
+                ...p,
+                status: 'not_started',
+                episodeCounts: {},
+                finishedAt: undefined,
+                bookmarked: true,
+              };
+            }
+          } else if (ref.kind === 'movie') {
+            const p = nextMovies[ref.id];
+            if (!p) continue;
+            if (action === 'remove') {
+              delete nextMovies[ref.id];
+            } else if (action === 'finish') {
+              nextMovies[ref.id] = {
+                ...p,
+                status: 'watched',
+                watchCount: Math.max(1, p.watchCount || 0),
+                watchedAt: p.watchedAt || nowIso,
+              };
+            } else {
+              nextMovies[ref.id] = {
+                ...p,
+                status: 'watchlist',
+                watchCount: 0,
+                watchedAt: undefined,
+              };
+            }
+          } else if (ref.kind === 'read') {
+            const r = prev.readItems[ref.id];
+            const p = nextReads[ref.id];
+            if (!r || !p) continue;
+            if (action === 'remove') {
+              nextReads[ref.id] = { ...p, bookmarked: false };
+            } else if (action === 'finish') {
+              const allSlots = Array.from({ length: r.totalUnits }, (_, i) => i + 1);
+              nextReads[ref.id] = {
+                ...p,
+                status: 'finished',
+                currentUnit: r.totalUnits,
+                completedUnits: allSlots,
+                maxCompletedUnit: r.totalUnits,
+                rereadCount: Math.max(1, p.rereadCount || 0),
+                finishedAt: p.finishedAt || nowIso,
+                lastReadAt: nowIso,
+              };
+            } else if (action === 'active') {
+              nextReads[ref.id] = { ...p, status: 'reading', bookmarked: true };
+            } else if (action === 'queue') {
+              nextReads[ref.id] = {
+                ...p,
+                status: 'want_to_read',
+                currentUnit: 0,
+                completedUnits: [],
+                finishedAt: undefined,
+                bookmarked: true,
+              };
+            }
+          } else if (ref.kind === 'game') {
+            const p = nextGames[ref.id];
+            if (!p) continue;
+            if (action === 'remove') {
+              nextGames[ref.id] = { ...p, bookmarked: false };
+            } else if (action === 'finish') {
+              nextGames[ref.id] = {
+                ...p,
+                status: 'completed',
+                completionPct: 100,
+                playthroughCount: Math.max(1, p.playthroughCount || 0),
+                finishedAt: p.finishedAt || nowIso,
+                lastPlayedAt: nowIso,
+              };
+            } else if (action === 'active') {
+              nextGames[ref.id] = { ...p, status: 'playing', bookmarked: true };
+            } else if (action === 'queue') {
+              nextGames[ref.id] = {
+                ...p,
+                status: 'backlog',
+                completionPct: 0,
+                currentChapter: 0,
+                finishedAt: undefined,
+                bookmarked: true,
+              };
+            }
+          }
+        }
+
+        return {
+          ...prev,
+          showProgress: nextShows,
+          movieProgress: nextMovies,
+          readProgress: nextReads,
+          gameProgress: nextGames,
+        };
+      });
+
+      const verb =
+        action === 'remove'
+          ? 'Removed'
+          : action === 'finish'
+            ? 'Marked finished:'
+            : action === 'active'
+              ? 'Moved to active:'
+              : action === 'queue'
+                ? 'Moved to backlog:'
+                : 'Added to list:';
+      showToast(`${verb} ${items.length} ${items.length === 1 ? 'item' : 'items'}`, 'Undo', () => {
+        const snapshot = lastPreImportStateRef.current;
+        if (!snapshot) return;
+        lastPreImportStateRef.current = null;
+        stateRef.current = snapshot;
+        setState(snapshot);
+        showToast('Bulk edit undone');
+      }, {
+        tone: 'undo',
+      });
+    },
+    [showToast]
+  );
+
+  const queuePendingIsbnScan = useCallback(
+    (rawIsbn: string) => {
+      const clean = rawIsbn.replace(/[^0-9Xx]/g, '').toUpperCase();
+      if (!clean) return;
+      commitState((prev) => {
+        const list = prev.pendingIsbnScans || [];
+        if (list.some((x) => x.isbn === clean)) return prev;
+        return {
+          ...prev,
+          pendingIsbnScans: [
+            { isbn: clean, scannedAt: new Date().toISOString() },
+            ...list,
+          ],
+        };
+      });
+      showToast(`Saved ISBN ${clean} offline — will sync when online`, undefined, undefined, {
+        domain: 'read',
+      });
+    },
+    [showToast]
+  );
+
+  const removePendingIsbnScan = useCallback((isbn: string) => {
+    commitState((prev) => ({
+      ...prev,
+      pendingIsbnScans: (prev.pendingIsbnScans || []).filter((x) => x.isbn !== isbn),
+    }));
+  }, []);
+
+  const flushingIsbnRef = useRef(false);
+  const flushPendingIsbnScans = useCallback(async (): Promise<number> => {
+    if (flushingIsbnRef.current) return 0;
+    const queue = stateRef.current.pendingIsbnScans || [];
+    if (queue.length === 0) return 0;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return 0;
+
+    flushingIsbnRef.current = true;
+    let resolvedCount = 0;
+    const resolvedIsbns = new Set<string>();
+    try {
+      for (const entry of queue) {
+        try {
+          const matches = await searchByIsbn(entry.isbn);
+          if (matches.length > 0) {
+            const hydrated = await hydrateLiveReadItem(matches[0]);
+            addLiveReadToStore(hydrated, 'want_to_read', true);
+            resolvedIsbns.add(entry.isbn);
+            resolvedCount += 1;
+          }
+        } catch {
+          // keep failed ISBN in queue for the next retry
+        }
+      }
+      if (resolvedIsbns.size > 0) {
+        commitState((prev) => ({
+          ...prev,
+          pendingIsbnScans: (prev.pendingIsbnScans || []).filter((x) => !resolvedIsbns.has(x.isbn)),
+        }));
+      }
+    } finally {
+      flushingIsbnRef.current = false;
+    }
+    return resolvedCount;
+  }, [addLiveReadToStore]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onOnline = () => {
+      if ((stateRef.current.pendingIsbnScans?.length || 0) > 0) {
+        void flushPendingIsbnScans();
+      }
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [flushPendingIsbnScans]);
 
   const toggleItemInList = useCallback(
     (listId: string, kind: 'show' | 'movie' | 'read' | 'game', id: string) => {
@@ -5152,10 +5974,22 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         setGameChapterTitle,
         setGameMood,
         setMediaFinishedDate,
+        addCompletionRun,
+        updateCompletionRunDate,
+        deleteCompletionRun,
         resetGameProgress,
         rateCollection,
         toggleListPinnedToQueue,
         deleteCustomList,
+        createCuratedReadingOrder,
+        reorderListItem,
+        addReadingOrderStep,
+        removeReadingOrderStep,
+        toggleReadingOrderStep,
+        bulkUpdateItems,
+        queuePendingIsbnScan,
+        removePendingIsbnScan,
+        flushPendingIsbnScans,
         addLiveShowToStore,
         addLiveMovieToStore,
         addLiveReadToStore,

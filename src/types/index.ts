@@ -181,6 +181,17 @@ export interface GameItem {
   chapterNote?: string;
 }
 
+export interface CompletionRun {
+  id: string;
+  finishedAt: string;
+  note?: string;
+}
+
+export interface PendingIsbnScan {
+  isbn: string;
+  scannedAt: string;
+}
+
 export interface ShowProgress {
   status: ShowWatchStatus;
   /** Map of "S01E01" -> watch count (0 or absent = unwatched, 1 = watched, 2+ = rewatched) */
@@ -189,6 +200,7 @@ export interface ShowProgress {
   notifications: boolean;
   lastWatchedAt?: string;
   finishedAt?: string;
+  completedRuns?: CompletionRun[];
   rating?: number;
   ratingSource?: RatingSource;
   episodeRatings?: Record<string, number>;
@@ -201,6 +213,7 @@ export interface MovieProgress {
   status: MovieWatchStatus;
   watchCount: number;
   watchedAt?: string;
+  completedRuns?: CompletionRun[];
   rating?: number;
   mood?: PersonalMood;
 }
@@ -218,6 +231,7 @@ export interface ReadProgress {
   editionCoverUrl?: string;
   lastReadAt?: string;
   finishedAt?: string;
+  completedRuns?: CompletionRun[];
   rating?: number;
   ratingSource?: RatingSource;
   unitRatings?: Record<number, number>;
@@ -237,6 +251,7 @@ export interface GameProgress {
   bookmarked: boolean;
   lastPlayedAt?: string;
   finishedAt?: string;
+  completedRuns?: CompletionRun[];
   rating?: number;
   mood?: PersonalMood;
 }
@@ -280,11 +295,22 @@ export interface JournalEntry {
   createdAt: string;
 }
 
+export interface CustomListStep {
+  id: string;
+  title: string;
+  seriesTitle: string;
+  issueNumber: number;
+  atomicId: string;
+  readItemId?: string;
+}
+
 export interface CustomList {
   id: string;
   name: string;
   description: string;
   items: { kind: 'show' | 'movie' | 'read' | 'game'; id: string }[];
+  isOrdered?: boolean;
+  steps?: CustomListStep[];
   pinnedToQueue?: boolean;
   createdAt: string;
 }
@@ -369,6 +395,7 @@ export interface CueStoreState {
   readProgress: Record<string, ReadProgress>;
   gameProgress: Record<string, GameProgress>;
   atomicReadUnits?: Record<string, AtomicReadRecord>;
+  pendingIsbnScans?: PendingIsbnScan[];
   upcoming: UpcomingEntry[];
   history: HistoryEntry[];
   journalEntries: JournalEntry[];

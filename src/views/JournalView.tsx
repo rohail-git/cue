@@ -17,6 +17,7 @@ import { DeviceSyncModal } from '../components/DeviceSyncModal';
 import { JournalAdvancedStats } from '../components/JournalAdvancedStats';
 import { MediaImage } from '../components/MediaImage';
 import { MOOD_OPTIONS } from '../components/PersonalNotesSection';
+import { YearWrappedModal } from '../components/YearWrappedModal';
 import { useCueStore } from '../store/useCueStore';
 import type {
   DetailCardMode,
@@ -53,6 +54,7 @@ export function JournalView() {
     addJournalEntry,
     deleteJournalEntry,
     createCustomList,
+    createCuratedReadingOrder,
     syncCode,
   } = useCueStore();
 
@@ -72,6 +74,8 @@ export function JournalView() {
   const [newListOpen, setNewListOpen] = useState(false);
   const [listName, setListName] = useState('');
   const [listDesc, setListDesc] = useState('');
+  const [listOrdered, setListOrdered] = useState(false);
+  const [wrappedOpen, setWrappedOpen] = useState(false);
 
   const handleJournalModeChange = (nextMode: DetailCardMode) => {
     sessionJournalMode = nextMode;
@@ -335,22 +339,30 @@ export function JournalView() {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <button
+              type="button"
+              onClick={() => setWrappedOpen(true)}
+              className="px-3.5 py-1.5 rounded-full bg-brand/15 border border-brand/35 text-xs font-semibold text-brand hover:bg-brand/25 transition-colors inline-flex items-center gap-1.5"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>{new Date().getFullYear()} Wrapped</span>
+            </button>
             <button
               type="button"
               onClick={() => setSyncOpen(true)}
               className="px-3.5 py-1.5 rounded-full bg-surface border border-white/10 text-xs font-semibold text-ink hover:bg-surface-raised transition-colors inline-flex items-center gap-1.5"
             >
               <QrCode className="w-3.5 h-3.5 text-watch" />
-              <span>{syncCode ? 'Synced' : 'Sync devices'}</span>
+              <span>{syncCode ? 'Synced' : 'Sync'}</span>
               {syncCode && <span className="h-1.5 w-1.5 rounded-full bg-watch" />}
             </button>
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}
-              className="px-4 py-1.5 rounded-full bg-surface border border-white/10 text-xs font-semibold text-ink hover:bg-surface-raised transition-colors"
+              className="px-3.5 py-1.5 rounded-full bg-surface border border-white/10 text-xs font-semibold text-ink hover:bg-surface-raised transition-colors"
             >
-              Edit profile
+              Edit
             </button>
           </div>
         </div>
@@ -758,18 +770,41 @@ export function JournalView() {
           )}
         </section>
 
-        {/* Custom Lists */}
+        {/* Custom Lists & Event Reading Orders */}
         <section>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-display font-bold text-[20px] text-ink">Lists</h2>
+          <div className="flex items-center justify-between mb-3 gap-2">
+            <h2 className="font-display font-bold text-[20px] text-ink">Lists & Reading Orders</h2>
             <button
               type="button"
               onClick={() => setNewListOpen(true)}
-              className="flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-full bg-surface border border-white/10 text-ink hover:bg-surface-raised"
+              className="flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-full bg-surface border border-white/10 text-ink hover:bg-surface-raised shrink-0"
             >
               <Plus className="w-3.5 h-3.5 text-brand" />
               <span>New list</span>
             </button>
+          </div>
+
+          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-2.5 mb-2">
+            {(
+              [
+                { id: 'hox-pox', label: 'House of X / Powers of X Order' },
+                { id: 'secret-wars-2015', label: 'Secret Wars (2015) Order' },
+                { id: 'annihilation', label: 'Annihilation Cosmic Order' },
+              ] as const
+            ).map((ro) => (
+              <button
+                key={ro.id}
+                type="button"
+                onClick={() => {
+                  const newId = createCuratedReadingOrder(ro.id);
+                  pushRoute({ view: 'list-detail', listId: newId });
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface border border-read/25 hover:border-read/60 text-xs font-medium text-ink shrink-0 transition-colors"
+              >
+                <Plus className="w-3 h-3 text-read" />
+                <span>{ro.label}</span>
+              </button>
+            ))}
           </div>
 
           {state.lists.length === 0 ? (
@@ -777,7 +812,7 @@ export function JournalView() {
               <div>
                 <p className="text-sm font-semibold text-ink">No custom lists yet</p>
                 <p className="text-xs text-ink-dim mt-1">
-                  Start from a quick collection template or create your own shelf.
+                  Start from a quick collection template, event reading order, or create your own shelf.
                 </p>
               </div>
               <div className="flex items-center justify-center gap-2 flex-wrap pt-0.5">
@@ -803,6 +838,7 @@ export function JournalView() {
               {state.lists.map((list) => {
                 const ev = evaluateCustomListProgress(list, state);
                 const pct = Math.round(ev.averageRatio * 100);
+                const itemCount = list.steps && list.steps.length > 0 ? list.steps.length : list.items.length;
                 return (
                   <button
                     key={list.id}
@@ -814,10 +850,15 @@ export function JournalView() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
                           {list.pinnedToQueue && <Pin className="w-3.5 h-3.5 text-brand shrink-0" />}
+                          {list.isOrdered && (
+                            <span className="px-1.5 py-0.5 rounded bg-read/15 text-read text-[9px] font-bold uppercase tracking-wider shrink-0">
+                              Order
+                            </span>
+                          )}
                           <p className="font-semibold text-[15px] text-ink truncate">{list.name}</p>
                         </div>
                         <p className="text-xs text-ink-dim truncate mt-0.5">
-                          {list.description || `${list.items.length} titles`}
+                          {list.description || `${itemCount} ${list.steps?.length ? 'issues' : 'titles'}`}
                         </p>
                       </div>
                       <ChevronRight className="w-4 h-4 text-ink-dim shrink-0" />
@@ -827,7 +868,7 @@ export function JournalView() {
                         <span>
                           {ev.completedItems}/{ev.totalItems} complete ({pct}%)
                         </span>
-                        <span>{list.items.length} items</span>
+                        <span>{itemCount} {list.steps?.length ? 'issues' : 'items'}</span>
                       </div>
                       {ev.totalItems > 0 && (
                         <div className="h-1 w-full rounded-full bg-white/10 overflow-hidden">
@@ -974,9 +1015,10 @@ export function JournalView() {
             onSubmit={(e) => {
               e.preventDefault();
               if (!listName.trim()) return;
-              createCustomList(listName, listDesc);
+              createCustomList(listName, listDesc, undefined, undefined, { isOrdered: listOrdered });
               setListName('');
               setListDesc('');
+              setListOrdered(false);
               setNewListOpen(false);
             }}
             className="w-full md:max-w-md bg-surface-raised border border-white/10 rounded-t-[26px] md:rounded-[24px] p-5 space-y-3 shadow-2xl"
@@ -1005,6 +1047,15 @@ export function JournalView() {
               onChange={(e) => setListDesc(e.target.value)}
               className="w-full rounded-xl bg-surface border border-white/10 px-3.5 py-2.5 text-sm text-ink outline-none focus:border-brand"
             />
+            <label className="flex items-center gap-2.5 text-xs text-ink-dim cursor-pointer select-none px-1 py-0.5">
+              <input
+                type="checkbox"
+                checked={listOrdered}
+                onChange={(e) => setListOrdered(e.target.checked)}
+                className="rounded border-white/20 bg-surface accent-[#6EC5D4]"
+              />
+              <span>Ordered Reading / Event Sequence (allows issue steps & reordering)</span>
+            </label>
             <button
               type="submit"
               disabled={!listName.trim()}
@@ -1016,6 +1067,7 @@ export function JournalView() {
         </div>
       )}
       <DeviceSyncModal open={syncOpen} onClose={() => setSyncOpen(false)} />
+      <YearWrappedModal open={wrappedOpen} onClose={() => setWrappedOpen(false)} />
     </div>
   );
 }

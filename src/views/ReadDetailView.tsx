@@ -82,6 +82,9 @@ export function ReadDetailView({ readId }: { readId: string }) {
     rateCollection,
     setReadMood,
     setMediaFinishedDate,
+    addCompletionRun,
+    updateCompletionRunDate,
+    deleteCompletionRun,
     updateReadEditionCovers,
     updateReadIssueDetails,
     patchReadIssueMeta,
@@ -1111,6 +1114,11 @@ export function ReadDetailView({ readId }: { readId: string }) {
                 verbLabel="Finished"
                 onChangeDate={(ymd) => setMediaFinishedDate('read', item.id, ymd)}
                 onMarkFinished={() => markReadFinished(item.id)}
+                completedRuns={progress?.completedRuns}
+                runVerb="reread"
+                onAddRun={(ymd, note) => addCompletionRun('read', item.id, ymd, note)}
+                onUpdateRunDate={(runId, ymd) => updateCompletionRunDate('read', item.id, runId, ymd)}
+                onDeleteRun={(runId) => deleteCompletionRun('read', item.id, runId)}
               />
             </section>
           )}

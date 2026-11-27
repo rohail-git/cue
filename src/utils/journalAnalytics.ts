@@ -477,7 +477,7 @@ export function computeJournalAdvancedStats(
     });
   }
 
-  for (const [mediaKey, customFinish] of finishedByMediaKey.entries()) {
+    for (const [mediaKey, customFinish] of finishedByMediaKey.entries()) {
     recordedMediaKeys.add(mediaKey);
     if (!hasEventOnFinishDate.has(mediaKey)) {
       events.push({
@@ -487,6 +487,97 @@ export function computeJournalAdvancedStats(
         title: customFinish.title,
         posterUrl: customFinish.posterUrl,
       });
+    }
+  }
+
+  // Include extra dated rewatch / reread / replay completion runs so each run
+  // highlights its own square on Your Days and 16-Week Pulse.
+  const seenRunDates = new Set<string>();
+  for (const [mediaKey, customFinish] of finishedByMediaKey.entries()) {
+    seenRunDates.add(`${mediaKey}:${customFinish.dateIso}`);
+  }
+  const appendExtraRuns = (
+    runs: Array<{ finishedAt: string }> | undefined,
+    mediaKey: string,
+    domain: MediaDomain,
+    minutes: number,
+    title: string,
+    posterUrl?: string
+  ) => {
+    if (!runs || runs.length === 0) return;
+    for (const r of runs) {
+      const parsedRun = parseCalendarAwareTimestamp(r.finishedAt);
+      if (!parsedRun) continue;
+      const runDateKey = `${mediaKey}:${parsedRun.dateIso}`;
+      if (seenRunDates.has(runDateKey)) continue;
+      seenRunDates.add(runDateKey);
+      recordedMediaKeys.add(mediaKey);
+      events.push({
+        ts: parsedRun.ts,
+        domain,
+        minutes,
+        title,
+        posterUrl,
+      });
+    }
+  };
+
+  if (includesWatch) {
+    for (const id of state.showOrder) {
+      const show = state.shows[id];
+      const prog = state.showProgress[id];
+      if (!show || !prog?.completedRuns?.length) continue;
+      appendExtraRuns(
+        prog.completedRuns,
+        `watch:${show.id}`,
+        'watch',
+        Math.max(30, show.runtimeAvg || 42),
+        show.title,
+        show.posterUrl
+      );
+    }
+    for (const id of state.movieOrder) {
+      const movie = state.movies[id];
+      const prog = state.movieProgress[id];
+      if (!movie || !prog?.completedRuns?.length) continue;
+      appendExtraRuns(
+        prog.completedRuns,
+        `watch:${movie.id}`,
+        'watch',
+        movie.runtime || 120,
+        movie.title,
+        movie.posterUrl
+      );
+    }
+  }
+  if (includesRead) {
+    for (const id of state.readOrder) {
+      const item = state.readItems[id];
+      const prog = state.readProgress[id];
+      if (!item || !prog?.completedRuns?.length) continue;
+      appendExtraRuns(
+        prog.completedRuns,
+        `read:${item.id}`,
+        'read',
+        item.unit === 'issues' ? 10 : 12,
+        item.title,
+        resolveComicEditionCover(item, prog.edition, prog)
+      );
+    }
+  }
+  if (includesPlay) {
+    for (const id of state.gameOrder) {
+      const game = state.games[id];
+      const prog = state.gameProgress[id];
+      if (!game || !prog?.completedRuns?.length) continue;
+      appendExtraRuns(
+        prog.completedRuns,
+        `play:${game.id}`,
+        'play',
+        Math.max(60, Math.min(240, Math.round((prog.hoursPlayed || 2) * 60))),
+        game.title,
+        game.coverUrl
+      );
     }
   }
 

@@ -38,6 +38,9 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
     rateCollection,
     setMovieMood,
     setMediaFinishedDate,
+    addCompletionRun,
+    updateCompletionRunDate,
+    deleteCompletionRun,
     updateMovieDetails,
     toggleItemInList,
     createCustomList,
@@ -457,6 +460,11 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                   verbLabel="Watched"
                   onChangeDate={(ymd) => setMediaFinishedDate('movie', movie.id, ymd)}
                   onMarkFinished={() => toggleMovieWatched(movie.id)}
+                  completedRuns={progress?.completedRuns}
+                  runVerb="rewatch"
+                  onAddRun={(ymd, note) => addCompletionRun('movie', movie.id, ymd, note)}
+                  onUpdateRunDate={(runId, ymd) => updateCompletionRunDate('movie', movie.id, runId, ymd)}
+                  onDeleteRun={(runId) => deleteCompletionRun('movie', movie.id, runId)}
                 />
               </section>
 

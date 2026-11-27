@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Check, ChevronDown, ChevronRight, Clock, Plus, Search, Upload } from 'lucide-react';
+import { BookOpen, Check, CheckSquare, ChevronDown, ChevronRight, Clock, Plus, Search, Upload } from 'lucide-react';
 import { BingersMediaRow } from '../components/BingersMediaRow';
+import { BulkActionBar } from '../components/BulkActionBar';
 import { FilterSortSheet } from '../components/FilterSortSheet';
 import { MediaImage } from '../components/MediaImage';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
-import { useCueStore } from '../store/useCueStore';
+import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { ReadFilter, ReadItem, UpcomingEntry } from '../types';
 import { getComicEditionLabel, resolveComicEditionCover } from '../utils/editions';
 import { classifyReadFormat } from '../utils/mediaImport';
@@ -26,11 +27,32 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     updateSettings,
     advanceReadProgress,
     autoClassifyReadLibrary,
+    bulkUpdateItems,
   } = useCueStore();
 
   const [justBumped, setJustBumped] = useState<Record<string, boolean>>({});
   const [showFinished, setShowFinished] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedMap, setSelectedMap] = useState<
+    Record<string, { kind: 'read'; id: string }>
+  >({});
   const timersRef = useRef<number[]>([]);
+
+  useModalBackHandler(selectMode, () => {
+    setSelectMode(false);
+    setSelectedMap({});
+  });
+
+  const toggleBulkItem = (id: string) => {
+    setSelectedMap((prev) => {
+      if (prev[id]) {
+        const copy = { ...prev };
+        delete copy[id];
+        return copy;
+      }
+      return { ...prev, [id]: { kind: 'read', id } };
+    });
+  };
 
   useEffect(() => {
     return () => {
@@ -202,24 +224,44 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
       .join(' · ');
 
     if (isPosterLayout) {
+      const isSel = Boolean(selectedMap[item.id]);
       return (
         <div
           key={item.id}
           role="button"
           tabIndex={0}
-          onClick={() => pushRoute({ view: 'read-detail', readId: item.id })}
+          onClick={() =>
+            selectMode ? toggleBulkItem(item.id) : pushRoute({ view: 'read-detail', readId: item.id })
+          }
           onKeyDown={(e) => {
-            if (e.key === 'Enter') pushRoute({ view: 'read-detail', readId: item.id });
+            if (e.key === 'Enter') {
+              if (selectMode) toggleBulkItem(item.id);
+              else pushRoute({ view: 'read-detail', readId: item.id });
+            }
           }}
           className="group cursor-pointer text-left"
         >
-          <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
+          <div
+            className={`relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border transition-all ${
+              selectMode && isSel ? 'border-read ring-2 ring-read' : 'border-white/8'
+            }`}
+          >
             <MediaImage
               src={displayCover}
               alt={item.title}
               className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
             />
-            {!stats.isFinished && !isWaiting && (
+            {selectMode ? (
+              <span
+                className={`absolute top-2 right-2 h-7 w-7 rounded-full border flex items-center justify-center ${
+                  isSel
+                    ? 'bg-read border-read text-[#1D160A]'
+                    : 'bg-black/65 border-white/30 text-transparent'
+                }`}
+              >
+                <Check className="w-4 h-4" strokeWidth={2.8} />
+              </span>
+            ) : !stats.isFinished && !isWaiting && (
               <button
                 type="button"
                 onClick={(e) => handleQuickAdvance(e, item.id)}
@@ -317,7 +359,12 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
         isFlashing={flash}
         flashLabel="Read"
         actionContent={
-          stats.isFinished ? (
+          selectMode ? (
+            <Check
+              className={`w-[17px] h-[17px] ${selectedMap[item.id] ? 'text-read' : 'text-ink-faint'}`}
+              strokeWidth={2.6}
+            />
+          ) : stats.isFinished ? (
             stats.rereadCount > 1 ? (
               `x${stats.rereadCount}`
             ) : (
@@ -329,11 +376,22 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
             </span>
           )
         }
-        actionAriaLabel={`Advance ${item.title} by 1 ${stats.unitSingular}`}
-        actionDisabled={stats.isFinished}
-        actionActive={stats.isFinished}
-        onAction={!stats.isFinished ? (e) => handleQuickAdvance(e, item.id) : undefined}
-        onOpen={() => pushRoute({ view: 'read-detail', readId: item.id })}
+        actionAriaLabel={selectMode ? `Select ${item.title}` : `Advance ${item.title} by 1 ${stats.unitSingular}`}
+        actionDisabled={!selectMode && stats.isFinished}
+        actionActive={selectMode ? Boolean(selectedMap[item.id]) : stats.isFinished}
+        onAction={
+          selectMode
+            ? (e) => {
+                e.stopPropagation();
+                toggleBulkItem(item.id);
+              }
+            : !stats.isFinished
+              ? (e) => handleQuickAdvance(e, item.id)
+              : undefined
+        }
+        onOpen={() =>
+          selectMode ? toggleBulkItem(item.id) : pushRoute({ view: 'read-detail', readId: item.id })
+        }
       />
     );
   };
@@ -368,24 +426,41 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
         }
       >
         {!calendarMode && (
-          <div className="flex items-center gap-2 mb-5 overflow-x-auto no-scrollbar">
-            {filterTabs.map((t) => {
-              const active = filter === t.id;
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => updateSettings({ readFilter: t.id })}
-                  className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
-                    active
-                      ? 'bg-brand border-brand text-brand-ink'
-                      : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
-                  }`}
-                >
-                  {t.label}
-                </button>
-              );
-            })}
+          <div className="flex items-center justify-between gap-2 mb-5 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-2">
+              {filterTabs.map((t) => {
+                const active = filter === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => updateSettings({ readFilter: t.id })}
+                    className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
+                      active
+                        ? 'bg-brand border-brand text-brand-ink'
+                        : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectMode((v) => !v);
+                setSelectedMap({});
+              }}
+              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 inline-flex items-center gap-1.5 transition-colors ${
+                selectMode
+                  ? 'bg-white border-white text-[#131519]'
+                  : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+              }`}
+            >
+              <CheckSquare className="w-3.5 h-3.5" />
+              <span>{selectMode ? 'Cancel' : 'Select'}</span>
+            </button>
           </div>
         )}
 
@@ -542,6 +617,32 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
       </ScrollUpHistoryFeed>
 
       <FilterSortSheet domain="read" />
+      {selectMode && !calendarMode && (
+        <BulkActionBar
+          selectedCount={Object.keys(selectedMap).length}
+          totalCount={
+            readingList.length + wantToReadList.length + caughtUpList.length + finishedList.length
+          }
+          lists={state.lists}
+          onSelectAll={() => {
+            const all: Record<string, { kind: 'read'; id: string }> = {};
+            for (const r of [...readingList, ...wantToReadList, ...caughtUpList, ...finishedList]) {
+              all[r.id] = { kind: 'read', id: r.id };
+            }
+            setSelectedMap(all);
+          }}
+          onClear={() => setSelectedMap({})}
+          onCancel={() => {
+            setSelectMode(false);
+            setSelectedMap({});
+          }}
+          onAction={(act, lId) => {
+            bulkUpdateItems(Object.values(selectedMap), act, lId);
+            setSelectMode(false);
+            setSelectedMap({});
+          }}
+        />
+      )}
     </>
   );
 }

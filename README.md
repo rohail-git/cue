@@ -14,8 +14,8 @@ Cue separates media tracking into two layers so you never double-log progress:
 - **Smart Containers (The Buckets):** Linear containers (TV seasons, manga volumes, game campaigns) and overlapping relational containers (Comic TPBs, Hardcovers, Omnibuses, Compendiums, Movie Collections, and custom Reading Orders/Events).
 - **Automatic Bi-Directional Sync:** Logging individual comic issues (`#1–6`) automatically advances and checks off any TPBs or Omnibuses containing those issues — and checking off a collected edition retroactively marks its underlying issues read across your library.
 - **Catch-Up Prompt Sheet:** Marking a non-adjacent episode, chapter, or issue prompts to catch up all skipped prior atoms (with a per-title *"Never ask"* toggle).
-- **Finished Date Timeline Sync:** Backdating or editing a title's completion date automatically updates your **Your Days** heatmap grid, **16-Week Pulse**, **When You Engage**, and **Hall of Fame** timelines.
-- **Resilient Multi-API Adapters:** All external providers are normalized into unified Cue schemas with `Promise.allSettled` fault isolation, strict timeouts across client & serverless calls (`src/utils/safeFetch.ts`), and per-host `429` rate-limit cooldown/retry backoff.
+- **Finished Date Timeline Sync & Multi-Run History:** Backdating or editing a title's completion date automatically updates **Your Days**, **16-Week Pulse**, **When You Engage**, and **Hall of Fame** — plus supports multiple dated rewatch, reread, and replay runs (`completedRuns`) per title.
+- **Resilient Multi-API Adapters & Offline Queueing:** All external providers are normalized into unified Cue schemas with `Promise.allSettled` fault isolation, strict timeouts across client & serverless calls (`src/utils/safeFetch.ts`), per-host `429` backoff, and an **Offline ISBN Queue** (`pendingIsbnScans`) that saves shelf scans offline and auto-syncs when online.
 
 ---
 
@@ -27,7 +27,8 @@ Cue separates media tracking into two layers so you never double-log progress:
 - **Read (Novels, Manga, Comics & Omnibuses):** Open Library, MangaDex, Jikan/AniList, Google Books, and Marvel/DC/Image Fandom issue hydration (supporting individual issue covers, release dates, omnibus ISBN lookup, and a live camera **ISBN Barcode Scanner**).
 - **Play (Games):** IGDB & Steam-backed game library with story chapter/mission tracking and one-tap **Suggest chapters & missions** (via curated catalog, Wikipedia/web lookup, or Google AI Mode copy-and-paste parser).
 - **Simple & Advanced Detail Modes:** Switch seamlessly between distraction-free quick logging and deep per-unit stats, finished-date editing, ratings histograms, and timelines.
-- **Journal & Analytics:** 16-Week Pulse (`Logs` / `Time`), Your Days 16x7 activity grid, When You Engage matrix, Hall of Fame records, backlog time forecast, and Taste DNA.
+- **Journal, Analytics & Wrapped:** 16-Week Pulse (`Logs` / `Time`), Your Days 16x7 activity grid, When You Engage matrix, Hall of Fame records, backlog time forecast, Taste DNA, and a **Year-in-Review / 2026 Wrapped** generator with PNG card export.
+- **Event Reading Orders & Bulk Edit:** Chronological issue-level comic Reading Orders (e.g., *House of X / Powers of X*, *Secret Wars (2015)*, *Annihilation*) with reordering and live atomic sync, plus multi-select **Bulk Edit** across Watch, Read, and Play.
 - **Smart Import & Cloud Sync:** Import IMDb CSVs, Letterboxd CSVs, Goodreads CSVs, or full Cue JSON backups with ISBN/edition-aware deduplication, plus optional no-account cross-device cloud sync via pairing code or QR code.
 
 ---

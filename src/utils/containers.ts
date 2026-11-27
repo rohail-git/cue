@@ -797,6 +797,38 @@ export function evaluateCustomListProgress(
   list: CustomList,
   state: CueStoreState
 ): EvaluatedCustomList {
+  // Ordered issue-level comic reading orders (e.g., Secret Wars, HoX/PoX, Annihilation)
+  if (list.steps && list.steps.length > 0) {
+    let completedSteps = 0;
+    let firstUnread: NonNullable<CustomList['steps']>[number] | null = null;
+    for (const step of list.steps) {
+      const done = (state.atomicReadUnits?.[step.atomicId]?.count || 0) > 0;
+      if (done) {
+        completedSteps += 1;
+      } else if (!firstUnread) {
+        firstUnread = step;
+      }
+    }
+    const total = list.steps.length;
+    return {
+      list,
+      totalItems: total,
+      completedItems: completedSteps,
+      averageRatio: total > 0 ? completedSteps / total : 0,
+      isComplete: total > 0 && completedSteps >= total,
+      calculatedAvg: null,
+      ratedCount: 0,
+      nextItem: firstUnread
+        ? {
+            kind: 'read',
+            id: firstUnread.readItemId || list.id,
+            title: firstUnread.title,
+            unitHint: `${firstUnread.seriesTitle} #${firstUnread.issueNumber}`,
+          }
+        : null,
+    };
+  }
+
   let completedItems = 0;
   let ratioSum = 0;
   let validItems = 0;

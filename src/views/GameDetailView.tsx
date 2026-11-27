@@ -72,6 +72,9 @@ export function GameDetailView({ gameId }: { gameId: string }) {
     setGameChapterTitle,
     setGameMood,
     setMediaFinishedDate,
+    addCompletionRun,
+    updateCompletionRunDate,
+    deleteCompletionRun,
     resetGameProgress,
     addJournalEntry,
     toggleItemInList,
@@ -873,6 +876,11 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                   verbLabel="Completed"
                   onChangeDate={(ymd) => setMediaFinishedDate('game', game.id, ymd)}
                   onMarkFinished={() => toggleGameCompleted(game.id)}
+                  completedRuns={progress?.completedRuns}
+                  runVerb="replay"
+                  onAddRun={(ymd, note) => addCompletionRun('game', game.id, ymd, note)}
+                  onUpdateRunDate={(runId, ymd) => updateCompletionRunDate('game', game.id, runId, ymd)}
+                  onDeleteRun={(runId) => deleteCompletionRun('game', game.id, runId)}
                 />
               </section>
 

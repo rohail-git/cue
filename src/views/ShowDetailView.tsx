@@ -65,6 +65,9 @@ export function ShowDetailView({ showId }: { showId: string }) {
     rateShow,
     setShowMood,
     setMediaFinishedDate,
+    addCompletionRun,
+    updateCompletionRunDate,
+    deleteCompletionRun,
     updateShowEpisodes,
     addJournalEntry,
     toggleItemInList,
@@ -924,6 +927,11 @@ export function ShowDetailView({ showId }: { showId: string }) {
                   verbLabel="Finished"
                   onChangeDate={(ymd) => setMediaFinishedDate('show', show.id, ymd)}
                   onMarkFinished={() => markShowAllWatched(show.id)}
+                  completedRuns={progress?.completedRuns}
+                  runVerb="rewatch"
+                  onAddRun={(ymd, note) => addCompletionRun('show', show.id, ymd, note)}
+                  onUpdateRunDate={(runId, ymd) => updateCompletionRunDate('show', show.id, runId, ymd)}
+                  onDeleteRun={(runId) => deleteCompletionRun('show', show.id, runId)}
                 />
               </section>
 

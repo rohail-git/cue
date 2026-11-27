@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
+  CheckSquare,
   ChevronDown,
   ChevronRight,
   Gamepad2,
@@ -12,10 +13,11 @@ import {
   X,
 } from 'lucide-react';
 import { BingersMediaRow } from '../components/BingersMediaRow';
+import { BulkActionBar } from '../components/BulkActionBar';
 import { FilterSortSheet } from '../components/FilterSortSheet';
 import { MediaImage } from '../components/MediaImage';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
-import { useCueStore } from '../store/useCueStore';
+import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { GameChapterUnit, GameItem, GameWatchStatus, PlayFilter } from '../types';
 import { formatGameMeta, pad2 } from '../utils/stats';
 
@@ -38,13 +40,34 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
     updateGameProgress,
     advanceGameChapter,
     logGameSession,
+    bulkUpdateItems,
   } = useCueStore();
 
   const [justLogged, setJustLogged] = useState<Record<string, boolean>>({});
   const [showCompleted, setShowCompleted] = useState(false);
   const [showDropped, setShowDropped] = useState(false);
   const [statusSheetGameId, setStatusSheetGameId] = useState<string | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedMap, setSelectedMap] = useState<
+    Record<string, { kind: 'game'; id: string }>
+  >({});
   const timersRef = useRef<number[]>([]);
+
+  useModalBackHandler(selectMode, () => {
+    setSelectMode(false);
+    setSelectedMap({});
+  });
+
+  const toggleBulkItem = (id: string) => {
+    setSelectedMap((prev) => {
+      if (prev[id]) {
+        const copy = { ...prev };
+        delete copy[id];
+        return copy;
+      }
+      return { ...prev, [id]: { kind: 'game', id } };
+    });
+  };
 
   useEffect(() => {
     return () => {
@@ -135,24 +158,44 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
     const unitCode = formatGameUnitShort(nextChap, unit);
 
     if (isPosterLayout) {
+      const isSel = Boolean(selectedMap[game.id]);
       return (
         <div
           key={game.id}
           role="button"
           tabIndex={0}
-          onClick={() => pushRoute({ view: 'game-detail', gameId: game.id })}
+          onClick={() =>
+            selectMode ? toggleBulkItem(game.id) : pushRoute({ view: 'game-detail', gameId: game.id })
+          }
           onKeyDown={(e) => {
-            if (e.key === 'Enter') pushRoute({ view: 'game-detail', gameId: game.id });
+            if (e.key === 'Enter') {
+              if (selectMode) toggleBulkItem(game.id);
+              else pushRoute({ view: 'game-detail', gameId: game.id });
+            }
           }}
           className="group cursor-pointer text-left"
         >
-          <div className="relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border border-white/8">
+          <div
+            className={`relative aspect-[2/3] rounded-[16px] overflow-hidden bg-surface border transition-all ${
+              selectMode && isSel ? 'border-play ring-2 ring-play' : 'border-white/8'
+            }`}
+          >
             <MediaImage
               src={game.coverUrl}
               alt={game.title}
               className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
             />
-            {!isCompleted && (
+            {selectMode ? (
+              <span
+                className={`absolute top-2 right-2 h-7 w-7 rounded-full border flex items-center justify-center ${
+                  isSel
+                    ? 'bg-play border-play text-[#161124]'
+                    : 'bg-black/65 border-white/30 text-transparent'
+                }`}
+              >
+                <Check className="w-4 h-4" strokeWidth={2.8} />
+              </span>
+            ) : !isCompleted && (
               <button
                 type="button"
                 onClick={(e) => handleQuickAdvance(e, game)}
@@ -228,7 +271,12 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
           </button>
         }
         actionContent={
-          isCompleted ? (
+          selectMode ? (
+            <Check
+              className={`w-[17px] h-[17px] ${selectedMap[game.id] ? 'text-play' : 'text-ink-faint'}`}
+              strokeWidth={2.6}
+            />
+          ) : isCompleted ? (
             (prog?.playthroughCount || 1) > 1 ? (
               `x${prog?.playthroughCount}`
             ) : (
@@ -248,12 +296,27 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
           )
         }
         actionAriaLabel={
-          hasChapters ? `Advance ${game.title} to ${unitCode}` : `Log +1 hour on ${game.title}`
+          selectMode
+            ? `Select ${game.title}`
+            : hasChapters
+              ? `Advance ${game.title} to ${unitCode}`
+              : `Log +1 hour on ${game.title}`
         }
-        actionDisabled={isCompleted}
-        actionActive={isCompleted}
-        onAction={!isCompleted ? (e) => handleQuickAdvance(e, game) : undefined}
-        onOpen={() => pushRoute({ view: 'game-detail', gameId: game.id })}
+        actionDisabled={!selectMode && isCompleted}
+        actionActive={selectMode ? Boolean(selectedMap[game.id]) : isCompleted}
+        onAction={
+          selectMode
+            ? (e) => {
+                e.stopPropagation();
+                toggleBulkItem(game.id);
+              }
+            : !isCompleted
+              ? (e) => handleQuickAdvance(e, game)
+              : undefined
+        }
+        onOpen={() =>
+          selectMode ? toggleBulkItem(game.id) : pushRoute({ view: 'game-detail', gameId: game.id })
+        }
       />
     );
   };
@@ -294,24 +357,41 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
         }
       >
         {!calendarMode && (
-          <div className="flex items-center gap-2 mb-5 overflow-x-auto no-scrollbar">
-            {filterTabs.map((t) => {
-              const active = filter === t.id;
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => updateSettings({ playFilter: t.id })}
-                  className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
-                    active
-                      ? 'bg-brand border-brand text-brand-ink'
-                      : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
-                  }`}
-                >
-                  {t.label}
-                </button>
-              );
-            })}
+          <div className="flex items-center justify-between gap-2 mb-5 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-2">
+              {filterTabs.map((t) => {
+                const active = filter === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => updateSettings({ playFilter: t.id })}
+                    className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
+                      active
+                        ? 'bg-brand border-brand text-brand-ink'
+                        : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectMode((v) => !v);
+                setSelectedMap({});
+              }}
+              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 inline-flex items-center gap-1.5 transition-colors ${
+                selectMode
+                  ? 'bg-white border-white text-[#131519]'
+                  : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+              }`}
+            >
+              <CheckSquare className="w-3.5 h-3.5" />
+              <span>{selectMode ? 'Cancel' : 'Select'}</span>
+            </button>
           </div>
         )}
 
@@ -515,6 +595,32 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
             </div>
           </div>
         </div>
+      )}
+      {selectMode && !calendarMode && (
+        <BulkActionBar
+          selectedCount={Object.keys(selectedMap).length}
+          totalCount={
+            playingList.length + backlogList.length + completedList.length + droppedList.length
+          }
+          lists={state.lists}
+          onSelectAll={() => {
+            const all: Record<string, { kind: 'game'; id: string }> = {};
+            for (const g of [...playingList, ...backlogList, ...completedList, ...droppedList]) {
+              all[g.id] = { kind: 'game', id: g.id };
+            }
+            setSelectedMap(all);
+          }}
+          onClear={() => setSelectedMap({})}
+          onCancel={() => {
+            setSelectMode(false);
+            setSelectedMap({});
+          }}
+          onAction={(act, lId) => {
+            bulkUpdateItems(Object.values(selectedMap), act, lId);
+            setSelectMode(false);
+            setSelectedMap({});
+          }}
+        />
       )}
     </>
   );

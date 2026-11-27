@@ -7,9 +7,11 @@ import {
   ListPlus,
   Loader2,
   Plus,
+  RefreshCw,
   ScanBarcode,
   Search,
   Star,
+  WifiOff,
   X,
 } from 'lucide-react';
 import { IsbnScannerModal } from '../components/IsbnScannerModal';
@@ -93,6 +95,9 @@ export function SearchView() {
     addLiveGameToStore,
     toggleShowBookmark,
     toggleMovieWatchlist,
+    queuePendingIsbnScan,
+    removePendingIsbnScan,
+    flushPendingIsbnScans,
     toggleReadBookmark,
     toggleGameBookmark,
     createCustomList,
@@ -439,6 +444,10 @@ export function SearchView() {
     if (scope === 'watch' || scope === 'play') {
       setScope('all');
     }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      queuePendingIsbnScan(isbn13);
+      return;
+    }
     setLoadingLive(true);
     try {
       const matches = await searchByIsbn(isbn13);
@@ -447,6 +456,7 @@ export function SearchView() {
         await handleOpenLiveResult(matches[0], false);
       }
     } catch {
+      queuePendingIsbnScan(isbn13);
       setLiveResults([]);
     } finally {
       setLoadingLive(false);
@@ -636,6 +646,46 @@ export function SearchView() {
           </span>
         </div>
       </div>
+
+      {(state.pendingIsbnScans?.length || 0) > 0 && (
+        <section className="mb-4 rounded-2xl bg-surface border border-read/30 px-4 py-3 space-y-2.5">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2 text-xs font-semibold text-ink">
+              <WifiOff className="w-4 h-4 text-read shrink-0" />
+              <span>
+                {state.pendingIsbnScans!.length} offline ISBN{' '}
+                {state.pendingIsbnScans!.length === 1 ? 'scan' : 'scans'} queued
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void flushPendingIsbnScans()}
+              className="px-3 py-1 rounded-full bg-read/15 border border-read/35 text-[11px] font-semibold text-read inline-flex items-center gap-1 hover:bg-read/25 transition-colors"
+            >
+              <RefreshCw className="w-3 h-3" />
+              <span>Sync now</span>
+            </button>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {state.pendingIsbnScans!.map((entry) => (
+              <span
+                key={entry.isbn}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-background border border-white/10 text-[11px] font-mono text-ink-dim"
+              >
+                <span>{entry.isbn}</span>
+                <button
+                  type="button"
+                  onClick={() => removePendingIsbnScan(entry.isbn)}
+                  aria-label={`Remove queued ISBN ${entry.isbn}`}
+                  className="text-ink-faint hover:text-ink"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
 
       {isSearching ? (
         <div className="space-y-6 animate-fade-in">
