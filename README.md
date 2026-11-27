@@ -24,7 +24,7 @@ Cue separates media tracking into two layers so you never double-log progress:
 - **Cue Queue (`Up Next`):** Unfinished released episodes, chapters, comic issues, and active games in one clean queue — automatically filtering out unreleased TBA or future solicitations while preserving dateless classic shows.
 - **Cue Mind (`Continue` & `Discover`):** Contextual taste engine hidden cleanly behind Journal onboarding until you have logged at least 5 entries, helping you either resume momentum (`Smart`, `Quick`, `Deep`, `Finish`) or discover trending runs and series.
 - **Watch (TV, Anime & Movies):** Unified Watch view powered by TMDB and AniList/AniZip, including episode stills, per-episode ratings, rewatches, and "Where to watch" providers.
-- **Read (Novels, Manga, Comics & Omnibuses):** Open Library, MangaDex, Jikan/AniList, Google Books, and Marvel/DC/Image Fandom issue hydration (supporting individual issue covers, release dates, omnibus ISBN lookup, and a live camera **ISBN Barcode Scanner**).
+- **Read (Novels, Manga, Comics & Omnibuses):** Open Library, MangaDex, Jikan/AniList, Google Books, and cross-publisher comic issue hydration covering **Marvel, DC, Image, Dark Horse Comics, IDW Publishing, BOOM! Studios**, optional universal **Comic Vine** (`COMICVINE_API_KEY`), live camera **ISBN Barcode Scanner**, and a custom indie comic run creator.
 - **Play (Games):** IGDB & Steam-backed game library with story chapter/mission tracking and one-tap **Suggest chapters & missions** (via curated catalog, Wikipedia/web lookup, or Google AI Mode copy-and-paste parser).
 - **Simple & Advanced Detail Modes:** Switch seamlessly between distraction-free quick logging and deep per-unit stats, finished-date editing, ratings histograms, and timelines.
 - **Journal, Analytics & Wrapped:** 16-Week Pulse (`Logs` / `Time`), Your Days 16x7 activity grid, When You Engage matrix, Hall of Fame records, backlog time forecast, Taste DNA, and a **Year-in-Review / 2026 Wrapped** generator with PNG card export.
@@ -40,7 +40,7 @@ Cue separates media tracking into two layers so you never double-log progress:
 | `api/tmdb.ts` | TMDB proxy for shows, movies, trending rails, and watch providers |
 | `api/igdb.ts` | IGDB / Twitch game search and metadata lookup |
 | `api/trending-games.ts` | Trending & recent game discovery feed |
-| `api/comic-series.ts` | Comic series, omnibus, compendium, and single-issue Fandom/ISBN hydration |
+| `api/comic-series.ts` | Comic series, Dark Horse / IDW / BOOM! / Fandom / optional Comic Vine runs, omnibuses & single issues |
 | `api/game-chapters.ts` | Story chapter & mission lookup and web suggestion parser |
 | `api/imdb-resolve.ts` | Batched IMDb title ID resolution for GDPR/CSV imports |
 | `api/sync.ts` | No-account pairing-code cloud state sync |

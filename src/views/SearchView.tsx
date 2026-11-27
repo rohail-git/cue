@@ -117,6 +117,11 @@ export function SearchView() {
   const [expandedCollection, setExpandedCollection] = useState<DiscoverCollection | null>(null);
   const [showAllCollections, setShowAllCollections] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [customComicOpen, setCustomComicOpen] = useState(false);
+  const [customComicTitle, setCustomComicTitle] = useState('');
+  const [customComicPub, setCustomComicPub] = useState('');
+  const [customComicYear, setCustomComicYear] = useState('2026');
+  const [customComicCount, setCustomComicCount] = useState('6');
 
   const setScope = (nextScope: DiscoverScope) => {
     sessionDiscoverScope = nextScope;
@@ -895,6 +900,115 @@ export function SearchView() {
                 <p className="text-xs text-ink-dim mt-1">
                   Try another title or switch filter pills above.
                 </p>
+              </div>
+            )}
+
+            {(scope === 'all' || scope === 'read') && (
+              <div className="mt-4 rounded-2xl bg-surface border border-white/[0.06] p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-ink">
+                      Missing an indie or small-press comic run?
+                    </p>
+                    <p className="text-[11px] text-ink-dim mt-0.5">
+                      Create a custom comic series right away with full issue tracking.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCustomComicTitle((prev) => prev || query.trim());
+                      setCustomComicOpen((v) => !v);
+                    }}
+                    className="px-3.5 py-1.5 rounded-full bg-read/15 border border-read/35 text-xs font-semibold text-read inline-flex items-center gap-1 hover:bg-read/25 transition-colors shrink-0"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>{customComicOpen ? 'Close form' : 'Add custom comic run'}</span>
+                  </button>
+                </div>
+
+                {customComicOpen && (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const cleanTitle = customComicTitle.trim() || query.trim();
+                      if (!cleanTitle) return;
+                      const pub = customComicPub.trim() || 'Independent';
+                      const yr = Number(customComicYear) || new Date().getFullYear();
+                      const count = Math.max(1, Math.min(300, Number(customComicCount) || 6));
+                      const id = `custom-comic-${cleanTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${yr}`;
+                      addLiveReadToStore(
+                        {
+                          id,
+                          format: 'comic',
+                          unit: 'issues',
+                          comicKind: 'series',
+                          title: cleanTitle,
+                          creator: pub,
+                          comicPublisher: pub,
+                          comicRunLabel: `${yr} – Present`,
+                          year: yr,
+                          totalUnits: count,
+                          baseTotalUnits: count,
+                          genres: ['Comics'],
+                          rating: 4.5,
+                          coverUrl: '',
+                          backdropUrl: '',
+                          overview: `${cleanTitle} (${yr}) published by ${pub}.`,
+                        },
+                        'reading',
+                        true
+                      );
+                      setCustomComicOpen(false);
+                      setCustomComicTitle('');
+                      setCustomComicPub('');
+                      pushRoute({ view: 'read-detail', readId: id });
+                    }}
+                    className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2 border-t border-white/[0.06]"
+                  >
+                    <input
+                      type="text"
+                      required
+                      placeholder="Series title"
+                      value={customComicTitle}
+                      onChange={(e) => setCustomComicTitle(e.target.value)}
+                      className="rounded-xl bg-background border border-white/10 px-3 py-2 text-xs text-ink placeholder:text-ink-faint outline-none focus:border-read"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Publisher (e.g. Dark Horse, IDW)"
+                      value={customComicPub}
+                      onChange={(e) => setCustomComicPub(e.target.value)}
+                      className="rounded-xl bg-background border border-white/10 px-3 py-2 text-xs text-ink placeholder:text-ink-faint outline-none focus:border-read"
+                    />
+                    <input
+                      type="number"
+                      min={1950}
+                      max={2035}
+                      placeholder="Start year"
+                      value={customComicYear}
+                      onChange={(e) => setCustomComicYear(e.target.value)}
+                      className="rounded-xl bg-background border border-white/10 px-3 py-2 text-xs text-ink outline-none focus:border-read tabular-nums"
+                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        max={300}
+                        placeholder="Issues"
+                        value={customComicCount}
+                        onChange={(e) => setCustomComicCount(e.target.value)}
+                        className="w-24 rounded-xl bg-background border border-white/10 px-3 py-2 text-xs text-ink outline-none focus:border-read tabular-nums"
+                      />
+                      <button
+                        type="submit"
+                        className="flex-1 py-2 px-3 rounded-xl bg-read text-[#1D160A] text-xs font-bold hover:opacity-95 transition-opacity"
+                      >
+                        Create & Track
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
             )}
           </section>

@@ -4,6 +4,7 @@ import type {
   ComicEditionId,
   ComicEditionRecord,
   ComicIssueMeta,
+  ComicWikiSlug,
   Episode,
   GameItem,
   GamePlatform,
@@ -84,7 +85,7 @@ export interface LiveSearchResult {
   comicKind?: 'series' | 'collection';
   comicRunLabel?: string;
   comicPublisher?: string;
-  comicSeriesWiki?: 'marvel' | 'dc' | 'imagecomics';
+  comicSeriesWiki?: ComicWikiSlug;
   comicSeriesVolTitle?: string;
   isbn?: string;
   editionCovers?: Partial<Record<ComicEditionId, string>>;
@@ -3563,14 +3564,14 @@ export async function fetchComicEditionsCatalog(
 
 async function searchComicSeries(query: string): Promise<LiveSearchResult[]> {
   try {
-    const res = await fetch(`/api/comic-series?q=${encodeURIComponent(query)}&v=3`, {
-      signal: AbortSignal.timeout(10000),
+    const res = await fetch(`/api/comic-series?q=${encodeURIComponent(query)}&v=4`, {
+      signal: AbortSignal.timeout(12000),
     });
     if (!res.ok) return [];
     const data = (await res.json()) as {
       items?: Array<{
         id: string;
-        wiki: 'marvel' | 'dc' | 'imagecomics';
+        wiki: ComicWikiSlug;
         volTitle: string;
         volNumber: number;
         title: string;
@@ -3623,7 +3624,7 @@ async function searchComicSeries(query: string): Promise<LiveSearchResult[]> {
 export const COMIC_ISSUE_CACHE_VERSION = 'ca8';
 
 export async function fetchComicSeriesIssues(
-  wiki: 'marvel' | 'dc' | 'imagecomics',
+  wiki: ComicWikiSlug,
   volTitle: string,
   limit = 90
 ): Promise<{ totalIssues: number; issues: Record<number, ComicIssueMeta> }> {
@@ -3654,7 +3655,7 @@ export async function fetchComicCollectionIssues(params: {
   isbn?: string;
   overview?: string;
   publisher?: string;
-  wiki?: 'marvel' | 'dc' | 'imagecomics';
+  wiki?: ComicWikiSlug;
   pageTitle?: string;
   limit?: number;
 }): Promise<{
@@ -5251,10 +5252,10 @@ export async function fetchComicIssueDetails(
 
 /** Fetches full wikitext synopsis and credits for a single comic issue page on demand. */
 export async function fetchSingleComicIssueDetail(
-  wiki: 'marvel' | 'dc' | 'imagecomics',
+  wiki: ComicWikiSlug,
   pageTitle: string
 ): Promise<Partial<ComicIssueMeta>> {
-  if (!pageTitle) return {};
+  if (!pageTitle || (wiki !== 'marvel' && wiki !== 'dc' && wiki !== 'imagecomics')) return {};
   try {
     const res = await fetch(
       `https://${wiki}.fandom.com/api.php?action=query&titles=${encodeURIComponent(

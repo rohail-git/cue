@@ -1,4 +1,11 @@
-export type ComicWikiSlug = 'marvel' | 'dc' | 'imagecomics';
+export type ComicWikiSlug =
+  | 'marvel'
+  | 'dc'
+  | 'imagecomics'
+  | 'darkhorse'
+  | 'idw'
+  | 'boom'
+  | 'comicvine';
 
 export interface ComicSeriesSearchItem {
   id: string;
@@ -60,6 +67,10 @@ const WIKI_PUBLISHER: Record<ComicWikiSlug, string> = {
   marvel: 'Marvel Comics',
   dc: 'DC Comics',
   imagecomics: 'Image Comics',
+  darkhorse: 'Dark Horse Comics',
+  idw: 'IDW Publishing',
+  boom: 'BOOM! Studios',
+  comicvine: 'Comic Vine',
 };
 
 const MONTH_ABBR = [
@@ -656,7 +667,7 @@ async function queryWikiComicVolumes(
   }
 }
 
-const FLAGSHIP_TRENDING_VOLUMES: Record<ComicWikiSlug, string[]> = {
+const FLAGSHIP_TRENDING_VOLUMES: Partial<Record<ComicWikiSlug, string[]>> = {
   dc: [
     'Absolute Batman Vol 1',
     'Absolute Wonder Woman Vol 1',
@@ -695,9 +706,9 @@ export async function fetchTrendingComicSeriesPayload(
   limit = 18
 ): Promise<{ items: ComicSeriesSearchItem[] }> {
   const [dcRes, marvelRes, imageRes] = await Promise.allSettled([
-    hydrateWikiVolumes('dc', FLAGSHIP_TRENDING_VOLUMES.dc),
-    hydrateWikiVolumes('marvel', FLAGSHIP_TRENDING_VOLUMES.marvel),
-    hydrateWikiVolumes('imagecomics', FLAGSHIP_TRENDING_VOLUMES.imagecomics),
+    hydrateWikiVolumes('dc', FLAGSHIP_TRENDING_VOLUMES.dc || []),
+    hydrateWikiVolumes('marvel', FLAGSHIP_TRENDING_VOLUMES.marvel || []),
+    hydrateWikiVolumes('imagecomics', FLAGSHIP_TRENDING_VOLUMES.imagecomics || []),
   ]);
 
   const pools: ComicSeriesSearchItem[][] = [
@@ -1007,7 +1018,618 @@ async function discoverCreatorRunAndOmnibus(
   return { seriesItems, omnibusItems };
 }
 
-/** Searches ongoing & completed comic series runs (plus creator runs & omnibuses) across Marvel, DC, and Image Fandom wikis. */
+function decodeHtmlEntitiesSimple(raw: string): string {
+  return raw
+    .replace(/&amp;/gi, '&')
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&ndash;/gi, '–')
+    .replace(/&mdash;/gi, '—')
+    .replace(/&rsquo;/gi, '’')
+    .replace(/&lsquo;/gi, '‘')
+    .replace(/&ldquo;/gi, '“')
+    .replace(/&rdquo;/gi, '”')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseUsMonthDayYear(raw?: string): { releaseDate?: string; releaseDateIso?: string; year?: number } {
+  if (!raw) return {};
+  const clean = decodeHtmlEntitiesSimple(raw).replace(/([A-Za-z]+)\./g, '$1').trim();
+  const isoMatch = clean.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    const y = Number(isoMatch[1]);
+    const m = Number(isoMatch[2]);
+    const d = Number(isoMatch[3]);
+    return {
+      ...formatUtcDateParts(y, m - 1, d),
+      year: y,
+    };
+  }
+  const mdy = clean.match(/([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/);
+  if (mdy) {
+    const m1 = parseWikiMonth(mdy[1]);
+    const day = Number(mdy[2]);
+    const yr = Number(mdy[3]);
+    if (m1 && yr) {
+      return {
+        ...formatUtcDateParts(yr, m1 - 1, day),
+        year: yr,
+      };
+    }
+  }
+  return {};
+}
+
+interface DarkHorseRawHit {
+  href: string;
+  fullTitle: string;
+  seriesTitle: string;
+  issueNumber: number;
+  subtitle?: string;
+  coverUrl: string;
+}
+
+function parseDarkHorseSearchHtml(html: string): DarkHorseRawHit[] {
+  const out: DarkHorseRawHit[] = [];
+  const seenHref = new Set<string>();
+  const blocks = html.split(/<div class="product-result">/i).slice(1);
+  for (const blk of blocks) {
+    const hrefMatch = blk.match(/href="(\/comics\/[^"]+)"/i);
+    const titleMatch = blk.match(/href="\/comics\/[^"]+"[^>]*>([^<]+)<\/a>/i);
+    if (!hrefMatch?.[1] || !titleMatch?.[1]) continue;
+    const href = hrefMatch[1].trim();
+    if (seenHref.has(href)) continue;
+    seenHref.add(href);
+
+    const fullTitle = decodeHtmlEntitiesSimple(titleMatch[1]);
+    if (/\b(?:variant|foil|incentive|cover\s+[b-z]|exclusive)\b/i.test(fullTitle)) continue;
+
+    const issueMatch = fullTitle.match(/^(.+?)\s+#(\d+)(?:\s*[:–—-]\s*(.+))?$/);
+    if (!issueMatch) continue;
+    const seriesTitle = issueMatch[1].trim();
+    const issueNumber = Number(issueMatch[2]);
+    if (!seriesTitle || !Number.isFinite(issueNumber) || issueNumber < 1) continue;
+
+    const thumbMatch = blk.match(/src="(https:\/\/images\.darkhorse\.com\/covers\/[^"]+)"/i);
+    const rawCover = thumbMatch?.[1] || '';
+    const coverUrl = rawCover.replace(/\/covers\/\d+\//, '/covers/600/');
+
+    out.push({
+      href,
+      fullTitle,
+      seriesTitle,
+      issueNumber,
+      subtitle: issueMatch[3]?.trim(),
+      coverUrl,
+    });
+  }
+  return out;
+}
+
+async function fetchDarkHorseIssueDetail(
+  href: string,
+  fallbackTitle: string,
+  fallbackCover: string
+): Promise<{
+  title?: string;
+  releaseDate?: string;
+  releaseDateIso?: string;
+  year?: number;
+  coverUrl: string;
+  synopsis?: string;
+  writers?: string;
+  artists?: string;
+}> {
+  try {
+    const url = href.startsWith('http') ? href : `https://www.darkhorse.com${href}`;
+    const res = await upstreamFetch(url, 5500);
+    if (!res.ok) return { title: fallbackTitle, coverUrl: fallbackCover };
+    const html = await res.text();
+    const pubRaw = html.match(/Publication date:\s*<\/strong>\s*([^<\n]+)/i)?.[1];
+    const parsedDate = parseUsMonthDayYear(pubRaw);
+
+    const extractContrib = (label: string) => {
+      const m = html.match(new RegExp(`${label}:\\s*</strong>([\\s\\S]*?)(?=</li>|<strong>)`, 'i'))?.[1];
+      if (!m) return undefined;
+      const names = [...m.matchAll(/>([^<]+)</g)]
+        .map((x) => decodeHtmlEntitiesSimple(x[1]))
+        .filter((x) => x.length >= 2);
+      return names.length > 0 ? Array.from(new Set(names)).join(', ') : undefined;
+    };
+
+    const writers = extractContrib('Writers?');
+    const artists = extractContrib('(?:Pencillers?|Artists?|Illustrators?)');
+    const ogImg = html.match(/property="og:image"\s+content="([^"]+)"/i)?.[1] || fallbackCover;
+    const ogDesc = html.match(/property="og:description"\s+content="([^"]+)"/i)?.[1];
+    const synopsis = ogDesc
+      ? decodeHtmlEntitiesSimple(ogDesc).slice(0, 380)
+      : undefined;
+
+    return {
+      title: fallbackTitle,
+      releaseDate: parsedDate.releaseDate,
+      releaseDateIso: parsedDate.releaseDateIso,
+      year: parsedDate.year,
+      coverUrl: ogImg.replace(/\/covers\/\d+\//, '/covers/600/'),
+      synopsis,
+      writers,
+      artists,
+    };
+  } catch {
+    return { title: fallbackTitle, coverUrl: fallbackCover };
+  }
+}
+
+async function queryDarkHorseSeries(seriesQuery: string): Promise<ComicSeriesSearchItem[]> {
+  const clean = seriesQuery.replace(/['’"]/g, '').replace(/\s+/g, ' ').trim();
+  if (clean.length < 2) return [];
+  const targetNorm = normTitle(clean);
+  const queryWords = targetNorm.split(' ').filter((w) => w.length >= 2);
+
+  try {
+    const [rMain, rOne] = await Promise.allSettled([
+      upstreamFetch(`https://www.darkhorse.com/Search/${encodeURIComponent(clean)}`, 5500),
+      upstreamFetch(`https://www.darkhorse.com/Search/${encodeURIComponent(`${clean} 1`)}`, 5500),
+    ]);
+    const hits: DarkHorseRawHit[] = [];
+    for (const r of [rMain, rOne]) {
+      if (r.status === 'fulfilled' && r.value.ok) {
+        hits.push(...parseDarkHorseSearchHtml(await r.value.text()));
+      }
+    }
+    if (hits.length === 0) return [];
+
+    const bySeries = new Map<string, { displayName: string; hits: DarkHorseRawHit[] }>();
+    for (const h of hits) {
+      const sNorm = normTitle(h.seriesTitle);
+      if (!queryWords.every((w) => sNorm.includes(w))) continue;
+      const bucket = bySeries.get(sNorm);
+      if (bucket) {
+        if (!bucket.hits.some((x) => x.issueNumber === h.issueNumber)) {
+          bucket.hits.push(h);
+        }
+      } else {
+        bySeries.set(sNorm, { displayName: h.seriesTitle, hits: [h] });
+      }
+    }
+
+    const groups = [...bySeries.values()]
+      .sort((a, b) => {
+        const aExact = normTitle(a.displayName) === targetNorm ? 1 : 0;
+        const bExact = normTitle(b.displayName) === targetNorm ? 1 : 0;
+        if (bExact !== aExact) return bExact - aExact;
+        return b.hits.length - a.hits.length;
+      })
+      .slice(0, 3);
+
+    const out: ComicSeriesSearchItem[] = [];
+    const curYear = new Date().getUTCFullYear();
+    await Promise.allSettled(
+      groups.map(async (g) => {
+        const sorted = [...g.hits].sort((a, b) => a.issueNumber - b.issueNumber);
+        const firstHit = sorted.find((x) => x.issueNumber === 1) || sorted[0];
+        const latestHit = sorted[sorted.length - 1];
+        const [dFirst, dLatest] = await Promise.all([
+          fetchDarkHorseIssueDetail(firstHit.href, firstHit.subtitle || firstHit.fullTitle, firstHit.coverUrl),
+          latestHit.href !== firstHit.href
+            ? fetchDarkHorseIssueDetail(latestHit.href, latestHit.subtitle || latestHit.fullTitle, latestHit.coverUrl)
+            : Promise.resolve(undefined),
+        ]);
+
+        const latestYear = dLatest?.year || dFirst.year || curYear;
+        const firstYear = dFirst.year || latestYear;
+        const isOngoing = latestYear >= curYear || sorted.length >= 6;
+        const startYear =
+          firstHit.issueNumber === 1 && firstYear
+            ? firstYear
+            : Math.max(1986, latestYear - Math.floor(latestHit.issueNumber / 6));
+        const maxIssue = latestHit.issueNumber;
+        const runLabel = isOngoing
+          ? `${startYear} – Present`
+          : latestYear !== startYear
+            ? `${startYear} – ${latestYear}`
+            : String(startYear);
+
+        out.push({
+          id: `comic-series-darkhorse-${normTitle(g.displayName).replace(/\s+/g, '-')}-${startYear}`,
+          wiki: 'darkhorse',
+          volTitle: g.displayName,
+          volNumber: 1,
+          title: g.displayName,
+          publisher: 'Dark Horse Comics',
+          startYear,
+          endYear: isOngoing ? undefined : latestYear,
+          isOngoing,
+          runLabel,
+          issueCount: maxIssue,
+          coverUrl: dFirst.coverUrl || firstHit.coverUrl || latestHit.coverUrl,
+          creator: dFirst.writers || 'Dark Horse Comics',
+          genres: ['Action', 'Adventure'],
+          overview:
+            dFirst.synopsis ||
+            `${g.displayName} (${runLabel}) published by Dark Horse Comics. Tracking ${maxIssue} issues.`,
+        });
+      })
+    );
+
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+async function fetchDarkHorseIssuesPayload(
+  seriesName: string,
+  limit = 60
+): Promise<{ totalIssues: number; issues: Record<number, ComicSeriesIssueItem> }> {
+  const clean = seriesName.trim();
+  const targetNorm = normTitle(clean);
+  if (!clean) return { totalIssues: 0, issues: {} };
+
+  const byNum = new Map<number, DarkHorseRawHit>();
+  const collectHtml = (html: string) => {
+    for (const h of parseDarkHorseSearchHtml(html)) {
+      if (normTitle(h.seriesTitle) !== targetNorm) continue;
+      if (!byNum.has(h.issueNumber)) byNum.set(h.issueNumber, h);
+    }
+  };
+
+  try {
+    const [rMain, rOne] = await Promise.allSettled([
+      upstreamFetch(`https://www.darkhorse.com/Search/${encodeURIComponent(clean)}`, 5500),
+      upstreamFetch(`https://www.darkhorse.com/Search/${encodeURIComponent(`${clean} 1`)}`, 5500),
+    ]);
+    for (const r of [rMain, rOne]) {
+      if (r.status === 'fulfilled' && r.value.ok) collectHtml(await r.value.text());
+    }
+    const maxFound = Math.max(0, ...byNum.keys());
+    const maxCap = Math.min(Math.max(1, maxFound), Math.max(1, limit), 30);
+
+    const missingNums: number[] = [];
+    for (let n = 1; n <= maxCap; n += 1) {
+      if (!byNum.has(n)) missingNums.push(n);
+    }
+    for (let i = 0; i < missingNums.length; i += 4) {
+      const batch = missingNums.slice(i, i + 4);
+      const settled = await Promise.allSettled(
+        batch.map((n) =>
+          upstreamFetch(`https://www.darkhorse.com/Search/${encodeURIComponent(`${clean} ${n}`)}`, 5000)
+        )
+      );
+      for (const s of settled) {
+        if (s.status === 'fulfilled' && s.value.ok) collectHtml(await s.value.text());
+      }
+    }
+
+    const totalIssues = Math.max(maxFound, byNum.size);
+    const hitsToHydrate = [...byNum.values()]
+      .filter((h) => h.issueNumber >= 1 && h.issueNumber <= limit)
+      .sort((a, b) => a.issueNumber - b.issueNumber);
+
+    const issues: Record<number, ComicSeriesIssueItem> = {};
+    for (let i = 0; i < hitsToHydrate.length; i += 5) {
+      const slice = hitsToHydrate.slice(i, i + 5);
+      const settled = await Promise.allSettled(
+        slice.map(async (h) => {
+          const fallbackStory = h.subtitle || `Issue #${h.issueNumber}`;
+          const det = await fetchDarkHorseIssueDetail(h.href, fallbackStory, h.coverUrl);
+          return { h, det };
+        })
+      );
+      for (const s of settled) {
+        if (s.status !== 'fulfilled') continue;
+        const { h, det } = s.value;
+        issues[h.issueNumber] = {
+          number: h.issueNumber,
+          issueLabel: `#${h.issueNumber}`,
+          title: det.title || h.subtitle || `Issue #${h.issueNumber}`,
+          seriesTitle: clean,
+          releaseDate: det.releaseDate,
+          ...(det.releaseDateIso ? { releaseDateIso: det.releaseDateIso } : {}),
+          coverUrl: det.coverUrl || h.coverUrl,
+          synopsis: det.synopsis,
+          writers: det.writers,
+          artists: det.artists,
+          wiki: 'darkhorse',
+          pageTitle: `${clean} #${h.issueNumber}`,
+          atomicId: makeServerComicAtomicId('darkhorse', `${clean} ${h.issueNumber}`),
+        };
+      }
+    }
+
+    return { totalIssues, issues };
+  } catch {
+    return { totalIssues: 0, issues: {} };
+  }
+}
+
+interface ShopifyProductHit {
+  title?: string;
+  url?: string;
+  image?: string;
+  type?: string;
+}
+
+const SHOPIFY_STORES: Record<'idw' | 'boom', { host: string; publisher: string }> = {
+  idw: { host: 'https://idwpublishing.com', publisher: 'IDW Publishing' },
+  boom: { host: 'https://shop.boom-studios.com', publisher: 'BOOM! Studios' },
+};
+
+function cleanShopifyComicTitle(rawTitle: string): string {
+  return decodeHtmlEntitiesSimple(rawTitle)
+    .replace(/\s*[-–—]\s*(?:IDW|Foil|Exclusive|Cover|Incentive|Variant| Virgin).*$/i, '')
+    .replace(/\s+(?:BOOM!\s+Direct\s+Reserve.*|Foil\s+Exclusive.*|Incentive.*|Cover\s+[A-Z].*)$/i, '')
+    .replace(/\s*\(\d{4}\)(?=\s+#\d+)/i, '')
+    .trim();
+}
+
+async function fetchShopifySuggestProducts(
+  wiki: 'idw' | 'boom',
+  query: string
+): Promise<ShopifyProductHit[]> {
+  const cfg = SHOPIFY_STORES[wiki];
+  const url = `${cfg.host}/search/suggest.json?q=${encodeURIComponent(
+    query
+  )}&resources[type]=product&resources[limit]=10`;
+  const res = await upstreamFetch(url, 5000);
+  if (!res.ok) return [];
+  const json = (await res.json()) as {
+    resources?: { results?: { products?: ShopifyProductHit[] } };
+  };
+  return json?.resources?.results?.products || [];
+}
+
+async function queryShopifyComicSeries(
+  wiki: 'idw' | 'boom',
+  seriesQuery: string
+): Promise<ComicSeriesSearchItem[]> {
+  const clean = seriesQuery.replace(/['’"]/g, '').replace(/\s+/g, ' ').trim();
+  if (clean.length < 2) return [];
+  const targetNorm = normTitle(clean);
+  const queryWords = targetNorm.split(' ').filter((w) => w.length >= 2);
+  const cfg = SHOPIFY_STORES[wiki];
+
+  try {
+    const products = await fetchShopifySuggestProducts(wiki, clean);
+    const bySeries = new Map<
+      string,
+      {
+        displayName: string;
+        hits: Array<{ num: number; cover: string }>;
+      }
+    >();
+
+    for (const p of products) {
+      if (!p.title || !p.image) continue;
+      if (/\b(?:compendium|omnibus|box\s+set|volume|tpb)\b/i.test(p.title)) continue;
+      const cleaned = cleanShopifyComicTitle(p.title);
+      const m = cleaned.match(/^(.+?)\s+#(\d+)\b/);
+      if (!m) continue;
+      const seriesName = m[1].trim();
+      const num = Number(m[2]);
+      if (!seriesName || !Number.isFinite(num) || num < 1) continue;
+      const sNorm = normTitle(seriesName);
+      if (!queryWords.every((w) => sNorm.includes(w))) continue;
+      const bucket = bySeries.get(sNorm);
+      if (bucket) {
+        if (!bucket.hits.some((x) => x.num === num)) {
+          bucket.hits.push({ num, cover: p.image });
+        }
+      } else {
+        bySeries.set(sNorm, { displayName: seriesName, hits: [{ num, cover: p.image }] });
+      }
+    }
+
+    const curYear = new Date().getUTCFullYear();
+    return [...bySeries.values()].slice(0, 3).map((g) => {
+      const sorted = [...g.hits].sort((a, b) => a.num - b.num);
+      const maxNum = sorted[sorted.length - 1]?.num || 1;
+      const coverUrl = sorted[0]?.cover || '';
+      return {
+        id: `comic-series-${wiki}-${normTitle(g.displayName).replace(/\s+/g, '-')}`,
+        wiki,
+        volTitle: g.displayName,
+        volNumber: 1,
+        title: g.displayName,
+        publisher: cfg.publisher,
+        startYear: curYear - 1,
+        isOngoing: true,
+        runLabel: `${curYear - 1} – Present`,
+        issueCount: maxNum,
+        coverUrl,
+        creator: cfg.publisher,
+        genres: ['Action', 'Adventure'],
+        overview: `${g.displayName} published by ${cfg.publisher}. Tracking ${maxNum} ${
+          maxNum === 1 ? 'issue' : 'issues'
+        }.`,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function fetchShopifyComicIssuesPayload(
+  wiki: 'idw' | 'boom',
+  seriesName: string,
+  limit = 60
+): Promise<{ totalIssues: number; issues: Record<number, ComicSeriesIssueItem> }> {
+  const clean = seriesName.trim();
+  const targetNorm = normTitle(clean);
+  if (!clean) return { totalIssues: 0, issues: {} };
+
+  try {
+    const byNum = new Map<number, { cover: string; rawTitle: string }>();
+    const collect = (prods: ShopifyProductHit[]) => {
+      for (const p of prods) {
+        if (!p.title || !p.image) continue;
+        const cleaned = cleanShopifyComicTitle(p.title);
+        const m = cleaned.match(/^(.+?)\s+#(\d+)\b/);
+        if (!m) continue;
+        if (normTitle(m[1]) !== targetNorm) continue;
+        const num = Number(m[2]);
+        if (Number.isFinite(num) && num >= 1 && !byNum.has(num)) {
+          byNum.set(num, { cover: p.image, rawTitle: cleaned });
+        }
+      }
+    };
+
+    const [pMain, pOne] = await Promise.allSettled([
+      fetchShopifySuggestProducts(wiki, clean),
+      fetchShopifySuggestProducts(wiki, `${clean} #1`),
+    ]);
+    if (pMain.status === 'fulfilled') collect(pMain.value);
+    if (pOne.status === 'fulfilled') collect(pOne.value);
+
+    const maxFound = Math.max(0, ...byNum.keys());
+    const maxCap = Math.min(Math.max(1, maxFound), Math.max(1, limit), 18);
+    const missing: number[] = [];
+    for (let n = 1; n <= maxCap; n += 1) {
+      if (!byNum.has(n)) missing.push(n);
+    }
+    for (let i = 0; i < missing.length; i += 4) {
+      const settled = await Promise.allSettled(
+        missing.slice(i, i + 4).map((n) => fetchShopifySuggestProducts(wiki, `${clean} #${n}`))
+      );
+      for (const s of settled) {
+        if (s.status === 'fulfilled') collect(s.value);
+      }
+    }
+
+    const totalIssues = Math.max(maxFound, byNum.size);
+    const issues: Record<number, ComicSeriesIssueItem> = {};
+    for (const [num, entry] of [...byNum.entries()].sort((a, b) => a[0] - b[0])) {
+      if (num > limit) continue;
+      issues[num] = {
+        number: num,
+        issueLabel: `#${num}`,
+        title: `Issue #${num}`,
+        seriesTitle: clean,
+        coverUrl: entry.cover,
+        writers: SHOPIFY_STORES[wiki].publisher,
+        wiki,
+        pageTitle: `${clean} #${num}`,
+        atomicId: makeServerComicAtomicId(wiki, `${clean} ${num}`),
+      };
+    }
+
+    return { totalIssues, issues };
+  } catch {
+    return { totalIssues: 0, issues: {} };
+  }
+}
+
+async function queryComicVineSeries(seriesQuery: string): Promise<ComicSeriesSearchItem[]> {
+  const apiKey = process.env.COMICVINE_API_KEY?.trim();
+  if (!apiKey) return [];
+  try {
+    const url = `https://comicvine.gamespot.com/api/search/?api_key=${encodeURIComponent(
+      apiKey
+    )}&format=json&resources=volume&query=${encodeURIComponent(
+      seriesQuery
+    )}&limit=6&field_list=id,name,start_year,count_of_issues,publisher,image,deck`;
+    const res = await upstreamFetch(url, 5500);
+    if (!res.ok) return [];
+    const json = (await res.json()) as {
+      results?: Array<{
+        id?: number;
+        name?: string;
+        start_year?: string;
+        count_of_issues?: number;
+        publisher?: { name?: string };
+        image?: { medium_url?: string; small_url?: string };
+        deck?: string;
+      }>;
+    };
+    const curYear = new Date().getUTCFullYear();
+    return (json.results || [])
+      .filter((v) => v.id && v.name && (v.image?.medium_url || v.image?.small_url))
+      .map((v) => {
+        const startYear = Number(v.start_year) || curYear;
+        const issueCount = Math.max(1, v.count_of_issues || 1);
+        const pub = v.publisher?.name || 'Comic Vine';
+        const isOngoing = startYear >= curYear - 1;
+        return {
+          id: `comic-series-comicvine-${v.id}`,
+          wiki: 'comicvine' as const,
+          volTitle: String(v.id),
+          volNumber: 1,
+          title: v.name!,
+          publisher: pub,
+          startYear,
+          isOngoing,
+          runLabel: isOngoing ? `${startYear} – Present` : String(startYear),
+          issueCount,
+          coverUrl: v.image?.medium_url || v.image?.small_url || '',
+          creator: pub,
+          genres: ['Comics'],
+          overview: v.deck || `${v.name} (${startYear}) published by ${pub}.`,
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+async function fetchComicVineIssuesPayload(
+  volId: string,
+  limit = 60
+): Promise<{ totalIssues: number; issues: Record<number, ComicSeriesIssueItem> }> {
+  const apiKey = process.env.COMICVINE_API_KEY?.trim();
+  if (!apiKey || !/^\d+$/.test(volId.trim())) return { totalIssues: 0, issues: {} };
+  try {
+    const capped = Math.max(1, Math.min(100, limit));
+    const url = `https://comicvine.gamespot.com/api/issues/?api_key=${encodeURIComponent(
+      apiKey
+    )}&format=json&filter=volume:${volId.trim()}&sort=issue_number:asc&limit=${capped}&field_list=issue_number,name,cover_date,store_date,image,deck,volume`;
+    const res = await upstreamFetch(url, 6000);
+    if (!res.ok) return { totalIssues: 0, issues: {} };
+    const json = (await res.json()) as {
+      number_of_total_results?: number;
+      results?: Array<{
+        issue_number?: string;
+        name?: string;
+        cover_date?: string;
+        store_date?: string;
+        image?: { small_url?: string; medium_url?: string };
+        deck?: string;
+        volume?: { name?: string };
+      }>;
+    };
+    const issues: Record<number, ComicSeriesIssueItem> = {};
+    let idx = 0;
+    for (const iss of json.results || []) {
+      idx += 1;
+      const numVal = Number(iss.issue_number) || idx;
+      const rawDate = iss.store_date || iss.cover_date;
+      const parsedDate = parseUsMonthDayYear(rawDate);
+      const seriesTitle = iss.volume?.name || 'Series';
+      issues[idx] = {
+        number: idx,
+        issueLabel: `#${iss.issue_number || idx}`,
+        title: iss.name || `Issue #${numVal}`,
+        seriesTitle,
+        releaseDate: parsedDate.releaseDate || rawDate,
+        ...(parsedDate.releaseDateIso ? { releaseDateIso: parsedDate.releaseDateIso } : {}),
+        coverUrl: iss.image?.small_url || iss.image?.medium_url,
+        synopsis: iss.deck || undefined,
+        wiki: 'comicvine',
+        pageTitle: `${seriesTitle} #${iss.issue_number || idx}`,
+        atomicId: makeServerComicAtomicId('comicvine', `${volId} ${iss.issue_number || idx}`),
+      };
+    }
+    return {
+      totalIssues: Math.max(json.number_of_total_results || 0, Object.keys(issues).length),
+      issues,
+    };
+  } catch {
+    return { totalIssues: 0, issues: {} };
+  }
+}
+
+/** Searches ongoing & completed comic series runs across Marvel, DC, Image, Dark Horse, IDW, BOOM!, and optional Comic Vine. */
 export async function searchComicSeriesPayload(
   rawQuery: string
 ): Promise<{ items: ComicSeriesSearchItem[] }> {
@@ -1023,6 +1645,10 @@ export async function searchComicSeriesPayload(
     queryWikiComicVolumes('marvel', seriesQuery),
     queryWikiComicVolumes('dc', seriesQuery),
     queryWikiComicVolumes('imagecomics', seriesQuery),
+    queryDarkHorseSeries(seriesQuery),
+    queryShopifyComicSeries('idw', seriesQuery),
+    queryShopifyComicSeries('boom', seriesQuery),
+    queryComicVineSeries(seriesQuery),
   ];
 
   const creatorDiscovered: ComicSeriesSearchItem[] = [];
@@ -1214,6 +1840,16 @@ export async function fetchComicSeriesIssuesPayload(
   volTitle: string,
   limit = 90
 ): Promise<{ totalIssues: number; issues: Record<number, ComicSeriesIssueItem> }> {
+  if (wiki === 'darkhorse') {
+    return fetchDarkHorseIssuesPayload(volTitle, limit);
+  }
+  if (wiki === 'idw' || wiki === 'boom') {
+    return fetchShopifyComicIssuesPayload(wiki, volTitle, limit);
+  }
+  if (wiki === 'comicvine') {
+    return fetchComicVineIssuesPayload(volTitle, limit);
+  }
+
   const baseVol = volTitle.trim();
   const seriesTitle = deriveSeriesTitleFromPageTitle(baseVol);
   const strictIssueRegex = new RegExp(`^${escapeRegex(baseVol)}\\s+(\\d+(?:\\.[A-Za-z0-9]+)?)$`, 'i');
@@ -1634,7 +2270,13 @@ export async function GET(request: Request): Promise<Response> {
 
     if (
       wikiParam &&
-      (wikiParam === 'marvel' || wikiParam === 'dc' || wikiParam === 'imagecomics') &&
+      (wikiParam === 'marvel' ||
+        wikiParam === 'dc' ||
+        wikiParam === 'imagecomics' ||
+        wikiParam === 'darkhorse' ||
+        wikiParam === 'idw' ||
+        wikiParam === 'boom' ||
+        wikiParam === 'comicvine') &&
       volParam
     ) {
       const limit = Number(url.searchParams.get('limit') || '60');

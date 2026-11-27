@@ -6,7 +6,14 @@ import type {
   ReadProgress,
 } from '../types';
 
-export type ComicWikiSlug = 'marvel' | 'dc' | 'imagecomics';
+export type ComicWikiSlug =
+  | 'marvel'
+  | 'dc'
+  | 'imagecomics'
+  | 'darkhorse'
+  | 'idw'
+  | 'boom'
+  | 'comicvine';
 
 /** Builds a canonical cross-container ID for an individual comic issue atom. */
 export function makeComicAtomicId(wiki: ComicWikiSlug, pageTitle: string): string {

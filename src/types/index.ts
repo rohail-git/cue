@@ -28,6 +28,15 @@ export interface ComicEditionRecord {
   source?: 'curated' | 'openlibrary' | 'custom';
 }
 
+export type ComicWikiSlug =
+  | 'marvel'
+  | 'dc'
+  | 'imagecomics'
+  | 'darkhorse'
+  | 'idw'
+  | 'boom'
+  | 'comicvine';
+
 export interface ComicIssueMeta {
   number: number;
   issueLabel?: string;
@@ -39,7 +48,7 @@ export interface ComicIssueMeta {
   synopsis?: string;
   writers?: string;
   artists?: string;
-  wiki?: 'marvel' | 'dc' | 'imagecomics';
+  wiki?: ComicWikiSlug;
   pageTitle?: string;
   atomicId?: string;
 }
@@ -146,7 +155,7 @@ export interface ReadItem {
   comicKind?: 'series' | 'collection';
   comicRunLabel?: string;
   comicPublisher?: string;
-  comicSeriesWiki?: 'marvel' | 'dc' | 'imagecomics';
+  comicSeriesWiki?: ComicWikiSlug;
   comicSeriesVolTitle?: string;
   isbn?: string;
 }
