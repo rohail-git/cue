@@ -969,6 +969,137 @@ export function buildPreviewReadItemFromIncludedSeries(
   };
 }
 
+export type SmartComicContainerEntry =
+  | { kind: 'overlap'; data: OverlappingComicContainer }
+  | { kind: 'included'; data: IncludedComicSeriesContainer };
+
+const CONTAINER_TITLE_STOP_WORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'with',
+  'vol',
+  'volume',
+  'book',
+  'part',
+  'omnibus',
+  'compendium',
+  'complete',
+  'collection',
+  'epic',
+  'deluxe',
+  'edition',
+  'hardcover',
+  'tpb',
+  'comics',
+  'marvel',
+  'trial',
+  'return',
+  'death',
+  'lives',
+  'winter',
+  'war',
+  'age',
+  'all',
+  'new',
+]);
+
+const NOVELTY_OR_SIDE_CONTAINER_RE =
+  /\b(?:annual|special|point\s+one|fcbd|free\s+comic\s+book\s+day|not\s+brand\s+echh|giant-size|handbook|preview|sketchbook|what\s+if)\b/i;
+
+function extractMeaningfulTokens(raw: string): string[] {
+  return normalizeCollectionKey(raw)
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !CONTAINER_TITLE_STOP_WORDS.has(w) && !/^\d+$/.test(w));
+}
+
+function scoreSmartContainerRelevance(
+  sourceItem: ReadItem,
+  state: CueStoreState,
+  entry: SmartComicContainerEntry
+): number {
+  const c = entry.data;
+  const sourceTotal = Math.max(1, sourceItem.totalUnits);
+  const shareRatio = Math.min(1, c.sharedTotal / sourceTotal);
+
+  // 1. Shared issue coverage & volume (primary relevance signal)
+  let score = shareRatio * 65 + Math.min(30, Math.log2(c.sharedTotal + 1) * 7);
+
+  // 2. Title & franchise match against the currently viewed container
+  const srcKey = normalizeCollectionKey(sourceItem.title);
+  const candKey = normalizeCollectionKey(c.title);
+  const srcTokens = extractMeaningfulTokens(sourceItem.title);
+  const candTokens = extractMeaningfulTokens(c.title);
+  const srcSet = new Set(srcTokens);
+  const overlapTokens = candTokens.filter((t) => srcSet.has(t));
+  const hasDirectPhraseMatch =
+    candKey.length >= 3 && (srcKey.includes(candKey) || candKey.includes(srcKey));
+
+  if (hasDirectPhraseMatch) {
+    score += 28;
+  } else if (overlapTokens.length > 0) {
+    score += Math.min(22, overlapTokens.length * 14);
+  }
+
+  // 3. Flagship / popularity vs. 1-issue side/tie-in/novelty series
+  const containerScale =
+    entry.kind === 'overlap' ? entry.data.containerTotal : entry.data.sharedTotal;
+  score += Math.min(8, Math.log2(Math.max(1, containerScale) + 1) * 1.5);
+
+  const isNoveltyOrSpecial = NOVELTY_OR_SIDE_CONTAINER_RE.test(c.title);
+  if (isNoveltyOrSpecial) {
+    score -= 18;
+  } else if (c.sharedTotal === 1 && !hasDirectPhraseMatch && overlapTokens.length === 0) {
+    score -= 16;
+  } else if (c.sharedTotal >= 3) {
+    score += 10;
+  }
+
+  // 4. User library & reading momentum tie-breakers
+  if (entry.kind === 'overlap') {
+    const prog = state.readProgress[c.readId];
+    score += prog?.bookmarked ? 10 : 2;
+    if (typeof prog?.rating === 'number' && prog.rating > 0) score += prog.rating * 0.8;
+  }
+  if (c.sharedCompleted > 0) {
+    score += 4 + c.ratio * 6;
+  }
+
+  return score;
+}
+
+/**
+ * Ranks all Synced Smart Containers (both existing library overlaps and auto-populated
+ * included series) by relevance, shared-issue coverage, franchise popularity, and progress.
+ */
+export function rankSmartComicContainers(
+  sourceItem: ReadItem,
+  state: CueStoreState,
+  overlaps: OverlappingComicContainer[],
+  included: IncludedComicSeriesContainer[]
+): SmartComicContainerEntry[] {
+  const combined: Array<{ entry: SmartComicContainerEntry; score: number }> = [
+    ...overlaps.map((data) => {
+      const entry: SmartComicContainerEntry = { kind: 'overlap', data };
+      return { entry, score: scoreSmartContainerRelevance(sourceItem, state, entry) };
+    }),
+    ...included.map((data) => {
+      const entry: SmartComicContainerEntry = { kind: 'included', data };
+      return { entry, score: scoreSmartContainerRelevance(sourceItem, state, entry) };
+    }),
+  ];
+
+  combined.sort(
+    (a, b) =>
+      b.score - a.score ||
+      b.entry.data.sharedTotal - a.entry.data.sharedTotal ||
+      b.entry.data.sharedCompleted - a.entry.data.sharedCompleted ||
+      a.entry.data.title.localeCompare(b.entry.data.title)
+  );
+
+  return combined.map((item) => item.entry);
+}
+
 export interface EvaluatedCustomList {
   list: CustomList;
   totalItems: number;

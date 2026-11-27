@@ -56,8 +56,10 @@ import {
   evaluateIncludedComicSeries,
   evaluateOverlappingComicContainers,
   findBookSeries,
+  rankSmartComicContainers,
   type IncludedComicSeriesContainer,
   type OverlappingComicContainer,
+  type SmartComicContainerEntry,
 } from '../utils/containers';
 import {
   getComicEditionLabel,
@@ -373,14 +375,18 @@ export function ReadDetailView({ readId }: { readId: string }) {
     [item, state, overlappingContainers]
   );
 
-  type SmartContainerRowEntry =
-    | { kind: 'overlap'; data: OverlappingComicContainer }
-    | { kind: 'included'; data: IncludedComicSeriesContainer };
-
-  const allSmartContainerEntries: SmartContainerRowEntry[] = [
-    ...overlappingContainers.map((data) => ({ kind: 'overlap' as const, data })),
-    ...includedSeriesContainers.map((data) => ({ kind: 'included' as const, data })),
-  ];
+  const allSmartContainerEntries: SmartComicContainerEntry[] = useMemo(
+    () =>
+      item.format === 'comic'
+        ? rankSmartComicContainers(
+            item,
+            state,
+            overlappingContainers,
+            includedSeriesContainers
+          )
+        : [],
+    [item, state, overlappingContainers, includedSeriesContainers]
+  );
   const PRIMARY_CONTAINER_LIMIT = 3;
   const primaryContainerEntries = allSmartContainerEntries.slice(0, PRIMARY_CONTAINER_LIMIT);
   const overflowContainerEntries = allSmartContainerEntries.slice(PRIMARY_CONTAINER_LIMIT);
@@ -393,7 +399,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   };
 
   const renderSmartContainerRow = (
-    entry: SmartContainerRowEntry,
+    entry: SmartComicContainerEntry,
     variant: 'simple' | 'advanced'
   ) => {
     const isOverlap = entry.kind === 'overlap';
