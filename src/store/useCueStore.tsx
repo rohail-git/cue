@@ -460,6 +460,30 @@ interface CueContextValue {
     source?: GameChapterSource,
     note?: string
   ) => void;
+  updateGameMetadata: (
+    gameId: string,
+    patch: Partial<
+      Pick<
+        GameItem,
+        | 'title'
+        | 'developer'
+        | 'year'
+        | 'coverUrl'
+        | 'backdropUrl'
+        | 'overview'
+        | 'genres'
+        | 'platforms'
+        | 'igdbId'
+        | 'steamAppId'
+        | 'franchise'
+        | 'rating'
+        | 'totalChapters'
+        | 'chapterUnit'
+        | 'chapterSource'
+        | 'chapterNote'
+      >
+    >
+  ) => void;
   applyGameChapterList: (
     gameId: string,
     chapters: string[],
@@ -4406,6 +4430,82 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     [showToast]
   );
 
+  const updateGameMetadata = useCallback(
+    (
+      gameId: string,
+      patch: Partial<
+        Pick<
+          GameItem,
+          | 'title'
+          | 'developer'
+          | 'year'
+          | 'coverUrl'
+          | 'backdropUrl'
+          | 'overview'
+          | 'genres'
+          | 'platforms'
+          | 'igdbId'
+          | 'steamAppId'
+          | 'franchise'
+          | 'rating'
+          | 'totalChapters'
+          | 'chapterUnit'
+          | 'chapterSource'
+          | 'chapterNote'
+        >
+      >
+    ) => {
+      commitState((prev) => {
+        const game = prev.games[gameId];
+        if (!game) return prev;
+        const cleanCover = patch.coverUrl !== undefined ? patch.coverUrl.trim() : game.coverUrl;
+        const nextBackdrop =
+          patch.backdropUrl !== undefined
+            ? patch.backdropUrl.trim()
+            : patch.coverUrl !== undefined && (!game.backdropUrl || game.backdropUrl === game.coverUrl)
+              ? cleanCover
+              : game.backdropUrl;
+        const safeChapters =
+          typeof patch.totalChapters === 'number' &&
+          Number.isFinite(patch.totalChapters) &&
+          patch.totalChapters > 0
+            ? Math.max(1, Math.min(1000, Math.round(patch.totalChapters)))
+            : game.totalChapters;
+
+        return {
+          ...prev,
+          games: {
+            ...prev.games,
+            [gameId]: {
+              ...game,
+              ...(patch.title?.trim() ? { title: patch.title.trim() } : {}),
+              ...(patch.developer?.trim() ? { developer: patch.developer.trim() } : {}),
+              ...(typeof patch.year === 'number' && Number.isFinite(patch.year)
+                ? { year: Math.round(patch.year) }
+                : {}),
+              coverUrl: cleanCover,
+              backdropUrl: nextBackdrop,
+              ...(patch.overview?.trim() ? { overview: patch.overview.trim() } : {}),
+              ...(patch.genres?.length ? { genres: patch.genres } : {}),
+              ...(patch.platforms?.length ? { platforms: patch.platforms } : {}),
+              ...(patch.igdbId ? { igdbId: patch.igdbId } : {}),
+              ...(patch.steamAppId ? { steamAppId: patch.steamAppId } : {}),
+              ...(patch.franchise ? { franchise: patch.franchise } : {}),
+              ...(typeof patch.rating === 'number' && patch.rating > 0
+                ? { rating: patch.rating }
+                : {}),
+              ...(safeChapters ? { totalChapters: safeChapters } : {}),
+              ...(patch.chapterUnit ? { chapterUnit: patch.chapterUnit } : {}),
+              ...(patch.chapterSource ? { chapterSource: patch.chapterSource } : {}),
+              ...(patch.chapterNote !== undefined ? { chapterNote: patch.chapterNote } : {}),
+            },
+          },
+        };
+      });
+    },
+    []
+  );
+
   const updateGameChaptersMeta = useCallback(
     (
       gameId: string,
@@ -7632,6 +7732,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         advanceGameChapter,
         setGameChapter,
         updateGameChaptersMeta,
+        updateGameMetadata,
         applyGameChapterList,
         updateGameProgress,
         toggleGameCompleted,

@@ -18,6 +18,7 @@ import {
   Sparkles,
   Star,
   Trophy,
+  Wrench,
   X,
 } from 'lucide-react';
 import { CollectionDetailCard, CollectionHeroButton } from '../components/CollectionDetailCard';
@@ -28,11 +29,12 @@ import {
   FinishedDateRow,
   formatFinishedDate,
 } from '../components/FinishedDateCard';
+import { FixMediaInfoModal, type FixMediaRefreshResult } from '../components/FixMediaInfoModal';
 import { GameChapterSuggestSheet } from '../components/GameChapterSuggestSheet';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
-import { fetchGameChapterInfo } from '../services/mediaApi';
+import { enrichGameStub, fetchGameChapterInfo } from '../services/mediaApi';
 import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { DetailCardMode, GameChapterUnit, GamePlatform } from '../types';
 import { getMediaCollectionBadge } from '../utils/collection';
@@ -68,6 +70,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
     advanceGameChapter,
     setGameChapter,
     updateGameChaptersMeta,
+    updateGameMetadata,
     applyGameChapterList,
     updateGameProgress,
     toggleGameCompleted,
@@ -109,7 +112,10 @@ export function GameDetailView({ gameId }: { gameId: string }) {
   const [editingChapterTitle, setEditingChapterTitle] = useState(false);
   const [chapterTitleDraft, setChapterTitleDraft] = useState('');
   const [suggestOpen, setSuggestOpen] = useState(false);
+  const [fixModalOpen, setFixModalOpen] = useState(false);
+  const [enrichingGame, setEnrichingGame] = useState(false);
   const fetchedChaptersRef = useRef<Set<string>>(new Set());
+  const enrichedGameRef = useRef<Set<string>>(new Set());
 
   useModalBackHandler(activeChapterDrawer !== null, () => setActiveChapterDrawer(null));
 
@@ -172,6 +178,47 @@ export function GameDetailView({ gameId }: { gameId: string }) {
       cancelled = true;
     };
   }, [game, updateGameChaptersMeta]);
+
+  useEffect(() => {
+    if (!game) return;
+    if (enrichedGameRef.current.has(game.id)) return;
+    const isStubOverview =
+      !game.overview ||
+      game.overview.trim() === `${game.title} (${game.year}).` ||
+      game.overview.trim() === `${game.title} (${game.year})` ||
+      game.overview.endsWith('tracked in your Play log.');
+    if (game.coverUrl && !isStubOverview) return;
+
+    let cancelled = false;
+    enrichedGameRef.current.add(game.id);
+    setEnrichingGame(true);
+    enrichGameStub(game.title, game.year)
+      .then((patch) => {
+        if (cancelled || !patch) return;
+        updateGameMetadata(game.id, {
+          ...(patch.coverUrl && !game.coverUrl ? { coverUrl: patch.coverUrl } : {}),
+          ...(patch.backdropUrl && (!game.backdropUrl || game.backdropUrl === game.coverUrl)
+            ? { backdropUrl: patch.backdropUrl }
+            : {}),
+          ...(patch.overview && isStubOverview ? { overview: patch.overview } : {}),
+          ...(patch.developer && (!game.coverUrl || game.developer === 'Studio' || game.developer === 'PC Studio')
+            ? { developer: patch.developer }
+            : {}),
+          ...(patch.genres?.length && game.genres.length <= 1 ? { genres: patch.genres } : {}),
+          ...(patch.platforms?.length && !game.coverUrl ? { platforms: patch.platforms } : {}),
+          ...(patch.igdbId && !game.igdbId ? { igdbId: patch.igdbId } : {}),
+          ...(patch.steamAppId && !game.steamAppId ? { steamAppId: patch.steamAppId } : {}),
+          ...(patch.franchise && !game.franchise ? { franchise: patch.franchise } : {}),
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setEnrichingGame(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [game, updateGameMetadata]);
 
   if (!game) {
     return (
@@ -320,6 +367,17 @@ export function GameDetailView({ gameId }: { gameId: string }) {
               >
                 <Plus className="w-4 h-4 text-watched" />
                 <span>Log new playthrough (+1)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFixModalOpen(true);
+                  setMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm text-ink hover:bg-white/8 text-left"
+              >
+                <Wrench className="w-4 h-4 text-brand" />
+                <span>Fix info &amp; art</span>
               </button>
               <button
                 type="button"
@@ -567,6 +625,24 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                       </span>
                     );
                   })()}
+                  <button
+                    type="button"
+                    onClick={() => setFixModalOpen(true)}
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold border inline-flex items-center gap-1 transition-colors ${
+                      !game.coverUrl
+                        ? 'bg-brand/12 border-brand/35 text-brand hover:bg-brand/20'
+                        : 'bg-surface border-white/[0.08] text-ink-dim hover:text-ink'
+                    }`}
+                  >
+                    <Wrench className="w-2.5 h-2.5" />
+                    <span>{!game.coverUrl ? 'Fix info' : 'Fix'}</span>
+                  </button>
+                  {enrichingGame && (
+                    <span className="inline-flex items-center gap-1 text-[11px] text-ink-dim">
+                      <Loader2 className="w-3 h-3 animate-spin text-brand" />
+                      Matching cover…
+                    </span>
+                  )}
                 </div>
               </section>
 
@@ -1493,6 +1569,95 @@ export function GameDetailView({ gameId }: { gameId: string }) {
         onConfirm={(chapters, unit, source, note) =>
           applyGameChapterList(game.id, chapters, unit, source, note)
         }
+      />
+
+      <FixMediaInfoModal
+        open={fixModalOpen}
+        onClose={() => setFixModalOpen(false)}
+        kind="game"
+        title={game.title}
+        creator={game.developer}
+        year={game.year}
+        coverUrl={game.coverUrl}
+        overview={game.overview}
+        unitLabel={chapterUnit}
+        currentTotal={totalChapters}
+        totalSource={game.chapterSource === 'manual' ? 'manual' : undefined}
+        autoExpandDetails={!game.coverUrl}
+        refreshLabel="Auto-match cover & details"
+        onOpenChapterFinder={() => {
+          setFixModalOpen(false);
+          setSuggestOpen(true);
+        }}
+        chapterFinderLabel="Find chapters & missions"
+        onRefreshLive={async (): Promise<FixMediaRefreshResult | null> => {
+          const [metaRes, chapRes] = await Promise.allSettled([
+            enrichGameStub(game.title, game.year),
+            totalChapters === 0 ? fetchGameChapterInfo(game.title) : Promise.resolve(null),
+          ]);
+          const patch = metaRes.status === 'fulfilled' ? metaRes.value : null;
+          const chap = chapRes.status === 'fulfilled' ? chapRes.value : null;
+          if (!patch && !(chap && chap.found && chap.totalChapters)) {
+            return null;
+          }
+          if (patch) {
+            updateGameMetadata(game.id, {
+              ...(patch.title ? { title: patch.title } : {}),
+              ...(patch.developer ? { developer: patch.developer } : {}),
+              ...(patch.year ? { year: patch.year } : {}),
+              ...(patch.coverUrl ? { coverUrl: patch.coverUrl } : {}),
+              ...(patch.backdropUrl ? { backdropUrl: patch.backdropUrl } : {}),
+              ...(patch.overview ? { overview: patch.overview } : {}),
+              ...(patch.genres?.length ? { genres: patch.genres } : {}),
+              ...(patch.platforms?.length ? { platforms: patch.platforms } : {}),
+              ...(patch.igdbId ? { igdbId: patch.igdbId } : {}),
+              ...(patch.steamAppId ? { steamAppId: patch.steamAppId } : {}),
+              ...(patch.franchise ? { franchise: patch.franchise } : {}),
+            });
+          }
+          if (chap && chap.found && chap.totalChapters) {
+            updateGameChaptersMeta(
+              game.id,
+              chap.totalChapters,
+              chap.unit || 'chapters',
+              chap.source || 'web',
+              chap.note
+            );
+          }
+          return {
+            ...(chap?.totalChapters ? { total: chap.totalChapters } : {}),
+            ...(patch?.coverUrl ? { coverUrl: patch.coverUrl } : {}),
+            ...(patch?.title ? { title: patch.title } : {}),
+            ...(patch?.developer ? { creator: patch.developer } : {}),
+            ...(patch?.year ? { year: patch.year } : {}),
+            ...(patch?.overview ? { overview: patch.overview } : {}),
+            sourceLabel: patch?.sourceLabel,
+            message: [
+              patch ? `Matched details & cover via ${patch.sourceLabel}` : null,
+              chap?.found && chap.totalChapters
+                ? `detected ${chap.totalChapters} ${chap.unit || 'chapters'}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' · '),
+          };
+        }}
+        onSave={(patch) => {
+          updateGameMetadata(game.id, {
+            title: patch.title,
+            developer: patch.creator,
+            year: patch.year,
+            coverUrl: patch.coverUrl,
+            overview: patch.overview,
+            ...(patch.totalUnits
+              ? {
+                  totalChapters: patch.totalUnits,
+                  chapterUnit,
+                  chapterSource: 'manual',
+                }
+              : {}),
+          });
+        }}
       />
     </div>
   );

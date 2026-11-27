@@ -11,6 +11,7 @@ import {
   Play,
   Plus,
   Star,
+  Wrench,
 } from 'lucide-react';
 import { CollectionDetailCard, CollectionHeroButton } from '../components/CollectionDetailCard';
 import { CoverLightbox } from '../components/CoverLightbox';
@@ -20,10 +21,11 @@ import {
   FinishedDateRow,
   formatFinishedDate,
 } from '../components/FinishedDateCard';
+import { FixMediaInfoModal } from '../components/FixMediaInfoModal';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
-import { fetchTmdbMovieDetails } from '../services/mediaApi';
+import { enrichMovieStub, fetchTmdbMovieDetails } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode } from '../types';
 import { getMediaCollectionBadge } from '../utils/collection';
@@ -60,6 +62,7 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
   const [listPickerOpen, setListPickerOpen] = useState(false);
   const [newListName, setNewListName] = useState('');
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [fixModalOpen, setFixModalOpen] = useState(false);
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
     () => sessionDetailModeByMovieId.get(movieId) || state.settings.detailMode || 'simple'
   );
@@ -73,22 +76,50 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
   const progress = state.movieProgress[movieId];
 
   useEffect(() => {
-    if (!movie?.tmdbId) return;
+    if (!movie) return;
     if (enrichedMovieRef.current.has(movie.id)) return;
-    const needsEnrich = movie.cast.length === 0 || !movie.trailerUrl;
-    if (!needsEnrich) return;
 
-    let cancelled = false;
-    fetchTmdbMovieDetails(movie.tmdbId, state.settings.tmdbApiKey).then((patch) => {
-      if (cancelled) return;
+    if (movie.tmdbId) {
+      const needsEnrich = movie.cast.length === 0 || !movie.trailerUrl;
+      if (!needsEnrich) return;
+      let cancelled = false;
+      fetchTmdbMovieDetails(movie.tmdbId, state.settings.tmdbApiKey).then((patch) => {
+        if (cancelled) return;
+        enrichedMovieRef.current.add(movie.id);
+        if (patch) {
+          updateMovieDetails(movie.id, patch);
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!movie.posterUrl || movie.cast.length === 0) {
+      let cancelled = false;
       enrichedMovieRef.current.add(movie.id);
-      if (patch) {
-        updateMovieDetails(movie.id, patch);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
+      enrichMovieStub(movie.title, movie.year, state.settings.tmdbApiKey).then((patch) => {
+        if (cancelled || !patch) return;
+        updateMovieDetails(movie.id, {
+          ...(patch.tmdbId ? { tmdbId: patch.tmdbId } : {}),
+          ...(patch.posterUrl && !movie.posterUrl ? { posterUrl: patch.posterUrl } : {}),
+          ...(patch.backdropUrl && !movie.backdropUrl ? { backdropUrl: patch.backdropUrl } : {}),
+          ...(patch.overview && (!movie.overview || movie.overview === `${movie.title} (${movie.year}).`)
+            ? { overview: patch.overview }
+            : {}),
+          ...(patch.director && (!movie.director || movie.director === 'Feature Film')
+            ? { director: patch.director }
+            : {}),
+          ...(patch.runtime ? { runtime: patch.runtime } : {}),
+          ...(patch.genres?.length && movie.genres.length <= 1 ? { genres: patch.genres } : {}),
+          ...(patch.cast?.length && movie.cast.length === 0 ? { cast: patch.cast } : {}),
+          ...(patch.trailerUrl && !movie.trailerUrl ? { trailerUrl: patch.trailerUrl } : {}),
+        });
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
   }, [movie, state.settings.tmdbApiKey, updateMovieDetails]);
 
   const handleDetailModeChange = (nextMode: DetailCardMode) => {
@@ -263,6 +294,18 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                     <Star className="w-3.5 h-3.5 fill-brand text-brand" />
                     {movie.rating.toFixed(1)}/10
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => setFixModalOpen(true)}
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold border inline-flex items-center gap-1 transition-colors ${
+                      !movie.posterUrl
+                        ? 'bg-brand/12 border-brand/35 text-brand hover:bg-brand/20'
+                        : 'bg-surface border-white/[0.08] text-ink-dim hover:text-ink'
+                    }`}
+                  >
+                    <Wrench className="w-2.5 h-2.5" />
+                    <span>{!movie.posterUrl ? 'Fix info' : 'Fix'}</span>
+                  </button>
                   <span
                     className={`bg-surface border rounded-full px-3 py-1 text-xs font-medium ${
                       isWatched
@@ -655,28 +698,81 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                 );
               })}
             </div>
-            <div className="flex gap-2">
-              <input
-                placeholder="New list name..."
-                value={newListName}
-                onChange={(e) => setNewListName(e.target.value)}
-                className="flex-1 rounded-xl bg-surface border border-white/10 px-3 py-2 text-sm text-ink outline-none focus:border-brand"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  if (!newListName.trim()) return;
-                  createCustomList(newListName, '', { kind: 'movie', id: movie.id });
-                  setNewListName('');
-                }}
-                className="px-4 py-2 rounded-xl bg-brand text-brand-ink text-sm font-semibold"
-              >
-                Create
-              </button>
+              <div className="flex gap-2">
+                <input
+                  placeholder="New list name..."
+                  value={newListName}
+                  onChange={(e) => setNewListName(e.target.value)}
+                  className="flex-1 rounded-xl bg-surface border border-white/10 px-3 py-2 text-sm text-ink outline-none focus:border-brand"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newListName.trim()) return;
+                    createCustomList(newListName, '', { kind: 'movie', id: movie.id });
+                    setNewListName('');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-brand text-brand-ink text-sm font-semibold"
+                >
+                  Create
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+      <FixMediaInfoModal
+        open={fixModalOpen}
+        onClose={() => setFixModalOpen(false)}
+        kind="movie"
+        title={movie.title}
+        creator={movie.director}
+        year={movie.year}
+        coverUrl={movie.posterUrl}
+        overview={movie.overview}
+        unitLabel="episodes"
+        currentTotal={1}
+        autoExpandDetails={!movie.posterUrl}
+        refreshLabel="Auto-match poster & details"
+        onRefreshLive={async () => {
+          const patch = await enrichMovieStub(
+            movie.title,
+            movie.year,
+            state.settings.tmdbApiKey
+          );
+          if (!patch) return null;
+          updateMovieDetails(movie.id, {
+            ...(patch.tmdbId ? { tmdbId: patch.tmdbId } : {}),
+            ...(patch.posterUrl ? { posterUrl: patch.posterUrl } : {}),
+            ...(patch.backdropUrl ? { backdropUrl: patch.backdropUrl } : {}),
+            ...(patch.overview ? { overview: patch.overview } : {}),
+            ...(patch.director ? { director: patch.director } : {}),
+            ...(patch.runtime ? { runtime: patch.runtime } : {}),
+            ...(patch.genres?.length ? { genres: patch.genres } : {}),
+            ...(patch.cast?.length ? { cast: patch.cast } : {}),
+            ...(patch.trailerUrl ? { trailerUrl: patch.trailerUrl } : {}),
+          });
+          return {
+            coverUrl: patch.posterUrl,
+            title: patch.title,
+            creator: patch.director,
+            year: patch.year,
+            overview: patch.overview,
+            sourceLabel: patch.sourceLabel,
+          };
+        }}
+        onSave={(patch) => {
+          updateMovieDetails(movie.id, {
+            ...(patch.title ? { title: patch.title } : {}),
+            ...(patch.creator ? { director: patch.creator } : {}),
+            ...(patch.year ? { year: patch.year } : {}),
+            ...(patch.coverUrl !== undefined
+              ? { posterUrl: patch.coverUrl, backdropUrl: patch.coverUrl }
+              : {}),
+            ...(patch.overview !== undefined ? { overview: patch.overview } : {}),
+          });
+        }}
+      />
     </div>
   );
 }

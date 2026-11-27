@@ -5766,14 +5766,22 @@ export async function enrichImportCandidate(
     const matchingKind = hits.filter((h) => h.kind === expectedKind);
     const exact = matchingKind.find((h) => {
       const norm = normalizeTitleKey(h.title);
-      const yearOk = !h.year || !candidate.year || Math.abs(h.year - candidate.year) <= 2;
+      const yearOk =
+        h.source === 'cheapshark' ||
+        !h.year ||
+        !candidate.year ||
+        Math.abs(h.year - candidate.year) <= 3;
       return norm === targetNorm && yearOk;
     });
     if (exact) return exact;
 
     return matchingKind.find((h) => {
       const norm = normalizeTitleKey(h.title);
-      const yearOk = !h.year || !candidate.year || Math.abs(h.year - candidate.year) <= 2;
+      const yearOk =
+        h.source === 'cheapshark' ||
+        !h.year ||
+        !candidate.year ||
+        Math.abs(h.year - candidate.year) <= 3;
       return yearOk && (norm.startsWith(targetNorm) || targetNorm.startsWith(norm));
     });
   };
@@ -5970,6 +5978,54 @@ export async function enrichImportCandidate(
 
     const hits = await searchLiveMedia(candidate.title, 'game', tmdbApiKey);
     const best = pickBestMatch(hits, 'game');
+    if (best && best.posterUrl) {
+      const game = hydrateLiveGameItem(best);
+      return {
+        candidate,
+        selected: !candidate.existingId,
+        game: {
+          ...game,
+          coverUrl: game.coverUrl || candidate.posterUrl || '',
+          backdropUrl: game.backdropUrl || candidate.posterUrl || '',
+        },
+      };
+    }
+    const enrichedGame = await enrichGameStub(candidate.title, candidate.year);
+    if (enrichedGame && (enrichedGame.coverUrl || enrichedGame.steamAppId || enrichedGame.igdbId)) {
+      const fallbackGame = buildFallbackGameItem(candidate);
+      const known = lookupKnownGameChapters(enrichedGame.title || candidate.title);
+      return {
+        candidate,
+        selected: !candidate.existingId,
+        game: {
+          ...fallbackGame,
+          ...(enrichedGame.igdbId ? { igdbId: enrichedGame.igdbId } : {}),
+          ...(enrichedGame.steamAppId ? { steamAppId: enrichedGame.steamAppId } : {}),
+          title: enrichedGame.title || fallbackGame.title,
+          developer: enrichedGame.developer || fallbackGame.developer,
+          year: enrichedGame.year || fallbackGame.year,
+          genres: enrichedGame.genres?.length ? enrichedGame.genres : fallbackGame.genres,
+          platforms: enrichedGame.platforms?.length ? enrichedGame.platforms : fallbackGame.platforms,
+          coverUrl: enrichedGame.coverUrl || fallbackGame.coverUrl || candidate.posterUrl || '',
+          backdropUrl:
+            enrichedGame.backdropUrl ||
+            enrichedGame.coverUrl ||
+            fallbackGame.backdropUrl ||
+            candidate.posterUrl ||
+            '',
+          overview: enrichedGame.overview || fallbackGame.overview,
+          ...(enrichedGame.franchise ? { franchise: enrichedGame.franchise } : {}),
+          ...(known
+            ? {
+                totalChapters: known.totalChapters,
+                chapterUnit: known.unit,
+                chapterSource: known.source,
+                chapterNote: known.note,
+              }
+            : {}),
+        },
+      };
+    }
     if (best) {
       const game = hydrateLiveGameItem(best);
       return {
@@ -5987,6 +6043,120 @@ export async function enrichImportCandidate(
   }
 
   return buildFallbackPreparedEntry(candidate);
+}
+
+export async function enrichGameStub(
+  title: string,
+  year?: number
+): Promise<(Partial<GameItem> & { sourceLabel: string }) | null> {
+  const clean = title.trim();
+  if (!clean) return null;
+  try {
+    const qs = new URLSearchParams({ action: 'enrich', q: clean });
+    if (year && year > 1970) qs.set('year', String(year));
+    const res = await fetch(`/api/igdb?${qs.toString()}`, {
+      signal: AbortSignal.timeout(9000),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as {
+        found?: boolean;
+        source?: 'igdb' | 'steam';
+        item?: {
+          title?: string;
+          year?: number;
+          coverUrl?: string;
+          backdropUrl?: string;
+          overview?: string;
+          developer?: string;
+          genres?: string[];
+          platforms?: string[];
+          igdbId?: number;
+          steamAppId?: number;
+          franchise?: string;
+          rating?: number;
+        };
+      };
+      if (data.found && data.item) {
+        const it = data.item;
+        const platforms = toGamePlatforms(it.platforms);
+        return {
+          ...(it.title ? { title: it.title } : {}),
+          ...(it.year ? { year: it.year } : {}),
+          ...(it.coverUrl ? { coverUrl: it.coverUrl } : {}),
+          ...(it.backdropUrl || it.coverUrl ? { backdropUrl: it.backdropUrl || it.coverUrl } : {}),
+          ...(it.overview ? { overview: it.overview } : {}),
+          ...(it.developer ? { developer: it.developer } : {}),
+          ...(it.genres?.length ? { genres: it.genres } : {}),
+          ...(platforms.length ? { platforms } : {}),
+          ...(it.igdbId ? { igdbId: it.igdbId } : {}),
+          ...(it.steamAppId ? { steamAppId: it.steamAppId } : {}),
+          ...(it.franchise ? { franchise: it.franchise } : {}),
+          ...(typeof it.rating === 'number' && it.rating > 0 ? { rating: it.rating } : {}),
+          sourceLabel: data.source === 'igdb' ? 'IGDB' : 'Steam',
+        };
+      }
+    }
+  } catch {
+    // Fall through to Wikipedia
+  }
+
+  try {
+    const wikiHit = await searchWikipediaSummary(clean, 'game');
+    if (wikiHit && (wikiHit.posterUrl || wikiHit.overview)) {
+      return {
+        ...(wikiHit.posterUrl ? { coverUrl: wikiHit.posterUrl, backdropUrl: wikiHit.posterUrl } : {}),
+        ...(wikiHit.overview ? { overview: wikiHit.overview } : {}),
+        ...(wikiHit.year ? { year: wikiHit.year } : {}),
+        sourceLabel: 'Wikipedia',
+      };
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export async function enrichMovieStub(
+  title: string,
+  year?: number,
+  tmdbApiKey?: string
+): Promise<(Partial<Movie> & { sourceLabel: string }) | null> {
+  const clean = title.trim();
+  if (!clean) return null;
+  try {
+    const hits = await searchLiveMedia(clean, 'movie', tmdbApiKey);
+    const movies = hits.filter((h) => h.kind === 'movie');
+    if (movies.length === 0) return null;
+    const tNorm = normalizeTitleKey(clean);
+    const best =
+      movies.find((m) => normalizeTitleKey(m.title) === tNorm && (!year || !m.year || Math.abs(m.year - year) <= 2)) ||
+      movies.find((m) => normalizeTitleKey(m.title).includes(tNorm) || tNorm.includes(normalizeTitleKey(m.title))) ||
+      movies[0];
+
+    let details: Partial<Movie> = {};
+    if (best.source === 'tmdb' && Number(best.externalId)) {
+      details = (await fetchTmdbMovieDetails(Number(best.externalId), tmdbApiKey)) || {};
+    }
+
+    return {
+      ...(best.source === 'tmdb' && Number(best.externalId) ? { tmdbId: Number(best.externalId) } : {}),
+      title: best.title,
+      year: details.releaseDate ? Number(details.releaseDate.slice(0, 4)) || best.year : best.year,
+      posterUrl: details.posterUrl || best.posterUrl,
+      backdropUrl: details.backdropUrl || best.backdropUrl || best.posterUrl,
+      overview: details.overview || best.overview,
+      director: details.director || best.director,
+      runtime: details.runtime || best.runtime,
+      genres: details.genres?.length ? details.genres : best.genres,
+      cast: details.cast,
+      trailerUrl: details.trailerUrl,
+      releaseDate: details.releaseDate,
+      rating: best.rating,
+      sourceLabel: best.source === 'tmdb' ? 'TMDB' : 'Live Search',
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchLiveMangaChapterCount(

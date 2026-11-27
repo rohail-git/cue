@@ -213,6 +213,146 @@ async function queryIgdbGames(
   }
 }
 
+function normalizeGameTitle(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[:\-–—_.,!?'’"()[\]]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function scoreGameMatch(
+  query: string,
+  candidateTitle: string,
+  candidateYear?: number,
+  targetYear?: number
+): number {
+  const qNorm = normalizeGameTitle(query);
+  const cNorm = normalizeGameTitle(candidateTitle);
+  if (!cNorm) return -100;
+  let score = 0;
+  if (cNorm === qNorm) score += 120;
+  else if (cNorm.startsWith(qNorm)) score += 85;
+  else if (cNorm.includes(qNorm) || qNorm.includes(cNorm)) score += 60;
+  else {
+    const qWords = qNorm.split(' ').filter(Boolean);
+    const hits = qWords.filter((w) => cNorm.includes(w)).length;
+    if (hits === 0) return -50;
+    score += Math.round((hits / Math.max(1, qWords.length)) * 45);
+  }
+  if (targetYear && candidateYear && Number.isFinite(candidateYear)) {
+    const diff = Math.abs(candidateYear - targetYear);
+    if (diff === 0) score += 25;
+    else if (diff <= 2) score += 15;
+    else if (diff <= 5) score += 5;
+  }
+  return score;
+}
+
+export interface GameEnrichItem {
+  title: string;
+  year?: number;
+  coverUrl: string;
+  backdropUrl: string;
+  overview: string;
+  developer: string;
+  genres: string[];
+  platforms: string[];
+  igdbId?: number;
+  steamAppId?: number;
+  franchise?: string;
+  rating?: number;
+}
+
+async function enrichGameFromSteam(
+  rawTitle: string,
+  targetYear?: number
+): Promise<GameEnrichItem | null> {
+  try {
+    const cleanSearch = normalizeGameTitle(rawTitle) || rawTitle.trim();
+    const srRes = await fetch(
+      `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(
+        cleanSearch
+      )}&l=english&cc=US`,
+      { signal: AbortSignal.timeout(5500) }
+    );
+    if (!srRes.ok) return null;
+    const srJson = (await srRes.json()) as {
+      items?: Array<{ id?: number; name?: string; tiny_image?: string }>;
+    };
+    const scored = (srJson.items || [])
+      .filter((it): it is { id: number; name: string; tiny_image?: string } =>
+        Boolean(it?.id && it?.name)
+      )
+      .map((it) => ({ it, sc: scoreGameMatch(rawTitle, it.name, undefined, targetYear) }))
+      .sort((a, b) => b.sc - a.sc);
+    const best = scored[0];
+    if (!best || best.sc < 40) return null;
+
+    const appId = best.it.id;
+    const coverUrl = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/library_600x900_2x.jpg`;
+    let backdropUrl = `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg`;
+    let title = best.it.name;
+    let developer = 'PC Studio';
+    let overview = `${title} — tracked in your Play log.`;
+    let genres = ['Action', 'Adventure'];
+    let year = targetYear;
+
+    try {
+      const detRes = await fetch(
+        `https://store.steampowered.com/api/appdetails?appids=${appId}&l=english`,
+        { signal: AbortSignal.timeout(5500) }
+      );
+      if (detRes.ok) {
+        const detJson = (await detRes.json()) as Record<
+          string,
+          {
+            success?: boolean;
+            data?: {
+              name?: string;
+              short_description?: string;
+              header_image?: string;
+              developers?: string[];
+              genres?: Array<{ description?: string }>;
+              release_date?: { date?: string };
+            };
+          }
+        >;
+        const d = detJson[String(appId)]?.data;
+        if (d) {
+          if (d.name) title = d.name;
+          if (d.developers?.length) developer = d.developers[0];
+          if (d.short_description) {
+            overview = d.short_description.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+          }
+          if (d.header_image) backdropUrl = d.header_image;
+          if (d.genres?.length) {
+            genres = d.genres.map((g) => g.description || '').filter(Boolean).slice(0, 3);
+          }
+          const yMatch = (d.release_date?.date || '').match(/\b(19|20)\d{2}\b/);
+          if (yMatch && !year) year = Number(yMatch[0]);
+        }
+      }
+    } catch {
+      // Keep storesearch fallback fields
+    }
+
+    return {
+      title,
+      year,
+      coverUrl,
+      backdropUrl,
+      overview,
+      developer,
+      genres,
+      platforms: ['PC', 'Steam Deck'],
+      steamAppId: appId,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Handles `/api/igdb` requests cleanly with Twitch OAuth token caching and fallback state. */
 export async function handleIgdbProxyRequest(
   params: URLSearchParams,
@@ -221,6 +361,99 @@ export async function handleIgdbProxyRequest(
   const action = (params.get('action') || 'status').trim().toLowerCase();
   const { clientId, clientSecret } = resolveIgdbCredentials(env);
   const configured = Boolean(clientId && clientSecret);
+
+  if (action === 'enrich') {
+    const qRaw = (params.get('q') || '').replace(/["\\;\n\r]+/g, ' ').replace(/\s+/g, ' ').trim();
+    const yearNum = Number(params.get('year') || '');
+    const targetYear = Number.isFinite(yearNum) && yearNum > 1970 ? yearNum : undefined;
+    if (qRaw.length < 2) {
+      return {
+        status: 400,
+        body: { ok: false, found: false, error: 'Missing game title' },
+        cacheControl: 'no-store',
+      };
+    }
+
+    const token = configured ? await getTwitchAppToken(clientId, clientSecret) : null;
+    const igdbTask = (async (): Promise<IgdbGameItem | null> => {
+      if (!configured || !token) return null;
+      const cleanQ = normalizeGameTitle(qRaw);
+      let items = await queryIgdbGames(
+        clientId,
+        token,
+        `search "${qRaw}"; ${IGDB_FIELDS}; limit 8;`
+      );
+      if (items.length === 0 && cleanQ && cleanQ !== qRaw.toLowerCase()) {
+        items = await queryIgdbGames(
+          clientId,
+          token,
+          `search "${cleanQ}"; ${IGDB_FIELDS}; limit 8;`
+        );
+      }
+      const best = items
+        .map((it) => ({ it, sc: scoreGameMatch(qRaw, it.title, it.year, targetYear) }))
+        .sort((a, b) => b.sc - a.sc)[0];
+      return best && best.sc >= 45 ? best.it : null;
+    })();
+
+    const [igdbRes, steamRes] = await Promise.allSettled([
+      igdbTask,
+      enrichGameFromSteam(qRaw, targetYear),
+    ]);
+    const igdbHit = igdbRes.status === 'fulfilled' ? igdbRes.value : null;
+    const steamHit = steamRes.status === 'fulfilled' ? steamRes.value : null;
+
+    if (igdbHit) {
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          found: true,
+          source: 'igdb',
+          item: {
+            title: igdbHit.title,
+            year: igdbHit.year,
+            coverUrl: igdbHit.posterUrl,
+            backdropUrl: igdbHit.backdropUrl || steamHit?.backdropUrl || igdbHit.posterUrl,
+            overview:
+              igdbHit.overview && !igdbHit.overview.endsWith('tracked in your Play log.')
+                ? igdbHit.overview
+                : steamHit?.overview || igdbHit.overview,
+            developer:
+              igdbHit.developer && igdbHit.developer !== 'Studio'
+                ? igdbHit.developer
+                : steamHit?.developer || igdbHit.developer,
+            genres: igdbHit.genres,
+            platforms: igdbHit.platforms,
+            igdbId: igdbHit.igdbId,
+            ...(steamHit?.steamAppId ? { steamAppId: steamHit.steamAppId } : {}),
+            ...(igdbHit.franchise ? { franchise: igdbHit.franchise } : {}),
+            rating: igdbHit.rating,
+          },
+        },
+        cacheControl: 'public, s-maxage=3600, stale-while-revalidate=86400',
+      };
+    }
+
+    if (steamHit) {
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          found: true,
+          source: 'steam',
+          item: steamHit,
+        },
+        cacheControl: 'public, s-maxage=3600, stale-while-revalidate=86400',
+      };
+    }
+
+    return {
+      status: 200,
+      body: { ok: true, found: false },
+      cacheControl: 'public, s-maxage=600, stale-while-revalidate=3600',
+    };
+  }
 
   if (action === 'status') {
     return {
