@@ -15,6 +15,8 @@ export type ImportSourceType =
   | 'imdb-list'
   | 'letterboxd'
   | 'goodreads'
+  | 'comic-geeks-csv'
+  | 'cue-library-csv'
   | 'trakt-tvtime-json'
   | 'text-finished-log'
   | 'cue-backup'
@@ -2162,6 +2164,244 @@ function looksLikeTextFinishedLog(trimmed: string, fileName = ''): boolean {
   );
 }
 
+function parseComicGeeksCsv(rows: string[][], headers: Record<string, number>): ParsedImportBatch {
+  const candidates: ImportCandidate[] = [];
+  const skipped: SkippedImportRow[] = [];
+  const seen = new Set<string>();
+
+  interface RawIssueGroup {
+    seriesTitle: string;
+    seriesRaw: string;
+    publisher: string;
+    year: number;
+    readCount: number;
+    totalCount: number;
+    maxRating?: number;
+    latestDate?: string;
+    rowNumber: number;
+    formatHint: string;
+    tags: string;
+  }
+  const issueGroups = new Map<string, RawIssueGroup>();
+
+  const cleanSeriesBase = (rawSeries: string): string =>
+    rawSeries
+      .replace(/\s*\(Vol\.\s*\d+\)\s*/gi, ' ')
+      .replace(/\s*\((?:19|20)\d{2}(?:\s*-\s*(?:Present|(?:19|20)\d{2}))?\)\s*/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const fullTitle = cell(r, headers, 'Full Title');
+    const seriesName = cell(r, headers, 'Series Name');
+    if (!fullTitle && !seriesName) continue;
+
+    const publisher = cell(r, headers, 'Publisher Name');
+    const releaseDate = cell(r, headers, 'Release Date');
+    const datePurchased = cell(r, headers, 'Date Purchased');
+    const markedRead = cell(r, headers, 'Marked Read') === '1';
+    const inCollection = cell(r, headers, 'In Collection') === '1';
+    const inWishlist = cell(r, headers, 'In Wish List') === '1';
+    const mediaFormat = cell(r, headers, 'Media Format');
+    const tags = cell(r, headers, 'Tags');
+    const rating = parseStarRatingFive(cell(r, headers, 'My Rating'));
+    const year = parseYear(releaseDate || seriesName || datePurchased, 2024);
+    const dateStr = normalizeImportDateIso(datePurchased || releaseDate);
+
+    const isCollectedEdition =
+      /\b(TP|TPB|HC|Omnibus|Compendium|Complete Collection|Deluxe Edition|Compact)\b/i.test(
+        fullTitle
+      ) || !/#\d+(?:\.\d+|\.[A-Z]+)?\b/i.test(fullTitle);
+
+    if (isCollectedEdition && fullTitle) {
+      const key = normalizeImportTitle(fullTitle);
+      if (seen.has(key)) {
+        skipped.push({ rowNumber: i + 1, title: fullTitle, reason: 'Duplicate row inside CSV' });
+        continue;
+      }
+      seen.add(key);
+
+      const mediaType = classifyReadFormat({
+        title: fullTitle,
+        publisher,
+        binding: mediaFormat,
+        genres: [tags],
+      });
+      const readStatus: ImportCandidate['readStatus'] = markedRead ? 'finished' : 'want_to_read';
+      const notes = [
+        publisher,
+        inCollection ? 'In Collection' : inWishlist ? 'Wishlist' : '',
+        tags,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
+      candidates.push({
+        tempId: `clz-${i}-${key.slice(0, 16)}`,
+        kind: 'read',
+        domain: 'read',
+        mediaType,
+        title: fullTitle,
+        year,
+        genres: [mediaType === 'manga' ? 'Manga' : mediaType === 'comic' ? 'Comics' : 'Fiction'],
+        creator: publisher || 'Publisher',
+        userRating: rating,
+        completed: markedRead,
+        readStatus,
+        dateStr,
+        overview: notes || undefined,
+        rowNumber: i + 1,
+      });
+    } else if (seriesName) {
+      const baseTitle = cleanSeriesBase(seriesName) || fullTitle.replace(/\s+#\d.*$/, '').trim();
+      const groupKey = normalizeImportTitle(seriesName);
+      const prev = issueGroups.get(groupKey);
+      if (!prev) {
+        issueGroups.set(groupKey, {
+          seriesTitle: baseTitle,
+          seriesRaw: seriesName,
+          publisher,
+          year,
+          readCount: markedRead ? 1 : 0,
+          totalCount: 1,
+          maxRating: rating,
+          latestDate: dateStr,
+          rowNumber: i + 1,
+          formatHint: mediaFormat,
+          tags,
+        });
+      } else {
+        prev.totalCount += 1;
+        if (markedRead) prev.readCount += 1;
+        if (rating && (!prev.maxRating || rating > prev.maxRating)) prev.maxRating = rating;
+        if (dateStr && (!prev.latestDate || dateStr > prev.latestDate)) prev.latestDate = dateStr;
+      }
+    }
+  }
+
+  for (const grp of issueGroups.values()) {
+    const key = normalizeImportTitle(grp.seriesTitle);
+    if (!key) continue;
+    const mediaType = classifyReadFormat({
+      title: grp.seriesRaw,
+      publisher: grp.publisher,
+      binding: grp.formatHint,
+      genres: [grp.tags],
+    });
+    const isFinished = grp.readCount > 0;
+    candidates.push({
+      tempId: `clz-s-${grp.rowNumber}-${key.slice(0, 16)}`,
+      kind: 'read',
+      domain: 'read',
+      mediaType,
+      title: grp.seriesTitle,
+      year: grp.year,
+      genres: [mediaType === 'manga' ? 'Manga' : 'Comics'],
+      creator: grp.publisher || 'Publisher',
+      userRating: grp.maxRating,
+      completed: isFinished,
+      readStatus: isFinished ? 'finished' : 'want_to_read',
+      totalUnits: grp.totalCount,
+      dateStr: grp.latestDate,
+      overview: `${grp.seriesRaw} · ${grp.readCount}/${grp.totalCount} issues logged`,
+      rowNumber: grp.rowNumber,
+    });
+  }
+
+  return {
+    source: 'comic-geeks-csv',
+    sourceLabel: 'League of Comic Geeks CSV',
+    candidates,
+    skipped,
+  };
+}
+
+function parseCueLibraryCsv(rows: string[][], headers: Record<string, number>): ParsedImportBatch {
+  const candidates: ImportCandidate[] = [];
+  const skipped: SkippedImportRow[] = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const title = cell(r, headers, 'Title');
+    if (!title) continue;
+    const domainRaw = cell(r, headers, 'Domain').toLowerCase();
+    const typeRaw = cell(r, headers, 'Type').toLowerCase();
+    const statusRaw = cell(r, headers, 'Status').toLowerCase();
+    const creator = cell(r, headers, 'Publisher / Studio') || undefined;
+    const year = parseYear(cell(r, headers, 'Release Year'), 2024);
+    const userRating = parseStarRatingFive(cell(r, headers, 'My Rating'));
+    const dateStr = normalizeImportDateIso(
+      cell(r, headers, 'Finished Date') || cell(r, headers, 'Date Purchased')
+    );
+    const notes = cell(r, headers, 'Notes') || undefined;
+
+    let kind: ImportCandidate['kind'] = 'movie';
+    let mediaType: ImportCandidate['mediaType'] = 'movie';
+    if (domainRaw === 'play' || typeRaw === 'game') {
+      kind = 'game';
+      mediaType = 'game';
+    } else if (domainRaw === 'read' || ['comic', 'manga', 'novel'].includes(typeRaw)) {
+      kind = 'read';
+      mediaType = typeRaw === 'comic' ? 'comic' : typeRaw === 'manga' ? 'manga' : 'novel';
+    } else if (typeRaw === 'anime') {
+      kind = 'show';
+      mediaType = 'anime';
+    } else if (typeRaw === 'tv show' || typeRaw === 'show' || typeRaw === 'series') {
+      kind = 'show';
+      mediaType = 'tv';
+    }
+
+    const completed =
+      statusRaw === 'finished' || statusRaw === 'watched' || statusRaw === 'completed';
+
+    candidates.push({
+      tempId: `cuecsv-${i}-${normalizeImportTitle(title).slice(0, 16)}`,
+      kind,
+      domain: kind === 'read' ? 'read' : kind === 'game' ? 'play' : 'watch',
+      mediaType,
+      title,
+      year,
+      genres: [
+        mediaType === 'anime'
+          ? 'Anime'
+          : kind === 'show'
+            ? 'Series'
+            : kind === 'game'
+              ? 'Video Game'
+              : mediaType === 'comic'
+                ? 'Comics'
+                : mediaType === 'manga'
+                  ? 'Manga'
+                  : kind === 'read'
+                    ? 'Fiction'
+                    : 'Feature Film',
+      ],
+      creator,
+      userRating,
+      completed,
+      readStatus:
+        kind === 'read'
+          ? completed
+            ? 'finished'
+            : statusRaw === 'reading'
+              ? 'reading'
+              : 'want_to_read'
+          : undefined,
+      dateStr,
+      overview: notes,
+      rowNumber: i + 1,
+    });
+  }
+
+  return {
+    source: 'cue-library-csv',
+    sourceLabel: 'Cue Library CSV',
+    candidates,
+    skipped,
+  };
+}
+
 export function parseImportFile(rawText: string, fileName = ''): ParsedImportBatch {
   const trimmed = rawText.trim();
   if (!trimmed) {
@@ -2233,6 +2473,14 @@ export function parseImportFile(rawText: string, fileName = ''): ParsedImportBat
 
     if (headers['exclusiveshelf'] !== undefined || headers['authorlf'] !== undefined || headers['bookid'] !== undefined) {
       return parseGoodreadsCsv(rows, headers);
+    }
+
+    if (headers['fulltitle'] !== undefined && (headers['publishername'] !== undefined || headers['markedread'] !== undefined)) {
+      return parseComicGeeksCsv(rows, headers);
+    }
+
+    if (headers['domain'] !== undefined && headers['type'] !== undefined && headers['title'] !== undefined) {
+      return parseCueLibraryCsv(rows, headers);
     }
 
     // Generic Title + Type fallback CSV

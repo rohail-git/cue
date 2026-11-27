@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import {
   Activity,
   Download,
+  FileSpreadsheet,
+  FileText,
   HeartPulse,
   KeyRound,
   Loader2,
@@ -17,6 +19,12 @@ import {
 } from 'lucide-react';
 import { testTmdbConnection } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
+import {
+  downloadTextFile,
+  exportComicsCsv,
+  exportFinishedLogTxt,
+  exportLibraryCsv,
+} from '../utils/mediaExport';
 import {
   fetchLiveHealth,
   scanAndRepairLibrary,
@@ -98,14 +106,32 @@ export function SettingsModal() {
 
   const handleDownloadBackup = () => {
     const json = exportLibraryJson();
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `cue-journal-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadTextFile(
+      json,
+      `cue-journal-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      'application/json'
+    );
     showToast('Exported cue backup JSON');
+  };
+
+  const todayStamp = () => new Date().toISOString().slice(0, 10);
+
+  const handleDownloadLibraryCsv = () => {
+    const csv = exportLibraryCsv(state, 'all');
+    downloadTextFile(csv, `cue-library-${todayStamp()}.csv`, 'text/csv;charset=utf-8');
+    showToast('Exported readable Library CSV');
+  };
+
+  const handleDownloadComicsCsv = () => {
+    const csv = exportComicsCsv(state);
+    downloadTextFile(csv, `cue-comics-${todayStamp()}.csv`, 'text/csv;charset=utf-8');
+    showToast('Exported Comics & Books CSV');
+  };
+
+  const handleDownloadFinishedTxt = () => {
+    const txt = exportFinishedLogTxt(state);
+    downloadTextFile(txt, `cue-finished-log-${todayStamp()}.txt`, 'text/plain;charset=utf-8');
+    showToast('Exported Finished Log TXT');
   };
 
   const handleTestTmdb = async () => {
@@ -492,11 +518,11 @@ export function SettingsModal() {
           </section>
 
           {/* Data Import / Export */}
-          <section className="space-y-2.5 pt-2 border-t border-white/8">
+          <section className="space-y-3 pt-2 border-t border-white/8">
             <h4 className="text-sm font-semibold text-ink">Local Backup & Smart Import</h4>
             <p className="text-xs text-ink-dim">
-              Export a JSON backup anytime or safely import IMDb CSV, Letterboxd CSV, Goodreads CSV,
-              Trakt / TV Time, or cue JSON with preview and Undo.
+              Export a lossless JSON backup, human-readable spreadsheets/logs for Excel or Google
+              Sheets, or import IMDb, Letterboxd, Goodreads, Comic Geeks CSV, JSON, and .txt logs.
             </p>
             <div className="grid grid-cols-2 gap-2.5">
               <button
@@ -518,6 +544,38 @@ export function SettingsModal() {
                 <Upload className="w-4 h-4 text-watch" />
                 <span>Smart Import</span>
               </button>
+            </div>
+
+            <div className="space-y-1.5 pt-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-faint">
+                Readable Exports (Excel, Sheets & Text)
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={handleDownloadLibraryCsv}
+                  className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-background border border-white/10 text-xs font-medium text-ink hover:border-watch/40 hover:bg-surface-raised"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-watch shrink-0" />
+                  <span>Library CSV</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadComicsCsv}
+                  className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-background border border-white/10 text-xs font-medium text-ink hover:border-read/40 hover:bg-surface-raised"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-read shrink-0" />
+                  <span>Comics CSV</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadFinishedTxt}
+                  className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl bg-background border border-white/10 text-xs font-medium text-ink hover:border-play/40 hover:bg-surface-raised"
+                >
+                  <FileText className="w-3.5 h-3.5 text-play shrink-0" />
+                  <span>Finished Log TXT</span>
+                </button>
+              </div>
             </div>
           </section>
 

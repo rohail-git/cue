@@ -7,6 +7,7 @@ import {
   Calendar,
   Clock,
   Compass,
+  Download,
   Flame,
   Gamepad2,
   Hourglass,
@@ -26,6 +27,11 @@ import {
   type CollectionLedgerEntry,
 } from '../utils/collection';
 import { computeTasteProfile } from '../utils/cueMind';
+import {
+  downloadTextFile,
+  exportComicsCsv,
+  exportLibraryCsv,
+} from '../utils/mediaExport';
 import {
   computeJournalAdvancedStats,
   type HeatmapDayCell,
@@ -1401,33 +1407,53 @@ function AdvancedCollectionLedger({
           </div>
         </div>
 
-        {onSaveCollectionDetails && selectableTargets.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
             onClick={() => {
-              if (pickerOpen || editingKey) {
-                setPickerOpen(false);
-                setEditingKey(null);
-              } else {
-                setPickerOpen(true);
-                setEditingKey(selectableTargets[0]?.key || null);
-              }
+              const stamp = new Date().toISOString().slice(0, 10);
+              const csv =
+                scope === 'read' ? exportComicsCsv(state) : exportLibraryCsv(state, scope);
+              const file =
+                scope === 'read'
+                  ? `cue-comics-books-${stamp}.csv`
+                  : `cue-collection-${scope}-${stamp}.csv`;
+              downloadTextFile(csv, file, 'text/csv;charset=utf-8');
             }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-background border border-white/10 hover:border-brand/50 text-xs font-semibold text-ink shrink-0 transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-background border border-white/10 hover:border-watch/50 text-xs font-semibold text-ink-dim hover:text-ink shrink-0 transition-colors"
           >
-            {pickerOpen || editingKey ? (
-              <>
-                <X className="w-3.5 h-3.5 text-ink-dim" />
-                <span>Close editor</span>
-              </>
-            ) : (
-              <>
-                <Plus className="w-3.5 h-3.5 text-brand" />
-                <span>Add / edit details</span>
-              </>
-            )}
+            <Download className="w-3.5 h-3.5 text-watch" />
+            <span>{scope === 'read' ? 'Comics CSV' : 'Export CSV'}</span>
           </button>
-        )}
+
+          {onSaveCollectionDetails && selectableTargets.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                if (pickerOpen || editingKey) {
+                  setPickerOpen(false);
+                  setEditingKey(null);
+                } else {
+                  setPickerOpen(true);
+                  setEditingKey(selectableTargets[0]?.key || null);
+                }
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-background border border-white/10 hover:border-brand/50 text-xs font-semibold text-ink shrink-0 transition-colors"
+            >
+              {pickerOpen || editingKey ? (
+                <>
+                  <X className="w-3.5 h-3.5 text-ink-dim" />
+                  <span>Close editor</span>
+                </>
+              ) : (
+                <>
+                  <Plus className="w-3.5 h-3.5 text-brand" />
+                  <span>Add / edit details</span>
+                </>
+              )}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Compact Summary Strip */}

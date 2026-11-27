@@ -448,6 +448,7 @@ export function SmartImportModal() {
                   'IMDb Watchlist CSV',
                   'Letterboxd CSV',
                   'Goodreads CSV',
+                  'Comic Geeks CSV',
                   'Finished Log TXT',
                   'Trakt / TV Time JSON',
                   'Cue Backup JSON',
