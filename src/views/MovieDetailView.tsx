@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  Archive,
   Bookmark,
   CalendarCheck2,
   Check,
@@ -11,6 +12,7 @@ import {
   Plus,
   Star,
 } from 'lucide-react';
+import { CollectionDetailCard, CollectionHeroButton } from '../components/CollectionDetailCard';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
 import {
@@ -24,6 +26,7 @@ import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../compone
 import { fetchTmdbMovieDetails } from '../services/mediaApi';
 import { useCueStore } from '../store/useCueStore';
 import type { DetailCardMode } from '../types';
+import { getMediaCollectionBadge } from '../utils/collection';
 import { evaluateMovieCollectionProgress, findMovieCollection } from '../utils/containers';
 import { formatRating } from '../utils/ratings';
 import { cleanDisplayGenres } from '../utils/stats';
@@ -41,6 +44,8 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
     rateMovie,
     rateCollection,
     setCollectionFinishedDate,
+    setMediaOwnership,
+    updateMediaCollectionDetails,
     setMovieMood,
     setMediaFinishedDate,
     addCompletionRun,
@@ -191,6 +196,12 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
             <Bookmark className="w-4.5 h-4.5" fill={inLibrary ? 'currentColor' : 'none'} />
           </button>
 
+          <CollectionHeroButton
+            domain="watch"
+            ownership={progress?.ownership}
+            onCycle={(next) => setMediaOwnership('movie', movie.id, next)}
+          />
+
           <button
             type="button"
             onClick={() => toggleMovieWatched(movie.id)}
@@ -272,6 +283,16 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                       Watched {formatFinishedDate(progress?.watchedAt)}
                     </span>
                   )}
+                  {(() => {
+                    const colBadge = getMediaCollectionBadge('movie', movie, progress);
+                    if (!colBadge.badgeText) return null;
+                    return (
+                      <span className="bg-surface border border-watch/35 rounded-full px-3 py-1 text-xs font-medium text-watch inline-flex items-center gap-1.5 tabular-nums">
+                        <Archive className="w-3.5 h-3.5" />
+                        {colBadge.badgeText}
+                      </span>
+                    );
+                  })()}
                   {movie.trailerUrl && (
                     <a
                       href={movie.trailerUrl}
@@ -566,6 +587,18 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                   </div>
                 )}
               </section>
+
+              <CollectionDetailCard
+                domain="watch"
+                ownership={progress?.ownership}
+                details={progress?.collection}
+                badgeText={getMediaCollectionBadge('movie', movie, progress).badgeText}
+                fallbackMinutes={movie.runtime || 120}
+                onChangeOwnership={(next) => setMediaOwnership('movie', movie.id, next)}
+                onSaveDetails={(details, own) =>
+                  updateMediaCollectionDetails('movie', movie.id, details, own)
+                }
+              />
 
               <PersonalNotesSection
                 domain="watch"

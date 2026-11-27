@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Archive,
   Bell,
   BellOff,
   Bookmark,
@@ -18,6 +19,7 @@ import {
   Star,
   X,
 } from 'lucide-react';
+import { CollectionDetailCard, CollectionHeroButton } from '../components/CollectionDetailCard';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
 import {
@@ -31,6 +33,7 @@ import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../compone
 import { fetchAnimeEpisodeDetails } from '../services/mediaApi';
 import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { DetailCardMode, Episode, Season } from '../types';
+import { getMediaCollectionBadge } from '../utils/collection';
 import {
   formatRating,
   getSeasonEpisodeAverage,
@@ -69,6 +72,8 @@ export function ShowDetailView({ showId }: { showId: string }) {
     rateShow,
     setEpisodeFinishedDate,
     setSeasonFinishedDate,
+    setMediaOwnership,
+    updateMediaCollectionDetails,
     setShowMood,
     setMediaFinishedDate,
     addCompletionRun,
@@ -565,6 +570,12 @@ export function ShowDetailView({ showId }: { showId: string }) {
             <Bookmark className="w-4.5 h-4.5" fill={progress?.bookmarked ? 'currentColor' : 'none'} />
           </button>
 
+          <CollectionHeroButton
+            domain="watch"
+            ownership={progress?.ownership}
+            onCycle={(next) => setMediaOwnership('show', show.id, next)}
+          />
+
           {stats.isFinished ? (
             <button
               type="button"
@@ -685,6 +696,16 @@ export function ShowDetailView({ showId }: { showId: string }) {
                       Finished {formatFinishedDate(progress?.finishedAt || progress?.lastWatchedAt)}
                     </span>
                   )}
+                  {(() => {
+                    const colBadge = getMediaCollectionBadge('show', show, progress);
+                    if (!colBadge.badgeText) return null;
+                    return (
+                      <span className="bg-surface border border-watch/35 rounded-full px-3 py-1 text-xs font-medium text-watch inline-flex items-center gap-1.5 tabular-nums">
+                        <Archive className="w-3.5 h-3.5" />
+                        {colBadge.badgeText}
+                      </span>
+                    );
+                  })()}
                 </div>
               </section>
 
@@ -1050,7 +1071,20 @@ export function ShowDetailView({ showId }: { showId: string }) {
                 )}
               </section>
 
-              {/* Advanced Card 3: Seasons & Episodes */}
+              {/* Advanced Card 3: Collection */}
+              <CollectionDetailCard
+                domain="watch"
+                ownership={progress?.ownership}
+                details={progress?.collection}
+                badgeText={getMediaCollectionBadge('show', show, progress).badgeText}
+                fallbackMinutes={Math.max(1, show.totalEpisodes || 1) * (show.runtimeAvg || 42)}
+                onChangeOwnership={(next) => setMediaOwnership('show', show.id, next)}
+                onSaveDetails={(details, own) =>
+                  updateMediaCollectionDetails('show', show.id, details, own)
+                }
+              />
+
+              {/* Advanced Card 4: Seasons & Episodes */}
               <section className="rounded-[24px] bg-surface border border-white/[0.07] p-4 sm:p-5 mb-5">
                 <div className="lg:hidden">{activeSeasonObj && renderSeasonColumn(activeSeasonObj, true)}</div>
 

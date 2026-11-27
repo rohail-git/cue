@@ -53,6 +53,8 @@ export function JournalView() {
     setSettingsOpen,
     addJournalEntry,
     deleteJournalEntry,
+    setMediaOwnership,
+    updateMediaCollectionDetails,
     createCustomList,
     createCuratedReadingOrder,
     syncCode,
@@ -401,6 +403,8 @@ export function JournalView() {
                 else if (item.kind === 'game') pushRoute({ view: 'game-detail', gameId: item.id });
                 else pushRoute({ view: 'read-detail', readId: item.id });
               }}
+              onSetOwnership={setMediaOwnership}
+              onSaveCollectionDetails={updateMediaCollectionDetails}
             />
           ) : (
             <>

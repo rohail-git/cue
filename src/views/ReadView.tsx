@@ -7,7 +7,7 @@ import { MediaImage } from '../components/MediaImage';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
 import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { ReadFilter, ReadItem, UpcomingEntry } from '../types';
-import { getComicCollectionSummary } from '../utils/atoms';
+import { getMediaCollectionBadge } from '../utils/collection';
 import { getComicEditionLabel, resolveComicEditionCover } from '../utils/editions';
 import { classifyReadFormat } from '../utils/mediaImport';
 import {
@@ -70,13 +70,13 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     for (const id of state.readOrder) {
       const r = state.readItems[id];
       const prog = state.readProgress[id];
-      if (!r || !prog?.bookmarked || r.format !== 'comic') continue;
-      const summary = getComicCollectionSummary(r, prog, state.atomicReadUnits);
+      if (!r || !prog?.bookmarked || (filter !== 'all' && r.format !== filter)) continue;
+      const summary = getMediaCollectionBadge('read', r, prog, state.atomicReadUnits);
       if (summary.hasAnyOwned) owned += 1;
       if (summary.hasAnyWishlist) wishlist += 1;
     }
     return { owned, wishlist };
-  }, [state.readOrder, state.readItems, state.readProgress, state.atomicReadUnits]);
+  }, [state.readOrder, state.readItems, state.readProgress, state.atomicReadUnits, filter]);
 
   const handleQuickAdvance = (e: React.MouseEvent, readId: string) => {
     e.stopPropagation();
@@ -107,8 +107,8 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
       .filter((r): r is ReadItem => Boolean(r) && Boolean(state.readProgress[r.id]?.bookmarked))
       .filter((r) => (filter === 'all' ? true : r.format === filter))
       .filter((r) => {
-        if (filter !== 'comic' || comicShelfFilter === 'all') return true;
-        const summary = getComicCollectionSummary(r, state.readProgress[r.id], state.atomicReadUnits);
+        if (comicShelfFilter === 'all') return true;
+        const summary = getMediaCollectionBadge('read', r, state.readProgress[r.id], state.atomicReadUnits);
         return comicShelfFilter === 'owned' ? summary.hasAnyOwned : summary.hasAnyWishlist;
       });
 
@@ -245,7 +245,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     const upIssueLabel =
       upMeta?.issueLabel ? `Issue ${upMeta.issueLabel}` : stats.nextUpcomingUnit ? `Issue #${stats.nextUpcomingUnit}` : 'Next issue';
     const readDenom = stats.unreleasedCount > 0 ? stats.releasedTotal : stats.total;
-    const collectionSummary = getComicCollectionSummary(item, prog, state.atomicReadUnits);
+    const collectionSummary = getMediaCollectionBadge('read', item, prog, state.atomicReadUnits);
     const secondaryMeta = [
       item.comicPublisher || item.creator,
       editionLabel || item.comicRunLabel || null,
@@ -256,8 +256,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
 
     if (isPosterLayout) {
       const isSel = Boolean(selectedMap[item.id]);
-      const posterCollectTag =
-        collectionSummary.badgeText === 'Wishlist' ? 'Want' : collectionSummary.badgeText;
+      const posterCollectTag = collectionSummary.shortTag;
       return (
         <div
           key={item.id}
@@ -467,16 +466,13 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
           <div className="mb-5 space-y-2.5">
             <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
               <div className="flex items-center gap-2">
-                {filterTabs.map((t) => {
+            {filterTabs.map((t) => {
                   const active = filter === t.id;
                   return (
                     <button
                       key={t.id}
                       type="button"
-                      onClick={() => {
-                        updateSettings({ readFilter: t.id });
-                        if (t.id !== 'comic') setComicShelfFilter('all');
-                      }}
+                      onClick={() => updateSettings({ readFilter: t.id })}
                       className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
                         active
                           ? 'bg-brand border-brand text-brand-ink'
@@ -505,11 +501,11 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
               </button>
             </div>
 
-            {filter === 'comic' && (comicShelfCounts.owned > 0 || comicShelfCounts.wishlist > 0) && (
+            {(comicShelfCounts.owned > 0 || comicShelfCounts.wishlist > 0) && (
               <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                 {(
                   [
-                    { id: 'all', label: 'All comics' },
+                    { id: 'all', label: 'All titles' },
                     ...(comicShelfCounts.owned > 0
                       ? [{ id: 'owned' as const, label: `Owned (${comicShelfCounts.owned})` }]
                       : []),

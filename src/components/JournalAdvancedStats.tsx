@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   Activity,
+  Archive,
   Award,
   BookOpen,
   Calendar,
@@ -9,14 +10,21 @@ import {
   Flame,
   Gamepad2,
   Hourglass,
+  Pencil,
+  Plus,
   Sparkles,
   Star,
   Sunrise,
   TrendingUp,
   Trophy,
   Tv,
+  X,
 } from 'lucide-react';
-import type { CueStoreState } from '../types';
+import type { CollectionDetails, CueStoreState, OwnershipStatus } from '../types';
+import {
+  computeCollectionLedger,
+  type CollectionLedgerEntry,
+} from '../utils/collection';
 import { computeTasteProfile } from '../utils/cueMind';
 import {
   computeJournalAdvancedStats,
@@ -25,6 +33,8 @@ import {
   type JournalStatsScope,
   type TimeBlockCell,
 } from '../utils/journalAnalytics';
+import { CollectionDetailsForm } from './CollectionDetailCard';
+import { formatFinishedDate } from './FinishedDateCard';
 import { MediaImage } from './MediaImage';
 
 interface JournalAdvancedStatsProps {
@@ -33,6 +43,17 @@ interface JournalAdvancedStatsProps {
   onScopeChange: (next: JournalStatsScope) => void;
   onOpenItem: (item: Pick<InvestedTitleItem, 'domain' | 'kind' | 'id'>) => void;
   onOpenCueMind?: (side: 'continue' | 'discover') => void;
+  onSetOwnership?: (
+    kind: 'show' | 'movie' | 'read' | 'game',
+    id: string,
+    ownership: OwnershipStatus | undefined
+  ) => void;
+  onSaveCollectionDetails?: (
+    kind: 'show' | 'movie' | 'read' | 'game',
+    id: string,
+    details: Partial<CollectionDetails>,
+    ownershipOverride?: OwnershipStatus
+  ) => void;
 }
 
 const SCOPE_PILLS: Array<{
@@ -136,6 +157,8 @@ export function JournalAdvancedStats({
   onScopeChange,
   onOpenItem,
   onOpenCueMind,
+  onSetOwnership,
+  onSaveCollectionDetails,
 }: JournalAdvancedStatsProps) {
   const stats = useMemo(() => computeJournalAdvancedStats(state, scope), [state, scope]);
   const taste = useMemo(() => computeTasteProfile(state), [state]);
@@ -1164,6 +1187,506 @@ export function JournalAdvancedStats({
           </div>
         </section>
       </div>
+
+      {/* 12. My Collection Ledger (Owned / Wishlist, Spend, Efficiency & Inline Editor) */}
+      <AdvancedCollectionLedger
+        state={state}
+        scope={scope}
+        onOpenItem={onOpenItem}
+        onSetOwnership={onSetOwnership}
+        onSaveCollectionDetails={onSaveCollectionDetails}
+      />
     </div>
+  );
+}
+
+interface AdvancedCollectionLedgerProps {
+  state: CueStoreState;
+  scope: JournalStatsScope;
+  onOpenItem: (item: Pick<InvestedTitleItem, 'domain' | 'kind' | 'id'>) => void;
+  onSetOwnership?: (
+    kind: 'show' | 'movie' | 'read' | 'game',
+    id: string,
+    ownership: OwnershipStatus | undefined
+  ) => void;
+  onSaveCollectionDetails?: (
+    kind: 'show' | 'movie' | 'read' | 'game',
+    id: string,
+    details: Partial<CollectionDetails>,
+    ownershipOverride?: OwnershipStatus
+  ) => void;
+}
+
+function AdvancedCollectionLedger({
+  state,
+  scope,
+  onOpenItem,
+  onSetOwnership,
+  onSaveCollectionDetails,
+}: AdvancedCollectionLedgerProps) {
+  const ledger = useMemo(() => computeCollectionLedger(state, scope), [state, scope]);
+  const [tab, setTab] = useState<'owned' | 'wishlist'>('owned');
+  const [formatFilter, setFormatFilter] = useState<string>('all');
+  const [showAll, setShowAll] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+
+  const selectableTargets = useMemo(() => {
+    const out: Array<{
+      key: string;
+      kind: 'show' | 'movie' | 'read' | 'game';
+      domain: 'watch' | 'read' | 'play';
+      id: string;
+      title: string;
+      year?: number;
+      details?: CollectionDetails;
+      fallbackNotes?: string;
+      ownership?: OwnershipStatus;
+      fallbackMinutes?: number;
+      fallbackHours?: number;
+    }> = [];
+    const incWatch = scope === 'all' || scope === 'watch';
+    const incRead = scope === 'all' || scope === 'read';
+    const incPlay = scope === 'all' || scope === 'play';
+
+    if (incWatch) {
+      for (const id of state.showOrder) {
+        const s = state.shows[id];
+        const p = state.showProgress[id];
+        if (!s || !p?.bookmarked) continue;
+        out.push({
+          key: `show:${s.id}`,
+          kind: 'show',
+          domain: 'watch',
+          id: s.id,
+          title: `${s.title} (Series)`,
+          year: s.year,
+          details: p.collection,
+          ownership: p.ownership,
+          fallbackMinutes: Math.max(1, s.totalEpisodes || 1) * (s.runtimeAvg || 42),
+        });
+      }
+      for (const id of state.movieOrder) {
+        const m = state.movies[id];
+        const p = state.movieProgress[id];
+        if (!m || !p) continue;
+        out.push({
+          key: `movie:${m.id}`,
+          kind: 'movie',
+          domain: 'watch',
+          id: m.id,
+          title: `${m.title} (Movie)`,
+          year: m.year,
+          details: p.collection,
+          ownership: p.ownership,
+          fallbackMinutes: m.runtime || 120,
+        });
+      }
+    }
+    if (incRead) {
+      for (const id of state.readOrder) {
+        const r = state.readItems[id];
+        const p = state.readProgress[id];
+        if (!r || !p?.bookmarked) continue;
+        out.push({
+          key: `read:${r.id}`,
+          kind: 'read',
+          domain: 'read',
+          id: r.id,
+          title: r.title,
+          year: r.year,
+          details: p.collection,
+          fallbackNotes: p.collectionNote,
+          ownership: p.ownership,
+        });
+      }
+    }
+    if (incPlay) {
+      for (const id of state.gameOrder) {
+        const g = state.games[id];
+        const p = state.gameProgress[id];
+        if (!g || !p?.bookmarked) continue;
+        out.push({
+          key: `game:${g.id}`,
+          kind: 'game',
+          domain: 'play',
+          id: g.id,
+          title: g.title,
+          year: g.year,
+          details: p.collection,
+          ownership: p.ownership,
+          fallbackHours: p.hoursPlayed || 0,
+        });
+      }
+    }
+    return out.sort((a, b) => a.title.localeCompare(b.title));
+  }, [
+    scope,
+    state.showOrder,
+    state.shows,
+    state.showProgress,
+    state.movieOrder,
+    state.movies,
+    state.movieProgress,
+    state.readOrder,
+    state.readItems,
+    state.readProgress,
+    state.gameOrder,
+    state.games,
+    state.gameProgress,
+  ]);
+
+  const activeTarget = editingKey
+    ? selectableTargets.find((t) => t.key === editingKey) ||
+      (() => {
+        const found = [...ledger.ownedEntries, ...ledger.wishlistEntries].find(
+          (e) => e.key === editingKey
+        );
+        if (!found) return undefined;
+        return {
+          key: found.key,
+          kind: found.kind,
+          domain: found.domain,
+          id: found.id,
+          title: found.title,
+          year: found.year,
+          details: found.collection,
+          fallbackNotes: undefined,
+          ownership: found.ownership,
+          fallbackMinutes: found.fallbackMinutes,
+          fallbackHours: found.fallbackHours,
+        };
+      })()
+    : undefined;
+
+  const baseList: CollectionLedgerEntry[] =
+    tab === 'owned' ? ledger.ownedEntries : ledger.wishlistEntries;
+  const filteredList =
+    formatFilter === 'all' || tab !== 'owned'
+      ? baseList
+      : baseList.filter(
+          (e) => (e.collection.format || '').toLowerCase() === formatFilter.toLowerCase()
+        );
+  const visibleList = showAll ? filteredList : filteredList.slice(0, 10);
+
+  const efficiencySummaryLabel = useMemo(() => {
+    if (scope === 'watch' && ledger.avgPricePerMin !== null) {
+      return `$${ledger.avgPricePerMin.toFixed(2)}/min avg`;
+    }
+    if (scope === 'read' && ledger.avgPricePerPage !== null) {
+      return `$${ledger.avgPricePerPage.toFixed(2)}/pg avg`;
+    }
+    if (scope === 'play' && ledger.avgPricePerHour !== null) {
+      return `$${ledger.avgPricePerHour.toFixed(2)}/hr avg`;
+    }
+    const parts: string[] = [];
+    if (ledger.avgPricePerMin !== null) parts.push(`$${ledger.avgPricePerMin.toFixed(2)}/m`);
+    if (ledger.avgPricePerPage !== null) parts.push(`$${ledger.avgPricePerPage.toFixed(2)}/pg`);
+    if (ledger.avgPricePerHour !== null) parts.push(`$${ledger.avgPricePerHour.toFixed(2)}/hr`);
+    return parts.length > 0 ? parts.join(' · ') : 'Add price + size';
+  }, [scope, ledger.avgPricePerMin, ledger.avgPricePerPage, ledger.avgPricePerHour]);
+
+  return (
+    <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 space-y-3.5">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0">
+          <Archive className="w-4 h-4 text-brand shrink-0" />
+          <div>
+            <h2 className="font-display font-bold text-base text-ink leading-tight">
+              My Collection
+            </h2>
+            <p className="text-[11px] text-ink-dim tabular-nums">
+              {ledger.ownedCount} owned · {ledger.wishlistCount} wishlist
+            </p>
+          </div>
+        </div>
+
+        {onSaveCollectionDetails && selectableTargets.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              if (pickerOpen || editingKey) {
+                setPickerOpen(false);
+                setEditingKey(null);
+              } else {
+                setPickerOpen(true);
+                setEditingKey(selectableTargets[0]?.key || null);
+              }
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-background border border-white/10 hover:border-brand/50 text-xs font-semibold text-ink shrink-0 transition-colors"
+          >
+            {pickerOpen || editingKey ? (
+              <>
+                <X className="w-3.5 h-3.5 text-ink-dim" />
+                <span>Close editor</span>
+              </>
+            ) : (
+              <>
+                <Plus className="w-3.5 h-3.5 text-brand" />
+                <span>Add / edit details</span>
+              </>
+            )}
+          </button>
+        )}
+      </div>
+
+      {/* Compact Summary Strip */}
+      {(ledger.ownedCount > 0 || ledger.wishlistCount > 0) && (
+        <div className="rounded-2xl bg-background/55 border border-white/[0.05] grid grid-cols-3 divide-x divide-white/[0.06] text-center">
+          <div className="py-2.5 px-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-faint">
+              Owned
+            </p>
+            <p className="font-display font-bold text-sm sm:text-base text-ink tabular-nums mt-0.5">
+              {ledger.ownedCount}
+            </p>
+          </div>
+          <div className="py-2.5 px-2 min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-faint">
+              Spent
+            </p>
+            <p className="font-display font-bold text-sm sm:text-base text-ink tabular-nums truncate mt-0.5">
+              {ledger.primarySpendLabel}
+            </p>
+            {ledger.freeCount > 0 && (
+              <p className="text-[9.5px] text-ink-faint tabular-nums">{ledger.freeCount} free</p>
+            )}
+          </div>
+          <div className="py-2.5 px-2 min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-faint">
+              Efficiency
+            </p>
+            <p className="font-display font-bold text-xs sm:text-sm text-brand tabular-nums truncate mt-1">
+              {efficiencySummaryLabel}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Inline Collection Editor (Title Picker + Full Spreadsheet Fields) */}
+      {(pickerOpen || activeTarget) && onSaveCollectionDetails && (
+        <div className="rounded-2xl bg-background/65 border border-white/10 p-3.5 space-y-3">
+          {pickerOpen && selectableTargets.length > 0 && (
+            <div>
+              <label className="block text-[11px] font-semibold text-ink-dim mb-1">
+                Select library title
+              </label>
+              <select
+                value={editingKey || selectableTargets[0].key}
+                onChange={(e) => setEditingKey(e.target.value)}
+                aria-label="Select title to edit collection details"
+                className="w-full rounded-xl bg-surface border border-white/12 px-3 py-2 text-xs text-ink outline-none focus:border-brand"
+              >
+                {selectableTargets.map((t) => (
+                  <option key={t.key} value={t.key}>
+                    {t.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {activeTarget && (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-ink truncate">
+                  {activeTarget.title}
+                </p>
+                {activeTarget.ownership && onSetOwnership && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSetOwnership(activeTarget.kind, activeTarget.id, undefined);
+                      setEditingKey(null);
+                      setPickerOpen(false);
+                    }}
+                    className="text-[11px] text-ink-faint hover:text-red-400 shrink-0"
+                  >
+                    Remove from collection
+                  </button>
+                )}
+              </div>
+              <CollectionDetailsForm
+                key={activeTarget.key}
+                domain={activeTarget.domain}
+                showOwnershipToggle
+                initialOwnership={activeTarget.ownership || 'owned'}
+                initialDetails={activeTarget.details}
+                fallbackNotes={activeTarget.fallbackNotes}
+                fallbackMinutes={activeTarget.fallbackMinutes}
+                fallbackHours={activeTarget.fallbackHours}
+                onSave={(nextDetails, nextOwn) => {
+                  onSaveCollectionDetails(activeTarget.kind, activeTarget.id, nextDetails, nextOwn);
+                  setEditingKey(null);
+                  setPickerOpen(false);
+                }}
+                onCancel={() => {
+                  setEditingKey(null);
+                  setPickerOpen(false);
+                }}
+              />
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Owned / Wishlist & Format Filter Row */}
+      {(ledger.ownedCount > 0 || ledger.wishlistCount > 0) ? (
+        <>
+          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+            <button
+              type="button"
+              onClick={() => {
+                setTab('owned');
+                setShowAll(false);
+              }}
+              className={`px-3 py-1 rounded-full text-[11px] font-semibold border shrink-0 transition-colors ${
+                tab === 'owned'
+                  ? 'bg-white border-white text-[#131519]'
+                  : 'bg-background border-white/10 text-ink-dim hover:text-ink'
+              }`}
+            >
+              Owned ({ledger.ownedCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTab('wishlist');
+                setFormatFilter('all');
+                setShowAll(false);
+              }}
+              className={`px-3 py-1 rounded-full text-[11px] font-semibold border shrink-0 transition-colors ${
+                tab === 'wishlist'
+                  ? 'bg-white border-white text-[#131519]'
+                  : 'bg-background border-white/10 text-ink-dim hover:text-ink'
+              }`}
+            >
+              Wishlist ({ledger.wishlistCount})
+            </button>
+            {tab === 'owned' &&
+              ledger.formatCounts.map((fc) => {
+                const active = formatFilter === fc.format;
+                return (
+                  <button
+                    key={fc.format}
+                    type="button"
+                    onClick={() => setFormatFilter(active ? 'all' : fc.format)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] font-medium border shrink-0 transition-colors ${
+                      active
+                        ? 'border-brand/60 bg-brand/15 text-brand'
+                        : 'border-white/[0.08] bg-background text-ink-dim hover:text-ink'
+                    }`}
+                  >
+                    {fc.format} · {fc.count}
+                  </button>
+                );
+              })}
+          </div>
+
+          <div className="divide-y divide-white/[0.06]">
+            {visibleList.length === 0 ? (
+              <p className="text-xs text-ink-faint py-3">
+                No {tab === 'owned' ? 'owned' : 'wishlist'} items match this filter.
+              </p>
+            ) : (
+              visibleList.map((entry) => {
+                const acquiredLabel = formatFinishedDate(entry.collection.acquiredAt);
+                const subMeta = [
+                  acquiredLabel,
+                  entry.collection.platform,
+                  entry.collection.pages ? `${entry.collection.pages}p` : null,
+                  entry.collection.runtimeMinutes ? `${entry.collection.runtimeMinutes}m` : null,
+                  entry.collection.owner ? `Owner: ${entry.collection.owner}` : null,
+                  entry.collection.includes ? `Includes: ${entry.collection.includes}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ');
+
+                return (
+                  <div
+                    key={entry.key}
+                    className="py-2.5 flex items-start justify-between gap-2.5"
+                  >
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onOpenItem({ domain: entry.domain, kind: entry.kind, id: entry.id })
+                      }
+                      className="flex items-start gap-2.5 min-w-0 flex-1 text-left group"
+                    >
+                      <div className="w-9 aspect-[2/3] rounded-md overflow-hidden bg-background border border-white/10 shrink-0 mt-0.5">
+                        <MediaImage
+                          src={entry.posterUrl}
+                          alt={entry.title}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold text-ink truncate group-hover:text-brand transition-colors">
+                          {entry.title}
+                        </p>
+                        <p className="text-[11px] text-ink-dim truncate tabular-nums mt-0.5">
+                          {[entry.collection.format || entry.badgeText, subMeta]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </p>
+                        {entry.collection.notes && (
+                          <p className="text-[11px] text-ink-faint truncate mt-0.5">
+                            {entry.collection.notes}
+                          </p>
+                        )}
+                      </div>
+                    </button>
+
+                    <div className="flex items-center gap-2 shrink-0 pt-0.5">
+                      {(entry.formattedPrice || entry.efficiency) && (
+                        <div className="text-right tabular-nums">
+                          {entry.formattedPrice && (
+                            <p className="text-xs font-semibold text-ink">
+                              {entry.formattedPrice}
+                            </p>
+                          )}
+                          {entry.efficiency && (
+                            <p className="text-[10px] text-ink-dim">{entry.efficiency.short}</p>
+                          )}
+                        </div>
+                      )}
+                      {onSaveCollectionDetails && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPickerOpen(false);
+                            setEditingKey((cur) => (cur === entry.key ? null : entry.key));
+                          }}
+                          aria-label={`Edit collection details for ${entry.title}`}
+                          className="h-7 w-7 rounded-full bg-white/[0.06] hover:bg-white/[0.12] flex items-center justify-center text-ink-dim hover:text-ink transition-colors"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {filteredList.length > 10 && (
+            <button
+              type="button"
+              onClick={() => setShowAll((v) => !v)}
+              className="w-full py-2 rounded-xl bg-background/60 hover:bg-background border border-white/[0.06] text-xs font-semibold text-ink-dim hover:text-ink transition-colors"
+            >
+              {showAll ? 'Show less' : `Show all ${filteredList.length} items`}
+            </button>
+          )}
+        </>
+      ) : (
+        <p className="text-xs text-ink-faint">
+          Tap the archive icon on any Show, Movie, Book, Comic, or Game — or use{' '}
+          <span className="text-ink-dim font-medium">Add / edit details</span> above to log formats, dates, prices, and notes.
+        </p>
+      )}
+    </section>
   );
 }

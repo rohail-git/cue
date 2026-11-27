@@ -19,6 +19,7 @@ import { MediaImage } from '../components/MediaImage';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
 import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { GameChapterUnit, GameItem, GameWatchStatus, PlayFilter } from '../types';
+import { getMediaCollectionBadge } from '../utils/collection';
 import { formatGameMeta, pad2 } from '../utils/stats';
 
 function formatGameUnitShort(chapter: number, unit: GameChapterUnit = 'chapters'): string {
@@ -47,6 +48,7 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
   const [showCompleted, setShowCompleted] = useState(false);
   const [showDropped, setShowDropped] = useState(false);
   const [statusSheetGameId, setStatusSheetGameId] = useState<string | null>(null);
+  const [playShelfFilter, setPlayShelfFilter] = useState<'all' | 'owned' | 'wishlist'>('all');
   const [selectMode, setSelectMode] = useState(false);
   const [selectedMap, setSelectedMap] = useState<
     Record<string, { kind: 'game'; id: string }>
@@ -76,6 +78,21 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
   }, []);
 
   const filter = state.settings.playFilter;
+
+  const playShelfCounts = useMemo(() => {
+    let owned = 0;
+    let wishlist = 0;
+    for (const id of state.gameOrder) {
+      const g = state.games[id];
+      const prog = state.gameProgress[id];
+      if (!g || !prog?.bookmarked) continue;
+      if (filter !== 'all' && prog.status !== filter) continue;
+      const b = getMediaCollectionBadge('game', g, prog);
+      if (b.hasAnyOwned) owned += 1;
+      if (b.hasAnyWishlist) wishlist += 1;
+    }
+    return { owned, wishlist };
+  }, [state.gameOrder, state.games, state.gameProgress, filter]);
 
   const handleQuickAdvance = (e: React.MouseEvent, game: GameItem) => {
     e.stopPropagation();
@@ -107,8 +124,10 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
       .map((id) => state.games[id])
       .filter((g): g is GameItem => Boolean(g) && Boolean(state.gameProgress[g.id]?.bookmarked))
       .filter((g) => {
-        if (filter === 'all') return true;
-        return state.gameProgress[g.id]?.status === filter;
+        if (filter !== 'all' && state.gameProgress[g.id]?.status !== filter) return false;
+        if (playShelfFilter === 'all') return true;
+        const b = getMediaCollectionBadge('game', g, state.gameProgress[g.id]);
+        return playShelfFilter === 'owned' ? b.hasAnyOwned : b.hasAnyWishlist;
       });
 
     const sortGames = (list: GameItem[]) =>
@@ -137,7 +156,7 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
       completedList: sortGames(all.filter((g) => state.gameProgress[g.id]?.status === 'completed')),
       droppedList: sortGames(all.filter((g) => state.gameProgress[g.id]?.status === 'dropped')),
     };
-  }, [state.gameOrder, state.games, state.gameProgress, state.settings.sortBy, filter]);
+  }, [state.gameOrder, state.games, state.gameProgress, state.settings.sortBy, filter, playShelfFilter]);
 
   const upcomingGames = useMemo(
     () => state.upcoming.filter((u) => u.domain === 'play'),
@@ -156,6 +175,7 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
     const currentChap = prog?.currentChapter || 0;
     const nextChap = hasChapters ? Math.min(totalChapters, currentChap + 1) : 1;
     const unitCode = formatGameUnitShort(nextChap, unit);
+    const gameCol = getMediaCollectionBadge('game', game, prog);
 
     if (isPosterLayout) {
       const isSel = Boolean(selectedMap[game.id]);
@@ -185,6 +205,11 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
               alt={game.title}
               className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
             />
+            {!selectMode && gameCol.shortTag && (
+              <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-black/75 border border-play/40 text-[9.5px] font-semibold text-play leading-none">
+                {gameCol.shortTag}
+              </span>
+            )}
             {selectMode ? (
               <span
                 className={`absolute top-2 right-2 h-7 w-7 rounded-full border flex items-center justify-center ${
@@ -250,7 +275,12 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
                 ? `${prog?.completionPct}% complete`
                 : 'Backlog · Not started'
         }
-        secondaryLine={formatGameMeta(game, prog, { includeHours: hasChapters })}
+        secondaryLine={[
+          formatGameMeta(game, prog, { includeHours: hasChapters }),
+          gameCol.badgeText,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
         progressRatio={
           hasChapters ? Math.min(1, currentChap / totalChapters) : (prog?.completionPct || 0) / 100
         }
@@ -357,41 +387,75 @@ export function PlayView({ calendarMode = false }: { calendarMode?: boolean }) {
         }
       >
         {!calendarMode && (
-          <div className="flex items-center justify-between gap-2 mb-5 overflow-x-auto no-scrollbar">
-            <div className="flex items-center gap-2">
-              {filterTabs.map((t) => {
-                const active = filter === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => updateSettings({ playFilter: t.id })}
-                    className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
-                      active
-                        ? 'bg-brand border-brand text-brand-ink'
-                        : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
-                    }`}
-                  >
-                    {t.label}
-                  </button>
-                );
-              })}
+          <div className="mb-5 space-y-2.5">
+            <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
+              <div className="flex items-center gap-2">
+                {filterTabs.map((t) => {
+                  const active = filter === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => updateSettings({ playFilter: t.id })}
+                      className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
+                        active
+                          ? 'bg-brand border-brand text-brand-ink'
+                          : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectMode((v) => !v);
+                  setSelectedMap({});
+                }}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 inline-flex items-center gap-1.5 transition-colors ${
+                  selectMode
+                    ? 'bg-white border-white text-[#131519]'
+                    : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                }`}
+              >
+                <CheckSquare className="w-3.5 h-3.5" />
+                <span>{selectMode ? 'Cancel' : 'Select'}</span>
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setSelectMode((v) => !v);
-                setSelectedMap({});
-              }}
-              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 inline-flex items-center gap-1.5 transition-colors ${
-                selectMode
-                  ? 'bg-white border-white text-[#131519]'
-                  : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
-              }`}
-            >
-              <CheckSquare className="w-3.5 h-3.5" />
-              <span>{selectMode ? 'Cancel' : 'Select'}</span>
-            </button>
+
+            {(playShelfCounts.owned > 0 || playShelfCounts.wishlist > 0) && (
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                {(
+                  [
+                    { id: 'all', label: 'All games' },
+                    ...(playShelfCounts.owned > 0
+                      ? [{ id: 'owned' as const, label: `Owned (${playShelfCounts.owned})` }]
+                      : []),
+                    ...(playShelfCounts.wishlist > 0
+                      ? [{ id: 'wishlist' as const, label: `Wishlist (${playShelfCounts.wishlist})` }]
+                      : []),
+                  ] as Array<{ id: 'all' | 'owned' | 'wishlist'; label: string }>
+                ).map((sub) => {
+                  const active = playShelfFilter === sub.id;
+                  return (
+                    <button
+                      key={sub.id}
+                      type="button"
+                      onClick={() => setPlayShelfFilter(sub.id)}
+                      className={`px-3 py-1 rounded-full text-[11px] font-semibold border shrink-0 transition-colors ${
+                        active
+                          ? 'border-play/60 bg-play/15 text-play'
+                          : 'border-white/[0.07] bg-surface text-ink-dim hover:text-ink'
+                      }`}
+                    >
+                      {sub.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 

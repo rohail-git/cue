@@ -53,7 +53,21 @@ export interface ComicIssueMeta {
   atomicId?: string;
 }
 
-export type ComicOwnershipStatus = 'owned' | 'wishlist';
+export type OwnershipStatus = 'owned' | 'wishlist';
+export type ComicOwnershipStatus = OwnershipStatus;
+
+export interface CollectionDetails {
+  format?: string;
+  acquiredAt?: string;
+  price?: number;
+  currency?: string;
+  pages?: number;
+  runtimeMinutes?: number;
+  platform?: string;
+  owner?: string;
+  includes?: string;
+  notes?: string;
+}
 
 export interface AtomicReadRecord {
   readAt?: string;
@@ -221,6 +235,8 @@ export interface ShowProgress {
   seasonRatings?: Record<number, number>;
   seasonRatingSource?: Record<number, RatingSource>;
   seasonFinishedAt?: Record<number, string>;
+  ownership?: OwnershipStatus;
+  collection?: CollectionDetails;
   mood?: PersonalMood;
 }
 
@@ -230,6 +246,8 @@ export interface MovieProgress {
   watchedAt?: string;
   completedRuns?: CompletionRun[];
   rating?: number;
+  ownership?: OwnershipStatus;
+  collection?: CollectionDetails;
   mood?: PersonalMood;
 }
 
@@ -251,9 +269,10 @@ export interface ReadProgress {
   ratingSource?: RatingSource;
   unitRatings?: Record<number, number>;
   unitFinishedAt?: Record<number, string>;
-  ownership?: ComicOwnershipStatus;
+  ownership?: OwnershipStatus;
   collectionNote?: string;
-  unitOwnership?: Record<number, ComicOwnershipStatus>;
+  collection?: CollectionDetails;
+  unitOwnership?: Record<number, OwnershipStatus>;
   unitVariantNotes?: Record<number, string>;
   ownedEditionIds?: string[];
   wishlistEditionIds?: string[];
@@ -277,6 +296,8 @@ export interface GameProgress {
   completedRuns?: CompletionRun[];
   rating?: number;
   ratingSource?: RatingSource;
+  ownership?: OwnershipStatus;
+  collection?: CollectionDetails;
   mood?: PersonalMood;
 }
 

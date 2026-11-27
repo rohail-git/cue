@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  Archive,
   Bookmark,
   CalendarCheck2,
   Check,
@@ -19,6 +20,7 @@ import {
   Trophy,
   X,
 } from 'lucide-react';
+import { CollectionDetailCard, CollectionHeroButton } from '../components/CollectionDetailCard';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
 import {
@@ -33,6 +35,7 @@ import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../compone
 import { fetchGameChapterInfo } from '../services/mediaApi';
 import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { DetailCardMode, GameChapterUnit, GamePlatform } from '../types';
+import { getMediaCollectionBadge } from '../utils/collection';
 import { getOfficialGameChapter, lookupKnownGameChapters } from '../utils/gameChapters';
 import { formatRating, getGameChaptersAverage } from '../utils/ratings';
 import { cleanDisplayGenres, formatGameMeta } from '../utils/stats';
@@ -75,6 +78,8 @@ export function GameDetailView({ gameId }: { gameId: string }) {
     rateGameChapter,
     setGameChapterFinishedDate,
     setGameChapterTitle,
+    setMediaOwnership,
+    updateMediaCollectionDetails,
     setGameMood,
     setMediaFinishedDate,
     addCompletionRun,
@@ -402,6 +407,12 @@ export function GameDetailView({ gameId }: { gameId: string }) {
             <Bookmark className="w-4.5 h-4.5" fill={progress?.bookmarked ? 'currentColor' : 'none'} />
           </button>
 
+          <CollectionHeroButton
+            domain="play"
+            ownership={progress?.ownership}
+            onCycle={(next) => setMediaOwnership('game', game.id, next)}
+          />
+
           {totalChapters > 0 && !isCompleted ? (
             <button
               type="button"
@@ -546,6 +557,16 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                       Completed {formatFinishedDate(progress?.finishedAt || progress?.lastPlayedAt)}
                     </span>
                   )}
+                  {(() => {
+                    const colBadge = getMediaCollectionBadge('game', game, progress);
+                    if (!colBadge.badgeText) return null;
+                    return (
+                      <span className="bg-surface border border-play/35 rounded-full px-3 py-1 text-xs font-medium text-play inline-flex items-center gap-1.5 tabular-nums">
+                        <Archive className="w-3.5 h-3.5" />
+                        {colBadge.badgeText}
+                      </span>
+                    );
+                  })()}
                 </div>
               </section>
 
@@ -1167,6 +1188,18 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                   </div>
                 )}
               </section>
+
+              <CollectionDetailCard
+                domain="play"
+                ownership={progress?.ownership}
+                details={progress?.collection}
+                badgeText={getMediaCollectionBadge('game', game, progress).badgeText}
+                fallbackHours={progress?.hoursPlayed || 0}
+                onChangeOwnership={(next) => setMediaOwnership('game', game.id, next)}
+                onSaveDetails={(details, own) =>
+                  updateMediaCollectionDetails('game', game.id, details, own)
+                }
+              />
 
               <PersonalNotesSection
                 domain="play"

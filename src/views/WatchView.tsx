@@ -8,6 +8,7 @@ import { ReleaseAlertBanner } from '../components/ReleaseAlertBanner';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
 import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { HistoryEntry, Movie, Show, UpcomingEntry, WatchFilter } from '../types';
+import { getMediaCollectionBadge } from '../utils/collection';
 import {
   formatEpisodeCode,
   formatUpcomingReleaseLabel,
@@ -32,6 +33,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
 
   const [justChecked, setJustChecked] = useState<Record<string, boolean>>({});
   const [showFinished, setShowFinished] = useState(false);
+  const [watchShelfFilter, setWatchShelfFilter] = useState<'all' | 'owned' | 'wishlist'>('all');
   const [selectMode, setSelectMode] = useState(false);
   const [selectedMap, setSelectedMap] = useState<
     Record<string, { kind: 'show' | 'movie'; id: string }>
@@ -62,6 +64,30 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
   }, []);
 
   const filter = state.settings.watchFilter;
+
+  const watchShelfCounts = useMemo(() => {
+    let owned = 0;
+    let wishlist = 0;
+    for (const id of state.showOrder) {
+      const s = state.shows[id];
+      const prog = state.showProgress[id];
+      if (!s || !prog?.bookmarked || filter === 'movie') continue;
+      const b = getMediaCollectionBadge('show', s, prog);
+      if (b.hasAnyOwned) owned += 1;
+      if (b.hasAnyWishlist) wishlist += 1;
+    }
+    if (filter !== 'tv' && filter !== 'anime') {
+      for (const id of state.movieOrder) {
+        const m = state.movies[id];
+        const prog = state.movieProgress[id];
+        if (!m || !prog) continue;
+        const b = getMediaCollectionBadge('movie', m, prog);
+        if (b.hasAnyOwned) owned += 1;
+        if (b.hasAnyWishlist) wishlist += 1;
+      }
+    }
+    return { owned, wishlist };
+  }, [state.showOrder, state.shows, state.showProgress, state.movieOrder, state.movies, state.movieProgress, filter]);
 
   const triggerFlash = (id: string, commit: () => void) => {
     if (justChecked[id]) return;
@@ -115,7 +141,12 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
       const shows = state.showOrder
         .map((id) => state.shows[id])
         .filter((s): s is Show => Boolean(s) && Boolean(state.showProgress[s.id]?.bookmarked))
-        .filter(() => filter !== 'movie');
+        .filter(() => filter !== 'movie')
+        .filter((s) => {
+          if (watchShelfFilter === 'all') return true;
+          const b = getMediaCollectionBadge('show', s, state.showProgress[s.id]);
+          return watchShelfFilter === 'owned' ? b.hasAnyOwned : b.hasAnyWishlist;
+        });
 
       const sortShows = (list: Show[]) =>
         [...list].sort((a, b) => {
@@ -154,7 +185,12 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
           ? []
           : state.movieOrder
               .map((id) => state.movies[id])
-              .filter((m): m is Movie => Boolean(m) && Boolean(state.movieProgress[m.id]));
+              .filter((m): m is Movie => Boolean(m) && Boolean(state.movieProgress[m.id]))
+              .filter((m) => {
+                if (watchShelfFilter === 'all') return true;
+                const b = getMediaCollectionBadge('movie', m, state.movieProgress[m.id]);
+                return watchShelfFilter === 'owned' ? b.hasAnyOwned : b.hasAnyWishlist;
+              });
 
       const sortMovies = (list: Movie[]) =>
         [...list].sort((a, b) => {
@@ -193,6 +229,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
       state.movieProgress,
       state.settings.sortBy,
       filter,
+      watchShelfFilter,
     ]);
 
   const upcomingGroups = useMemo(() => {
@@ -247,6 +284,8 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
       ? formatUpcomingReleaseLabel(upcoming.airdate, upcoming.airstamp)
       : 'TBA';
 
+    const showCol = getMediaCollectionBadge('show', show, prog);
+
     if (isPosterLayout) {
       const isSel = Boolean(selectedMap[`show:${show.id}`]);
       return (
@@ -275,6 +314,11 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
               alt={show.title}
               className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
             />
+            {!selectMode && showCol.shortTag && (
+              <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-black/75 border border-watch/40 text-[9.5px] font-semibold text-watch leading-none">
+                {showCol.shortTag}
+              </span>
+            )}
             {selectMode ? (
               <span
                 className={`absolute top-2 right-2 h-7 w-7 rounded-full border flex items-center justify-center ${
@@ -385,7 +429,12 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
             : `Finished · ${stats.totalEpisodes}/${stats.totalEpisodes}`
         }
         secondaryLine={
-          next ? next.title : `${show.year} · ${show.genres.slice(0, 2).join(' · ')}`
+          [
+            next ? next.title : `${show.year} · ${show.genres.slice(0, 2).join(' · ')}`,
+            showCol.badgeText,
+          ]
+            .filter(Boolean)
+            .join(' · ')
         }
         progressRatio={stats.unreleasedEpisodes > 0 ? stats.airedProgressRatio : stats.progressRatio}
         showProgress={state.settings.showPosterProgress}
@@ -425,6 +474,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
     const prog = state.movieProgress[movie.id];
     const isWatched = (prog?.watchCount || 0) > 0;
     const flash = Boolean(justChecked[movie.id]);
+    const movieCol = getMediaCollectionBadge('movie', movie, prog);
 
     if (isPosterLayout) {
       const isSel = Boolean(selectedMap[`movie:${movie.id}`]);
@@ -454,6 +504,11 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
               alt={movie.title}
               className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
             />
+            {!selectMode && movieCol.shortTag && (
+              <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-black/75 border border-watch/40 text-[9.5px] font-semibold text-watch leading-none">
+                {movieCol.shortTag}
+              </span>
+            )}
             {selectMode ? (
               <span
                 className={`absolute top-2 right-2 h-7 w-7 rounded-full border flex items-center justify-center ${
@@ -495,7 +550,7 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
         badgeClassName="bg-watch/15 text-watch"
         posterUrl={movie.posterUrl}
         primaryLine={`${movie.year} · ${movie.runtime}m`}
-        secondaryLine={movie.director}
+        secondaryLine={[movie.director, movieCol.badgeText].filter(Boolean).join(' · ')}
         progressRatio={isWatched ? 1 : 0}
         showProgress={state.settings.showPosterProgress && isWatched}
         isFlashing={flash}
@@ -604,41 +659,75 @@ export function WatchView({ calendarMode = false }: { calendarMode?: boolean }) 
       >
         {/* Category Sub-Filter Pills */}
         {!calendarMode && (
-          <div className="flex items-center justify-between gap-2 mb-5 overflow-x-auto no-scrollbar">
-            <div className="flex items-center gap-2">
-              {filterTabs.map((t) => {
-                const active = filter === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => updateSettings({ watchFilter: t.id })}
-                    className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
-                      active
-                        ? 'bg-brand border-brand text-brand-ink'
-                        : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
-                    }`}
-                  >
-                    {t.label}
-                  </button>
-                );
-              })}
+          <div className="mb-5 space-y-2.5">
+            <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
+              <div className="flex items-center gap-2">
+                {filterTabs.map((t) => {
+                  const active = filter === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => updateSettings({ watchFilter: t.id })}
+                      className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
+                        active
+                          ? 'bg-brand border-brand text-brand-ink'
+                          : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectMode((v) => !v);
+                  setSelectedMap({});
+                }}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 inline-flex items-center gap-1.5 transition-colors ${
+                  selectMode
+                    ? 'bg-white border-white text-[#131519]'
+                    : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                }`}
+              >
+                <CheckSquare className="w-3.5 h-3.5" />
+                <span>{selectMode ? 'Cancel' : 'Select'}</span>
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setSelectMode((v) => !v);
-                setSelectedMap({});
-              }}
-              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 inline-flex items-center gap-1.5 transition-colors ${
-                selectMode
-                  ? 'bg-white border-white text-[#131519]'
-                  : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
-              }`}
-            >
-              <CheckSquare className="w-3.5 h-3.5" />
-              <span>{selectMode ? 'Cancel' : 'Select'}</span>
-            </button>
+
+            {(watchShelfCounts.owned > 0 || watchShelfCounts.wishlist > 0) && (
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                {(
+                  [
+                    { id: 'all', label: 'All titles' },
+                    ...(watchShelfCounts.owned > 0
+                      ? [{ id: 'owned' as const, label: `Owned (${watchShelfCounts.owned})` }]
+                      : []),
+                    ...(watchShelfCounts.wishlist > 0
+                      ? [{ id: 'wishlist' as const, label: `Wishlist (${watchShelfCounts.wishlist})` }]
+                      : []),
+                  ] as Array<{ id: 'all' | 'owned' | 'wishlist'; label: string }>
+                ).map((sub) => {
+                  const active = watchShelfFilter === sub.id;
+                  return (
+                    <button
+                      key={sub.id}
+                      type="button"
+                      onClick={() => setWatchShelfFilter(sub.id)}
+                      className={`px-3 py-1 rounded-full text-[11px] font-semibold border shrink-0 transition-colors ${
+                        active
+                          ? 'border-watch/60 bg-watch/15 text-watch'
+                          : 'border-white/[0.07] bg-surface text-ink-dim hover:text-ink'
+                      }`}
+                    >
+                      {sub.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 

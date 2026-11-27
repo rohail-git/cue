@@ -18,6 +18,7 @@ import {
 import type {
   AppSettings,
   CastMember,
+  CollectionDetails,
   ComicEditionId,
   ComicEditionRecord,
   ComicIssueMeta,
@@ -36,6 +37,7 @@ import type {
   MediaDomain,
   Movie,
   MovieWatchStatus,
+  OwnershipStatus,
   PersonalMood,
   RatingSource,
   ReadItem,
@@ -462,6 +464,17 @@ interface CueContextValue {
   resetGameProgress: (gameId: string) => void;
 
   // Collection & List actions
+  setMediaOwnership: (
+    kind: 'show' | 'movie' | 'read' | 'game',
+    id: string,
+    ownership: OwnershipStatus | undefined
+  ) => void;
+  updateMediaCollectionDetails: (
+    kind: 'show' | 'movie' | 'read' | 'game',
+    id: string,
+    details: Partial<CollectionDetails>,
+    ownershipOverride?: OwnershipStatus
+  ) => void;
   rateCollection: (
     collectionKey: string,
     rating: number | undefined,
@@ -4876,6 +4889,209 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   );
 
   // Collections & Cross-Media Lists
+  const setMediaOwnership = useCallback(
+    (
+      kind: 'show' | 'movie' | 'read' | 'game',
+      id: string,
+      ownership: OwnershipStatus | undefined
+    ) => {
+      commitState((prev) => {
+        if (kind === 'show') {
+          const existing = prev.showProgress[id];
+          return {
+            ...prev,
+            showProgress: {
+              ...prev.showProgress,
+              [id]: {
+                ...(existing || {}),
+                status: existing?.status || 'not_started',
+                episodeCounts: existing?.episodeCounts || {},
+                bookmarked: existing?.bookmarked ?? true,
+                notifications: existing?.notifications ?? true,
+                ownership,
+              },
+            },
+          };
+        }
+        if (kind === 'movie') {
+          const existing = prev.movieProgress[id];
+          return {
+            ...prev,
+            movieProgress: {
+              ...prev.movieProgress,
+              [id]: {
+                ...(existing || {}),
+                status: existing?.status || 'watchlist',
+                watchCount: existing?.watchCount || 0,
+                ownership,
+              },
+            },
+          };
+        }
+        if (kind === 'read') {
+          const existing = prev.readProgress[id];
+          return {
+            ...prev,
+            readProgress: {
+              ...prev.readProgress,
+              [id]: {
+                ...(existing || {}),
+                status: existing?.status || 'want_to_read',
+                currentUnit: existing?.currentUnit || 0,
+                rereadCount: existing?.rereadCount || 0,
+                bookmarked: existing?.bookmarked ?? true,
+                ownership,
+              },
+            },
+          };
+        }
+        const game = prev.games[id];
+        const existing = prev.gameProgress[id];
+        return {
+          ...prev,
+          gameProgress: {
+            ...prev.gameProgress,
+            [id]: {
+              ...(existing || {}),
+              status: existing?.status || 'backlog',
+              hoursPlayed: existing?.hoursPlayed || 0,
+              completionPct: existing?.completionPct || 0,
+              playthroughCount: existing?.playthroughCount || 0,
+              platinum: existing?.platinum ?? false,
+              platform: existing?.platform || game?.platforms[0] || 'PC',
+              bookmarked: existing?.bookmarked ?? true,
+              ownership,
+            },
+          },
+        };
+      });
+      showToast(
+        ownership === 'owned'
+          ? 'Added to collection'
+          : ownership === 'wishlist'
+            ? 'Added to wishlist'
+            : 'Removed from collection'
+      );
+    },
+    [showToast]
+  );
+
+  const updateMediaCollectionDetails = useCallback(
+    (
+      kind: 'show' | 'movie' | 'read' | 'game',
+      id: string,
+      details: Partial<CollectionDetails>,
+      ownershipOverride?: OwnershipStatus
+    ) => {
+      const cleanStr = (v: string | undefined) => {
+        const t = v?.trim();
+        return t ? t : undefined;
+      };
+      const sanitized: CollectionDetails = {
+        format: cleanStr(details.format),
+        acquiredAt: toFinishedIso(details.acquiredAt),
+        price:
+          typeof details.price === 'number' && Number.isFinite(details.price) && details.price >= 0
+            ? details.price
+            : undefined,
+        currency: cleanStr(details.currency) || undefined,
+        pages:
+          typeof details.pages === 'number' && Number.isFinite(details.pages) && details.pages > 0
+            ? Math.round(details.pages)
+            : undefined,
+        runtimeMinutes:
+          typeof details.runtimeMinutes === 'number' &&
+          Number.isFinite(details.runtimeMinutes) &&
+          details.runtimeMinutes > 0
+            ? Math.round(details.runtimeMinutes)
+            : undefined,
+        platform: cleanStr(details.platform),
+        owner: cleanStr(details.owner),
+        includes: cleanStr(details.includes),
+        notes: cleanStr(details.notes),
+      };
+
+      commitState((prev) => {
+        if (kind === 'show') {
+          const existing = prev.showProgress[id];
+          return {
+            ...prev,
+            showProgress: {
+              ...prev.showProgress,
+              [id]: {
+                ...(existing || {}),
+                status: existing?.status || 'not_started',
+                episodeCounts: existing?.episodeCounts || {},
+                bookmarked: existing?.bookmarked ?? true,
+                notifications: existing?.notifications ?? true,
+                ownership: ownershipOverride ?? existing?.ownership ?? 'owned',
+                collection: { ...(existing?.collection || {}), ...sanitized },
+              },
+            },
+          };
+        }
+        if (kind === 'movie') {
+          const existing = prev.movieProgress[id];
+          return {
+            ...prev,
+            movieProgress: {
+              ...prev.movieProgress,
+              [id]: {
+                ...(existing || {}),
+                status: existing?.status || 'watchlist',
+                watchCount: existing?.watchCount || 0,
+                ownership: ownershipOverride ?? existing?.ownership ?? 'owned',
+                collection: { ...(existing?.collection || {}), ...sanitized },
+              },
+            },
+          };
+        }
+        if (kind === 'read') {
+          const existing = prev.readProgress[id];
+          const nextCol = { ...(existing?.collection || {}), ...sanitized };
+          return {
+            ...prev,
+            readProgress: {
+              ...prev.readProgress,
+              [id]: {
+                ...(existing || {}),
+                status: existing?.status || 'want_to_read',
+                currentUnit: existing?.currentUnit || 0,
+                rereadCount: existing?.rereadCount || 0,
+                bookmarked: existing?.bookmarked ?? true,
+                ownership: ownershipOverride ?? existing?.ownership ?? 'owned',
+                collection: nextCol,
+                collectionNote: nextCol.notes,
+              },
+            },
+          };
+        }
+        const game = prev.games[id];
+        const existing = prev.gameProgress[id];
+        return {
+          ...prev,
+          gameProgress: {
+            ...prev.gameProgress,
+            [id]: {
+              ...(existing || {}),
+              status: existing?.status || 'backlog',
+              hoursPlayed: existing?.hoursPlayed || 0,
+              completionPct: existing?.completionPct || 0,
+              playthroughCount: existing?.playthroughCount || 0,
+              platinum: existing?.platinum ?? false,
+              platform: existing?.platform || game?.platforms[0] || 'PC',
+              bookmarked: existing?.bookmarked ?? true,
+              ownership: ownershipOverride ?? existing?.ownership ?? 'owned',
+              collection: { ...(existing?.collection || {}), ...sanitized },
+            },
+          },
+        };
+      });
+      showToast('Saved collection details');
+    },
+    [showToast]
+  );
+
   const rateCollection = useCallback(
     (collectionKey: string, rating: number | undefined, source: RatingSource = 'manual') => {
       commitState((prev) => {
@@ -6809,6 +7025,8 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         updateCompletionRunDate,
         deleteCompletionRun,
         resetGameProgress,
+        setMediaOwnership,
+        updateMediaCollectionDetails,
         rateCollection,
         setCollectionFinishedDate,
         toggleListPinnedToQueue,

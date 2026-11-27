@@ -21,6 +21,7 @@ import {
   Star,
   X,
 } from 'lucide-react';
+import { CollectionDetailCard, CollectionHeroButton } from '../components/CollectionDetailCard';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
 import {
@@ -41,13 +42,14 @@ import {
   formatDisplayTitle,
 } from '../services/mediaApi';
 import { useCueStore, useModalBackHandler } from '../store/useCueStore';
-import type { ComicOwnershipStatus, DetailCardMode } from '../types';
+import type { DetailCardMode } from '../types';
 import {
   extractReadItemIsbn,
   getComicCollectionSummary,
   getComicIssueAtomicId,
   isCollectedComicItem,
 } from '../utils/atoms';
+import { getMediaCollectionBadge } from '../utils/collection';
 import {
   evaluateBookSeriesProgress,
   evaluateOverlappingComicContainers,
@@ -87,10 +89,10 @@ export function ReadDetailView({ readId }: { readId: string }) {
     rateReadItem,
     setReadUnitFinishedDate,
     setReadOwnership,
-    setReadCollectionNote,
     setReadUnitOwnership,
     setReadUnitVariantNote,
     setAllReadUnitsOwnership,
+    updateMediaCollectionDetails,
     rateCollection,
     setCollectionFinishedDate,
     setReadMood,
@@ -126,8 +128,6 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const [activeUnitDrawer, setActiveUnitDrawer] = useState<number | null>(null);
   const [unitNoteText, setUnitNoteText] = useState('');
   const [variantNoteDraft, setVariantNoteDraft] = useState('');
-  const [shelfNoteOpen, setShelfNoteOpen] = useState(false);
-  const [shelfNoteDraft, setShelfNoteDraft] = useState('');
   const [loadingUnitDetail, setLoadingUnitDetail] = useState(false);
 
   useModalBackHandler(activeUnitDrawer !== null, () => setActiveUnitDrawer(null));
@@ -145,7 +145,6 @@ export function ReadDetailView({ readId }: { readId: string }) {
     setExpandedBuckets({ 0: true });
     setActiveUnitDrawer(null);
     setUnitNoteText('');
-    setShelfNoteOpen(false);
   }, [readId, state.settings.detailMode]);
 
   useEffect(() => {
@@ -362,6 +361,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const seriesRatingKey = bookSeries ? `book-series:${bookSeries.id}` : '';
   const storedSeriesRating = seriesRatingKey ? state.collectionRatings?.[seriesRatingKey] : undefined;
   const collectionSummary = getComicCollectionSummary(item, progress, state.atomicReadUnits);
+  const mediaColBadge = getMediaCollectionBadge('read', item, progress, state.atomicReadUnits);
 
   const safeSelectedUnit = Math.min(stats.total, Math.max(1, selectedUnit));
   const UNIT_PAGE_SIZE = 48;
@@ -579,45 +579,11 @@ export function ReadDetailView({ readId }: { readId: string }) {
             <Bookmark className="w-4.5 h-4.5" fill={progress?.bookmarked ? 'currentColor' : 'none'} />
           </button>
 
-          {item.format === 'comic' && (() => {
-            const nextCycle: ComicOwnershipStatus | undefined =
-              progress?.ownership === 'owned'
-                ? 'wishlist'
-                : progress?.ownership === 'wishlist'
-                  ? undefined
-                  : 'owned';
-            const ownActive = progress?.ownership === 'owned';
-            const wishActive = progress?.ownership === 'wishlist';
-            return (
-              <button
-                type="button"
-                onClick={() => setReadOwnership(item.id, nextCycle)}
-                aria-label={
-                  ownActive
-                    ? 'Owned in collection (tap for wishlist)'
-                    : wishActive
-                      ? 'On comic wishlist (tap to clear)'
-                      : 'Add to comic collection'
-                }
-                title={
-                  ownActive
-                    ? 'Owned (tap for Wishlist)'
-                    : wishActive
-                      ? 'Wishlist (tap to clear)'
-                      : 'Collect comic'
-                }
-                className={`h-11 w-11 rounded-full border-2 flex items-center justify-center shrink-0 transition-all ${
-                  ownActive
-                    ? 'border-read text-read bg-read/12'
-                    : wishActive
-                      ? 'border-dashed border-read/65 text-read/85 bg-read/[0.05]'
-                      : 'border-white/20 text-ink-faint hover:border-white/40 hover:text-ink-dim'
-                }`}
-              >
-                <Archive className="w-4.5 h-4.5" />
-              </button>
-            );
-          })()}
+          <CollectionHeroButton
+            domain="read"
+            ownership={progress?.ownership}
+            onCycle={(next) => setReadOwnership(item.id, next)}
+          />
 
           {stats.isFinished ? (
             <button
@@ -736,10 +702,10 @@ export function ReadDetailView({ readId }: { readId: string }) {
                       Finished {formatFinishedDate(progress?.finishedAt || progress?.lastReadAt)}
                     </span>
                   )}
-                  {item.format === 'comic' && collectionSummary.badgeText && (
+                  {mediaColBadge.badgeText && (
                     <span className="bg-surface border border-read/35 rounded-full px-3 py-1 text-xs font-medium text-read inline-flex items-center gap-1.5 tabular-nums">
                       <Archive className="w-3.5 h-3.5" />
-                      {collectionSummary.badgeText}
+                      {mediaColBadge.badgeText}
                     </span>
                   )}
                 </div>
@@ -1262,119 +1228,37 @@ export function ReadDetailView({ readId }: { readId: string }) {
             </section>
           )}
 
-          {/* Advanced Subtle Comic Collection Card */}
-          {detailMode === 'advanced' && item.format === 'comic' && (
-            <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 space-y-3">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Archive className="w-4 h-4 text-read shrink-0" />
-                  <h2 className="text-sm font-semibold text-ink">Collection</h2>
-                  {collectionSummary.badgeText && (
-                    <span className="text-[11px] font-medium text-read tabular-nums">
-                      · {collectionSummary.badgeText}
-                    </span>
-                  )}
-                </div>
-                <div className="inline-flex rounded-full bg-background border border-white/[0.08] p-0.5 text-[11px] font-semibold">
-                  {(
-                    [
-                      { id: 'none', label: 'None', val: undefined },
-                      { id: 'owned', label: 'Owned', val: 'owned' },
-                      { id: 'wishlist', label: 'Wishlist', val: 'wishlist' },
-                    ] as const
-                  ).map((opt) => {
-                    const active =
-                      opt.val === undefined
-                        ? !progress?.ownership
-                        : progress?.ownership === opt.val;
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => setReadOwnership(item.id, opt.val)}
-                        className={`px-2.5 py-1 rounded-full transition-colors ${
-                          active
-                            ? opt.val
-                              ? 'bg-read/20 text-read'
-                              : 'bg-surface-raised text-ink'
-                            : 'text-ink-dim hover:text-ink'
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
-                {shelfNoteOpen ? (
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      setReadCollectionNote(item.id, shelfNoteDraft);
-                      setShelfNoteOpen(false);
-                    }}
-                    className="flex items-center gap-2 w-full"
+          {/* Advanced Universal Collection Card (Novels, Manga & Comics) */}
+          {detailMode === 'advanced' && (
+            <CollectionDetailCard
+              domain="read"
+              ownership={progress?.ownership}
+              details={progress?.collection}
+              fallbackNotes={progress?.collectionNote}
+              badgeText={mediaColBadge.badgeText}
+              extraHeaderAction={
+                item.format === 'comic' && stats.total > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAllReadUnitsOwnership(
+                        item.id,
+                        collectionSummary.ownedUnits >= stats.total ? undefined : 'owned'
+                      )
+                    }
+                    className="text-[11px] font-semibold text-read/90 hover:text-read shrink-0"
                   >
-                    <input
-                      type="text"
-                      value={shelfNoteDraft}
-                      onChange={(e) => setShelfNoteDraft(e.target.value)}
-                      placeholder="Box / shelf note (e.g. Short Box #2)"
-                      className="flex-1 min-w-[140px] rounded-xl bg-background border border-white/12 px-3 py-1.5 text-xs text-ink placeholder:text-ink-faint outline-none focus:border-read"
-                    />
-                    <button
-                      type="submit"
-                      className="px-3 py-1.5 rounded-xl bg-read text-[#1E1608] text-xs font-semibold shrink-0"
-                    >
-                      Save
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShelfNoteOpen(false)}
-                      className="h-7 w-7 rounded-full bg-white/8 flex items-center justify-center text-ink-dim hover:text-ink shrink-0"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </form>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShelfNoteDraft(progress?.collectionNote || '');
-                        setShelfNoteOpen(true);
-                      }}
-                      className="text-ink-dim hover:text-ink inline-flex items-center gap-1.5 min-w-0"
-                    >
-                      <Pencil className="w-3 h-3 shrink-0" />
-                      <span className="truncate">
-                        {progress?.collectionNote
-                          ? `Shelf: ${progress.collectionNote}`
-                          : 'Add box / shelf note'}
-                      </span>
-                    </button>
-                    {stats.total > 1 && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setAllReadUnitsOwnership(
-                            item.id,
-                            collectionSummary.ownedUnits >= stats.total ? undefined : 'owned'
-                          )
-                        }
-                        className="text-[11px] font-semibold text-read/90 hover:text-read shrink-0"
-                      >
-                        {collectionSummary.ownedUnits >= stats.total
-                          ? 'Clear all owned'
-                          : 'Mark all issues owned'}
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
-            </section>
+                    {collectionSummary.ownedUnits >= stats.total
+                      ? 'Clear all owned'
+                      : 'Mark all issues owned'}
+                  </button>
+                ) : undefined
+              }
+              onChangeOwnership={(next) => setReadOwnership(item.id, next)}
+              onSaveDetails={(details, own) =>
+                updateMediaCollectionDetails('read', item.id, details, own)
+              }
+            />
           )}
 
           {/* Advanced Smart Container: Overlapping Comic Runs & Collections */}
