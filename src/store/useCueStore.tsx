@@ -3882,20 +3882,68 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           ? `${dateValue.trim()}T12:00:00.000Z`
           : dateValue.trim()
         : undefined;
+      const targetYmd = normalizedIso?.slice(0, 10);
+      const domain: MediaDomain = kind === 'read' ? 'read' : kind === 'game' ? 'play' : 'watch';
+
       commitState((prev) => {
+        const syncHistoryForFinishDate = (
+          prevHistory: HistoryEntry[],
+          title: string,
+          posterUrl: string
+        ): HistoryEntry[] => {
+          if (!normalizedIso || !targetYmd) return prevHistory;
+          let hasMatchOnTargetDay = false;
+          const updated = prevHistory.map((h) => {
+            if (h.domain !== domain || h.mediaId !== id) return h;
+            const hYmd = h.loggedAt.slice(0, 10);
+            const isFinishEntry = /^(?:Finished|Completed|Watched)$/i.test(h.codeLabel);
+            if (isFinishEntry || hYmd > targetYmd) {
+              hasMatchOnTargetDay = true;
+              return { ...h, loggedAt: normalizedIso };
+            }
+            if (hYmd === targetYmd) {
+              hasMatchOnTargetDay = true;
+            }
+            return h;
+          });
+          if (hasMatchOnTargetDay) return updated;
+          return appendHistory(updated, {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            domain,
+            mediaKind: kind,
+            mediaId: id,
+            title,
+            posterUrl,
+            codeLabel: kind === 'game' ? 'Completed' : kind === 'movie' ? 'Watched' : 'Finished',
+            subtitle: 'Completion date set',
+            loggedAt: normalizedIso,
+          });
+        };
+
         if (kind === 'show') {
           const prog = prev.showProgress[id];
+          const show = prev.shows[id];
           if (!prog) return prev;
+          const nextLastWatched =
+            normalizedIso && prog.lastWatchedAt && prog.lastWatchedAt.slice(0, 10) > targetYmd!
+              ? normalizedIso
+              : prog.lastWatchedAt;
           return {
             ...prev,
             showProgress: {
               ...prev.showProgress,
-              [id]: { ...prog, finishedAt: normalizedIso },
+              [id]: { ...prog, finishedAt: normalizedIso, lastWatchedAt: nextLastWatched },
             },
+            history: syncHistoryForFinishDate(
+              prev.history,
+              show?.title || 'Series',
+              show?.posterUrl || ''
+            ),
           };
         }
         if (kind === 'movie') {
           const prog = prev.movieProgress[id];
+          const movie = prev.movies[id];
           if (!prog) return prev;
           return {
             ...prev,
@@ -3903,27 +3951,52 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               ...prev.movieProgress,
               [id]: { ...prog, watchedAt: normalizedIso },
             },
+            history: syncHistoryForFinishDate(
+              prev.history,
+              movie?.title || 'Movie',
+              movie?.posterUrl || ''
+            ),
           };
         }
         if (kind === 'read') {
           const prog = prev.readProgress[id];
+          const readItem = prev.readItems[id];
           if (!prog) return prev;
+          const nextLastRead =
+            normalizedIso && prog.lastReadAt && prog.lastReadAt.slice(0, 10) > targetYmd!
+              ? normalizedIso
+              : prog.lastReadAt;
           return {
             ...prev,
             readProgress: {
               ...prev.readProgress,
-              [id]: { ...prog, finishedAt: normalizedIso },
+              [id]: { ...prog, finishedAt: normalizedIso, lastReadAt: nextLastRead },
             },
+            history: syncHistoryForFinishDate(
+              prev.history,
+              readItem?.title || 'Book',
+              readItem?.coverUrl || ''
+            ),
           };
         }
         const prog = prev.gameProgress[id];
+        const game = prev.games[id];
         if (!prog) return prev;
+        const nextLastPlayed =
+          normalizedIso && prog.lastPlayedAt && prog.lastPlayedAt.slice(0, 10) > targetYmd!
+            ? normalizedIso
+            : prog.lastPlayedAt;
         return {
           ...prev,
           gameProgress: {
             ...prev.gameProgress,
-            [id]: { ...prog, finishedAt: normalizedIso },
+            [id]: { ...prog, finishedAt: normalizedIso, lastPlayedAt: nextLastPlayed },
           },
+          history: syncHistoryForFinishDate(
+            prev.history,
+            game?.title || 'Game',
+            game?.coverUrl || ''
+          ),
         };
       });
     },

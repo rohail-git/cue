@@ -168,6 +168,45 @@ function toLocalDateIso(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+function parseCalendarAwareTimestamp(iso?: string): { ts: number; dateIso: string } | null {
+  if (!iso) return null;
+  const trimmed = iso.trim();
+  const noonOrDateOnly = trimmed.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:$|[Tt ]12:00:00(?:\.000)?[Zz]?$)/
+  );
+  if (noonOrDateOnly) {
+    const y = Number(noonOrDateOnly[1]);
+    const m = Number(noonOrDateOnly[2]) - 1;
+    const day = Number(noonOrDateOnly[3]);
+    const localNoon = new Date(y, m, day, 12, 0, 0, 0);
+    if (!Number.isNaN(localNoon.getTime())) {
+      return {
+        ts: localNoon.getTime(),
+        dateIso: `${noonOrDateOnly[1]}-${noonOrDateOnly[2]}-${noonOrDateOnly[3]}`,
+      };
+    }
+  }
+  const ts = Date.parse(trimmed);
+  if (!Number.isFinite(ts)) return null;
+  return { ts, dateIso: toLocalDateIso(new Date(ts)) };
+}
+
+function remapTimestampToLocalDate(ts: number, targetDateIso: string): number {
+  const m = targetDateIso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return ts;
+  const orig = new Date(ts);
+  const shifted = new Date(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    orig.getHours(),
+    orig.getMinutes(),
+    orig.getSeconds(),
+    orig.getMilliseconds()
+  );
+  return Number.isNaN(shifted.getTime()) ? ts : shifted.getTime();
+}
+
 function getMondayStart(date: Date): Date {
   const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const jsDay = d.getDay(); // 0 = Sun .. 6 = Sat
@@ -325,18 +364,112 @@ export function computeJournalAdvancedStats(
     ratingBuckets[bucket] += 1;
   };
 
+  // Custom / explicit finished dates take precedence over later log timestamps
+  const finishedByMediaKey = new Map<
+    string,
+    {
+      ts: number;
+      dateIso: string;
+      domain: MediaDomain;
+      minutes: number;
+      title: string;
+      posterUrl?: string;
+    }
+  >();
+
+  if (includesWatch) {
+    for (const id of state.showOrder) {
+      const show = state.shows[id];
+      const prog = state.showProgress[id];
+      if (!show || !prog || !prog.finishedAt) continue;
+      if (!getShowStats(show, prog).isFinished) continue;
+      const parsedFinish = parseCalendarAwareTimestamp(prog.finishedAt);
+      if (parsedFinish) {
+        finishedByMediaKey.set(`watch:${show.id}`, {
+          ...parsedFinish,
+          domain: 'watch',
+          minutes: Math.max(30, show.runtimeAvg || 42),
+          title: show.title,
+          posterUrl: show.posterUrl,
+        });
+      }
+    }
+    for (const id of state.movieOrder) {
+      const movie = state.movies[id];
+      const prog = state.movieProgress[id];
+      if (!movie || !prog || (prog.watchCount || 0) <= 0 || !prog.watchedAt) continue;
+      const parsedFinish = parseCalendarAwareTimestamp(prog.watchedAt);
+      if (parsedFinish) {
+        finishedByMediaKey.set(`watch:${movie.id}`, {
+          ...parsedFinish,
+          domain: 'watch',
+          minutes: movie.runtime || 120,
+          title: movie.title,
+          posterUrl: movie.posterUrl,
+        });
+      }
+    }
+  }
+  if (includesRead) {
+    for (const id of state.readOrder) {
+      const item = state.readItems[id];
+      const prog = state.readProgress[id];
+      if (!item || !prog || !prog.finishedAt) continue;
+      if (!getReadStats(item, prog).isFinished) continue;
+      const parsedFinish = parseCalendarAwareTimestamp(prog.finishedAt);
+      if (parsedFinish) {
+        finishedByMediaKey.set(`read:${item.id}`, {
+          ...parsedFinish,
+          domain: 'read',
+          minutes: item.unit === 'issues' ? 10 : 12,
+          title: item.title,
+          posterUrl: resolveComicEditionCover(item, prog.edition, prog),
+        });
+      }
+    }
+  }
+  if (includesPlay) {
+    for (const id of state.gameOrder) {
+      const game = state.games[id];
+      const prog = state.gameProgress[id];
+      if (!game || !prog || prog.status !== 'completed' || !prog.finishedAt) continue;
+      const parsedFinish = parseCalendarAwareTimestamp(prog.finishedAt);
+      if (parsedFinish) {
+        finishedByMediaKey.set(`play:${game.id}`, {
+          ...parsedFinish,
+          domain: 'play',
+          minutes: Math.max(60, Math.min(240, Math.round((prog.hoursPlayed || 2) * 60))),
+          title: game.title,
+          posterUrl: game.coverUrl,
+        });
+      }
+    }
+  }
+
   // Fallback synthetic timestamps from progress records if history lacks older entries
   const recordedMediaKeys = new Set<string>();
+  const hasEventOnFinishDate = new Set<string>();
   const events: ActivityEvent[] = [];
 
   for (const h of state.history || []) {
     if (scope !== 'all' && h.domain !== scope) continue;
-    const ts = Date.parse(h.loggedAt);
-    if (!Number.isFinite(ts)) continue;
-    recordedMediaKeys.add(`${h.domain}:${h.mediaId}`);
+    const parsed = parseCalendarAwareTimestamp(h.loggedAt);
+    if (!parsed) continue;
+    const mediaKey = `${h.domain}:${h.mediaId}`;
+    recordedMediaKeys.add(mediaKey);
+    const customFinish = finishedByMediaKey.get(mediaKey);
+    let effectiveTs = parsed.ts;
+    let effectiveDateIso = parsed.dateIso;
+    if (customFinish && parsed.dateIso > customFinish.dateIso) {
+      effectiveTs = remapTimestampToLocalDate(parsed.ts, customFinish.dateIso);
+      effectiveDateIso = customFinish.dateIso;
+    }
+    if (customFinish && effectiveDateIso === customFinish.dateIso) {
+      hasEventOnFinishDate.add(mediaKey);
+    }
     const mins = h.domain === 'watch' ? 42 : h.domain === 'read' ? 12 : 60;
     events.push({
-      ts,
+      ts: effectiveTs,
       domain: h.domain,
       minutes: mins,
       title: h.title,
@@ -344,13 +477,26 @@ export function computeJournalAdvancedStats(
     });
   }
 
+  for (const [mediaKey, customFinish] of finishedByMediaKey.entries()) {
+    recordedMediaKeys.add(mediaKey);
+    if (!hasEventOnFinishDate.has(mediaKey)) {
+      events.push({
+        ts: customFinish.ts,
+        domain: customFinish.domain,
+        minutes: customFinish.minutes,
+        title: customFinish.title,
+        posterUrl: customFinish.posterUrl,
+      });
+    }
+  }
+
   for (const j of state.journalEntries || []) {
     if (scope === 'all' || j.domain === scope) {
       bumpMood(j.mood);
-      const ts = Date.parse(j.createdAt);
-      if (Number.isFinite(ts)) {
+      const parsed = parseCalendarAwareTimestamp(j.createdAt);
+      if (parsed) {
         events.push({
-          ts,
+          ts: parsed.ts,
           domain: j.domain,
           minutes: 15,
           title: j.mediaTitle,

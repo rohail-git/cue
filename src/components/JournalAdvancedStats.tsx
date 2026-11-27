@@ -143,8 +143,16 @@ export function JournalAdvancedStats({
 
   const [chartMetric, setChartMetric] = useState<'logs' | 'hours'>('logs');
   const [selectedWeekIdx, setSelectedWeekIdx] = useState<number | null>(null);
-  const [selectedDay, setSelectedDay] = useState<HeatmapDayCell | null>(null);
+  const [selectedDayIso, setSelectedDayIso] = useState<string | null>(null);
   const [selectedTimeCell, setSelectedTimeCell] = useState<TimeBlockCell | null>(null);
+
+  const selectedDay = useMemo(
+    () =>
+      selectedDayIso
+        ? stats.calendarHeatmap.days.find((d) => d.dateIso === selectedDayIso) || null
+        : null,
+    [selectedDayIso, stats.calendarHeatmap.days]
+  );
   const [dailyPaceMinutes, setDailyPaceMinutes] = useState<30 | 60 | 120>(60);
   const [selectedRatingStars, setSelectedRatingStars] = useState<number | null>(null);
   const [selectedDecade, setSelectedDecade] = useState<string | null>(null);
@@ -219,7 +227,7 @@ export function JournalAdvancedStats({
                 onClick={() => {
                   onScopeChange(pill.id);
                   setSelectedWeekIdx(null);
-                  setSelectedDay(null);
+                  setSelectedDayIso(null);
                   setSelectedTimeCell(null);
                 }}
                 aria-pressed={active}
@@ -648,7 +656,7 @@ export function JournalAdvancedStats({
                 <button
                   key={day.dateIso}
                   type="button"
-                  onClick={() => setSelectedDay(day)}
+                  onClick={() => setSelectedDayIso(day.dateIso)}
                   aria-label={`${day.label}: ${day.count} logs`}
                   className={`w-full aspect-square rounded-[3px] transition-transform ${heatCellClass(
                     day.level,
