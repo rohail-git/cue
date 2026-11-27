@@ -17,6 +17,7 @@ import {
   Plus,
   RotateCcw,
   Star,
+  Wrench,
   X,
 } from 'lucide-react';
 import { CollectionDetailCard, CollectionHeroButton } from '../components/CollectionDetailCard';
@@ -27,10 +28,11 @@ import {
   FinishedDateRow,
   formatFinishedDate,
 } from '../components/FinishedDateCard';
+import { FixMediaInfoModal } from '../components/FixMediaInfoModal';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
-import { fetchAnimeEpisodeDetails } from '../services/mediaApi';
+import { fetchAnimeEpisodeDetails, hydrateLiveShow } from '../services/mediaApi';
 import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { DetailCardMode, Episode, Season } from '../types';
 import { getMediaCollectionBadge } from '../utils/collection';
@@ -80,6 +82,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
     updateCompletionRunDate,
     deleteCompletionRun,
     updateShowEpisodes,
+    updateShowMetadata,
     addJournalEntry,
     toggleItemInList,
     createCustomList,
@@ -98,6 +101,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
   const [listPickerOpen, setListPickerOpen] = useState(false);
   const [newListName, setNewListName] = useState('');
   const [expandedOverview, setExpandedOverview] = useState(false);
+  const [fixModalOpen, setFixModalOpen] = useState(false);
   const [rewatchStepperEp, setRewatchStepperEp] = useState<string | null>(null);
   const [activeEpisodeDrawer, setActiveEpisodeDrawer] = useState<Episode | null>(null);
   const [epNoteText, setEpNoteText] = useState('');
@@ -513,6 +517,17 @@ export function ShowDetailView({ showId }: { showId: string }) {
               <button
                 type="button"
                 onClick={() => {
+                  setFixModalOpen(true);
+                  setMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm text-ink hover:bg-white/8 text-left"
+              >
+                <Wrench className="w-4 h-4 text-brand" />
+                <span>Fix info &amp; episodes</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
                   resetShowProgress(show.id);
                   setMenuOpen(false);
                 }}
@@ -706,6 +721,14 @@ export function ShowDetailView({ showId }: { showId: string }) {
                       </span>
                     );
                   })()}
+                  <button
+                    type="button"
+                    onClick={() => setFixModalOpen(true)}
+                    className="rounded-full px-2.5 py-1 text-[11px] font-semibold border bg-surface border-white/[0.08] text-ink-dim hover:text-ink inline-flex items-center gap-1 transition-colors"
+                  >
+                    <Wrench className="w-2.5 h-2.5" />
+                    <span>Fix</span>
+                  </button>
                 </div>
               </section>
 
@@ -1391,6 +1414,80 @@ export function ShowDetailView({ showId }: { showId: string }) {
           </div>
         </div>
       )}
+
+      <FixMediaInfoModal
+        open={fixModalOpen}
+        onClose={() => setFixModalOpen(false)}
+        kind="show"
+        title={show.title}
+        year={show.year}
+        coverUrl={show.posterUrl}
+        unitLabel="episodes"
+        currentTotal={stats.totalEpisodes}
+        refreshLabel="Refresh episodes"
+        onRefreshLive={async () => {
+          if (show.anilistId || show.id.startsWith('anilist-')) {
+            const alId =
+              show.anilistId || Number(show.id.replace('anilist-', '')) || undefined;
+            const res = await fetchAnimeEpisodeDetails(
+              alId,
+              show.title,
+              stats.totalEpisodes,
+              show.backdropUrl || show.posterUrl,
+              show.id
+            );
+            if (res && res.episodes.length > 0) {
+              updateShowEpisodes(
+                show.id,
+                [{ number: show.seasons[0]?.number || 1, episodes: res.episodes }],
+                res.cast,
+                res.runtimeAvg
+              );
+              return { total: res.episodes.length, sourceLabel: 'AniList / AniZip' };
+            }
+            return null;
+          }
+          if (show.tmdbId || show.tvmazeId) {
+            const isTmdb = Boolean(show.tmdbId);
+            const refreshed = await hydrateLiveShow(
+              {
+                domain: 'watch',
+                kind: 'show',
+                id: show.id,
+                source: isTmdb ? 'tmdb' : 'tvmaze',
+                externalId: show.tmdbId || show.tvmazeId || show.id,
+                title: show.title,
+                year: show.year,
+                mediaType: 'tv',
+                genres: show.genres,
+                rating: show.rating,
+                posterUrl: show.posterUrl,
+                backdropUrl: show.backdropUrl,
+                overview: show.overview,
+                runtime: show.runtimeAvg,
+              },
+              state.settings.tmdbApiKey
+            );
+            if (refreshed.seasons.length > 0) {
+              updateShowEpisodes(show.id, refreshed.seasons, refreshed.cast, refreshed.runtimeAvg);
+              const totalEps = refreshed.seasons.reduce((sum, s) => sum + s.episodes.length, 0);
+              return {
+                total: totalEps || refreshed.totalEpisodes,
+                sourceLabel: isTmdb ? 'TMDB' : 'TVMaze',
+              };
+            }
+          }
+          return null;
+        }}
+        onSave={(patch) => {
+          updateShowMetadata(show.id, {
+            title: patch.title,
+            year: patch.year,
+            posterUrl: patch.coverUrl,
+            totalEpisodes: patch.totalUnits,
+          });
+        }}
+      />
     </div>
   );
 }

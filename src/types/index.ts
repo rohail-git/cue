@@ -158,6 +158,9 @@ export interface ReadItem {
   creator: string;
   year: number;
   totalUnits: number;
+  totalUnitsSource?: 'api' | 'estimated' | 'manual';
+  totalUnitsSyncedAt?: string;
+  publicationStatus?: 'ongoing' | 'completed' | 'hiatus';
   genres: string[];
   rating: number;
   coverUrl: string;

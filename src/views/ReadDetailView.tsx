@@ -19,6 +19,7 @@ import {
   Plus,
   RotateCcw,
   Star,
+  Wrench,
   X,
 } from 'lucide-react';
 import { CollectionDetailCard, CollectionHeroButton } from '../components/CollectionDetailCard';
@@ -29,6 +30,7 @@ import {
   FinishedDateRow,
   formatFinishedDate,
 } from '../components/FinishedDateCard';
+import { FixMediaInfoModal, type FixMediaRefreshResult } from '../components/FixMediaInfoModal';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
@@ -38,6 +40,7 @@ import {
   fetchComicEditionMetadata,
   fetchComicIssueDetails,
   fetchComicSeriesIssues,
+  fetchLiveMangaChapterCount,
   fetchSingleComicIssueDetail,
   formatDisplayTitle,
 } from '../services/mediaApi';
@@ -110,6 +113,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
     updateReadIssueDetails,
     patchReadIssueMeta,
     updateReadTotalUnits,
+    updateReadMetadata,
     updateReadFormat,
     resetReadProgress,
     addLiveReadToStore,
@@ -139,6 +143,8 @@ export function ReadDetailView({ readId }: { readId: string }) {
 
   useModalBackHandler(activeUnitDrawer !== null, () => setActiveUnitDrawer(null));
   const [hydratingIssues, setHydratingIssues] = useState(false);
+  const [hydratingManga, setHydratingManga] = useState(false);
+  const [fixModalOpen, setFixModalOpen] = useState(false);
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
     () => sessionDetailModeByReadId.get(readId) || state.settings.detailMode || 'simple'
   );
@@ -147,6 +153,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const fetchedCoversRef = useRef<Set<string>>(new Set());
   const fetchedIssueKeyRef = useRef<Set<string>>(new Set());
   const fetchedSingleIssueRef = useRef<Set<string>>(new Set());
+  const fetchedMangaRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setDetailMode(sessionDetailModeByReadId.get(readId) || state.settings.detailMode || 'simple');
@@ -348,6 +355,42 @@ export function ReadDetailView({ readId }: { readId: string }) {
       cancelled = true;
     };
   }, [activeUnitDrawer, item, patchReadIssueMeta]);
+
+  useEffect(() => {
+    if (!item || item.format !== 'manga') return;
+    if (item.totalUnitsSource === 'manual') return;
+    const syncedMs = item.totalUnitsSyncedAt ? Date.parse(item.totalUnitsSyncedAt) : 0;
+    const isStale = !syncedMs || Date.now() - syncedMs > 12 * 3600 * 1000;
+    const needsSync = item.totalUnitsSource === 'estimated' || isStale;
+    if (!needsSync) return;
+    if (fetchedMangaRef.current.has(item.id)) return;
+
+    let cancelled = false;
+    fetchedMangaRef.current.add(item.id);
+    setHydratingManga(true);
+    fetchLiveMangaChapterCount(item.title, item.year)
+      .then((res) => {
+        if (cancelled || !res) return;
+        if (res.totalChapters && res.totalChapters > 0) {
+          updateReadTotalUnits(item.id, res.totalChapters, {
+            source: 'api',
+            syncedAt: res.checkedAt || new Date().toISOString(),
+            publicationStatus: res.status,
+          });
+        } else if (res.status && res.status !== item.publicationStatus) {
+          updateReadMetadata(item.id, {
+            publicationStatus: res.status,
+            totalUnitsSyncedAt: res.checkedAt || new Date().toISOString(),
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setHydratingManga(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [item, updateReadTotalUnits, updateReadMetadata]);
 
   if (!item) {
     return (
@@ -563,7 +606,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
     }
     flushGroup();
   } else {
-    const BUCKET_SIZE = 25;
+    const BUCKET_SIZE = stats.total >= 400 ? 100 : stats.total >= 150 ? 50 : 25;
     if (stats.total <= BUCKET_SIZE) {
       const nums: number[] = [];
       for (let u = 1; u <= stats.total; u += 1) nums.push(u);
@@ -658,6 +701,17 @@ export function ReadDetailView({ readId }: { readId: string }) {
               >
                 <ListPlus className="w-4 h-4 text-brand" />
                 <span>Add to custom list</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFixModalOpen(true);
+                  setMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm text-ink hover:bg-white/8 text-left"
+              >
+                <Wrench className="w-4 h-4 text-brand" />
+                <span>Fix info &amp; count</span>
               </button>
               <button
                 type="button"
@@ -800,7 +854,9 @@ export function ReadDetailView({ readId }: { readId: string }) {
                     editionLabel || null,
                     item.comicRunLabel || item.year,
                     item.comicPublisher || item.creator,
-                    `${stats.total} ${stats.unitLabel}`,
+                    `${item.totalUnitsSource === 'estimated' ? '~' : ''}${stats.total} ${stats.unitLabel}${
+                      item.totalUnitsSource === 'estimated' ? ' (est.)' : ''
+                    }`,
                   ]
                     .filter(Boolean)
                     .join(' · ')}
@@ -841,10 +897,27 @@ export function ReadDetailView({ readId }: { readId: string }) {
                       ? `${stats.current}/${stats.releasedTotal} released (${Math.round(
                           stats.releasedRatio * 100
                         )}%) · ${stats.unreleasedCount} upcoming`
-                      : `${stats.current}/${stats.total} ${stats.unitLabel} (${Math.round(
+                      : `${stats.current}/${item.totalUnitsSource === 'estimated' ? '~' : ''}${stats.total} ${stats.unitLabel} (${Math.round(
                           stats.ratio * 100
                         )}%)`}
                   </span>
+                  {item.publicationStatus === 'ongoing' && (
+                    <span className="bg-surface border border-white/[0.08] rounded-full px-2.5 py-1 text-[11px] font-medium text-ink-dim">
+                      Ongoing
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setFixModalOpen(true)}
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold border inline-flex items-center gap-1 transition-colors ${
+                      item.totalUnitsSource === 'estimated'
+                        ? 'bg-brand/12 border-brand/35 text-brand hover:bg-brand/20'
+                        : 'bg-surface border-white/[0.08] text-ink-dim hover:text-ink'
+                    }`}
+                  >
+                    <Pencil className="w-2.5 h-2.5" />
+                    <span>{item.totalUnitsSource === 'estimated' ? 'Fix count' : 'Fix'}</span>
+                  </button>
                   {typeof progress?.rating === 'number' && progress.rating > 0 && (
                     <span className="bg-surface border border-brand/35 rounded-full px-3 py-1 text-xs font-semibold text-brand inline-flex items-center gap-1 tabular-nums">
                       Your rating ★ {formatRating(progress.rating)}/5
@@ -904,10 +977,14 @@ export function ReadDetailView({ readId }: { readId: string }) {
 
               {/* Simple Accordion Issue / Chapter Checklist */}
               <section className="pt-2 pb-4 divide-y divide-white/[0.06]">
-                {hydratingIssues && (
+                {(hydratingIssues || hydratingManga) && (
                   <div className="py-2 text-xs text-ink-dim flex items-center gap-2">
                     <Clock className="w-3.5 h-3.5 text-read shrink-0" />
-                    <span>Resolving individual issues, covers & atomic links…</span>
+                    <span>
+                      {hydratingManga
+                        ? 'Syncing latest chapter count…'
+                        : 'Resolving individual issues, covers & atomic links…'}
+                    </span>
                   </div>
                 )}
                 {simpleBuckets.map((bucket) => {
@@ -2138,28 +2215,125 @@ export function ReadDetailView({ readId }: { readId: string }) {
                 );
               })}
             </div>
-            <div className="flex gap-2">
-              <input
-                placeholder="New list name..."
-                value={newListName}
-                onChange={(e) => setNewListName(e.target.value)}
-                className="flex-1 rounded-xl bg-background border border-white/10 px-3 py-2 text-sm text-ink outline-none focus:border-brand"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  if (!newListName.trim()) return;
-                  createCustomList(newListName, '', { kind: 'read', id: item.id });
-                  setNewListName('');
-                }}
-                className="px-4 py-2 rounded-xl bg-brand text-brand-ink text-sm font-semibold"
-              >
-                Create
-              </button>
+              <div className="flex gap-2">
+                <input
+                  placeholder="New list name..."
+                  value={newListName}
+                  onChange={(e) => setNewListName(e.target.value)}
+                  className="flex-1 rounded-xl bg-background border border-white/10 px-3 py-2 text-sm text-ink outline-none focus:border-brand"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!newListName.trim()) return;
+                    createCustomList(newListName, '', { kind: 'read', id: item.id });
+                    setNewListName('');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-brand text-brand-ink text-sm font-semibold"
+                >
+                  Create
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+      <FixMediaInfoModal
+        open={fixModalOpen}
+        onClose={() => setFixModalOpen(false)}
+        kind="read"
+        title={item.title}
+        creator={item.comicPublisher || item.creator}
+        year={item.year}
+        coverUrl={activeCover}
+        unitLabel={item.unit === 'issues' ? 'issues' : 'chapters'}
+        currentTotal={stats.total}
+        totalSource={item.totalUnitsSource}
+        publicationStatus={item.publicationStatus}
+        refreshLabel={
+          item.format === 'manga'
+            ? 'Check live chapter count'
+            : item.format === 'comic'
+              ? 'Re-sync issues & cover'
+              : undefined
+        }
+        onRefreshLive={
+          item.format === 'manga'
+            ? async (): Promise<FixMediaRefreshResult | null> => {
+                const res = await fetchLiveMangaChapterCount(item.title, item.year);
+                if (!res || !res.totalChapters) return null;
+                updateReadTotalUnits(item.id, res.totalChapters, {
+                  source: 'api',
+                  syncedAt: res.checkedAt || new Date().toISOString(),
+                  publicationStatus: res.status,
+                });
+                return {
+                  total: res.totalChapters,
+                  status: res.status,
+                  sourceLabel: res.source === 'mangaupdates' ? 'MangaUpdates' : 'MangaDex',
+                };
+              }
+            : item.format === 'comic'
+              ? async (): Promise<FixMediaRefreshResult | null> => {
+                  const total = Math.max(1, item.totalUnits);
+                  if (item.comicKind === 'series' && item.comicSeriesWiki && item.comicSeriesVolTitle) {
+                    const { issues, totalIssues } = await fetchComicSeriesIssues(
+                      item.comicSeriesWiki,
+                      item.comicSeriesVolTitle,
+                      Math.max(90, total)
+                    );
+                    const nextKey = `${progress?.editionId || progress?.edition || 'default'}::${totalIssues || total}::${COMIC_ISSUE_CACHE_VERSION}`;
+                    if (Object.keys(issues).length > 0 || totalIssues > 0) {
+                      updateReadIssueDetails(
+                        item.id,
+                        issues,
+                        nextKey,
+                        totalIssues > 0 ? totalIssues : undefined
+                      );
+                      return {
+                        total: totalIssues || Object.keys(issues).length,
+                        sourceLabel: 'Wiki Sync',
+                      };
+                    }
+                    return null;
+                  }
+                  const col = await fetchComicCollectionIssues({
+                    title: item.title,
+                    isbn: extractReadItemIsbn(item),
+                    overview: item.overview,
+                    publisher: item.comicPublisher,
+                    wiki: item.comicSeriesWiki,
+                    pageTitle: item.comicSeriesVolTitle,
+                    limit: Math.max(100, total),
+                  });
+                  if (Object.keys(col.issues).length > 0) {
+                    const nextKey = `${progress?.editionId || progress?.edition || 'default'}::${col.totalIssues || total}::${COMIC_ISSUE_CACHE_VERSION}`;
+                    updateReadIssueDetails(
+                      item.id,
+                      col.issues,
+                      nextKey,
+                      col.totalIssues > 0 ? col.totalIssues : undefined,
+                      {
+                        coverUrl: col.coverUrl,
+                        publisher: col.publisher,
+                        year: col.year,
+                        wiki: col.wiki,
+                        collectionPageTitle: col.collectionPageTitle,
+                      }
+                    );
+                    return {
+                      total: col.totalIssues || Object.keys(col.issues).length,
+                      sourceLabel: 'Comic Sync',
+                    };
+                  }
+                  return null;
+                }
+              : undefined
+        }
+        onSave={(patch) => {
+          updateReadMetadata(item.id, patch);
+        }}
+      />
     </div>
   );
 }

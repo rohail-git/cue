@@ -87,6 +87,7 @@ export interface LiveSearchResult {
   runtime?: number;
   trailerUrl?: string;
   totalUnits?: number;
+  totalUnitsEstimated?: boolean;
   comicKind?: 'series' | 'collection';
   comicRunLabel?: string;
   comicPublisher?: string;
@@ -1024,6 +1025,7 @@ async function fetchTrendingManga(limit: number): Promise<LiveSearchResult[]> {
             overview: stripHtml(m.description) || `${title} manga series.`,
             director: author,
             totalUnits: m.chapters || 80,
+            totalUnitsEstimated: !m.chapters,
             popularity: m.popularity || 0,
           };
         })
@@ -1270,6 +1272,7 @@ async function fetchTrendingNovels(limit: number): Promise<LiveSearchResult[]> {
         overview: e.summary?.label || `${title} by ${author}.`,
         director: author,
         totalUnits: 24,
+        totalUnitsEstimated: true,
       });
       if (out.length >= limit) break;
     }
@@ -1887,6 +1890,7 @@ async function fetchAnticipatedRead(limit: number): Promise<LiveSearchResult[]> 
             overview: stripHtml(m.description) || `${title} — upcoming manga.`,
             director: author,
             totalUnits: m.chapters || 12,
+            totalUnitsEstimated: !m.chapters,
           };
         })
         .filter((x): x is LiveSearchResult => Boolean(x));
@@ -1961,6 +1965,7 @@ async function fetchPopularRead(limit: number): Promise<LiveSearchResult[]> {
             overview: stripHtml(m.description) || `${title} manga series.`,
             director: author,
             totalUnits: m.chapters || 80,
+            totalUnitsEstimated: !m.chapters,
           };
         })
         .filter((x): x is LiveSearchResult => Boolean(x));
@@ -3028,6 +3033,7 @@ async function searchOpenLibrary(query: string): Promise<LiveSearchResult[]> {
         overview: `${baseTitle} by ${authorName}.`,
         director: authorName,
         totalUnits: isComic ? (editionIssueCounts?.digital ?? 12) : estimatedChapters,
+        totalUnitsEstimated: isComic ? !editionIssueCounts?.digital : true,
         editionCovers,
         editionIssueCounts,
         editionVariants,
@@ -3771,6 +3777,7 @@ async function searchAniListManga(query: string): Promise<LiveSearchResult[]> {
           overview: stripHtml(m.description) || `${title} series.`,
           director: author,
           totalUnits: m.chapters || (isNovel ? 18 : 100),
+          totalUnitsEstimated: !m.chapters,
           popularity: popRaw,
           popularityScore,
         };
@@ -4351,7 +4358,7 @@ export async function hydrateLiveShow(item: LiveSearchResult, tmdbApiKey?: strin
   }
   if (item.source === 'anilist') {
     const anilistId = Number(item.externalId) || undefined;
-    const epCount = Math.max(1, Math.min(100, item.anilistEpisodes || 12));
+    const epCount = Math.max(1, Math.min(2500, item.anilistEpisodes || 12));
     const fallbackStill = item.backdropUrl || item.posterUrl;
     const details = await fetchAnimeEpisodeDetails(
       anilistId,
@@ -4543,7 +4550,7 @@ export async function fetchAnimeEpisodeDetails(
   }
 
   const maxAz = anizipByNum.size > 0 ? Math.max(...anizipByNum.keys()) : 0;
-  const epCount = Math.max(1, Math.min(120, Math.max(maxAz, anilistEpisodesCount, fallbackEpCount)));
+  const epCount = Math.max(1, Math.min(2500, Math.max(maxAz, anilistEpisodesCount, fallbackEpCount)));
   const runtimeAvg = anilistDuration || anizipByNum.get(1)?.runtime || 24;
 
   const episodes: Episode[] = Array.from({ length: epCount }, (_, idx) => {
@@ -5644,6 +5651,8 @@ export function hydrateLiveReadItem(item: LiveSearchResult): ReadItem {
     item.mediaType === 'manga' ? 'manga' : item.mediaType === 'comic' ? 'comic' : 'novel';
   const unit = format === 'comic' ? 'issues' : 'chapters';
   const totalUnits = item.totalUnits || (format === 'novel' ? 30 : format === 'manga' ? 100 : 12);
+  const totalUnitsSource =
+    item.totalUnits && !item.totalUnitsEstimated ? 'api' : 'estimated';
   return {
     id: item.id,
     format,
@@ -5652,6 +5661,7 @@ export function hydrateLiveReadItem(item: LiveSearchResult): ReadItem {
     creator: item.director || item.subtitle || 'Author',
     year: item.year,
     totalUnits,
+    totalUnitsSource,
     baseTotalUnits: totalUnits,
     genres: item.genres,
     rating: item.rating,
@@ -5977,6 +5987,46 @@ export async function enrichImportCandidate(
   }
 
   return buildFallbackPreparedEntry(candidate);
+}
+
+export async function fetchLiveMangaChapterCount(
+  title: string,
+  year?: number
+): Promise<{
+  totalChapters?: number;
+  status?: 'ongoing' | 'completed' | 'hiatus';
+  source?: 'mangaupdates' | 'mangadex';
+  matchedTitle?: string;
+  checkedAt?: string;
+} | null> {
+  const clean = title.trim();
+  if (!clean) return null;
+  try {
+    const qs = new URLSearchParams({ title: clean });
+    if (year && year > 1900) qs.set('year', String(year));
+    const res = await fetch(`/api/manga-chapters?${qs.toString()}`, {
+      signal: AbortSignal.timeout(9000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      found?: boolean;
+      matchedTitle?: string;
+      totalChapters?: number;
+      status?: 'ongoing' | 'completed' | 'hiatus';
+      source?: 'mangaupdates' | 'mangadex';
+      checkedAt?: string;
+    };
+    if (!data.found && !data.status) return null;
+    return {
+      totalChapters: data.totalChapters,
+      status: data.status,
+      source: data.source,
+      matchedTitle: data.matchedTitle,
+      checkedAt: data.checkedAt,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function buildFallbackPreparedEntry(candidate: ImportCandidate): PreparedImportEntry {

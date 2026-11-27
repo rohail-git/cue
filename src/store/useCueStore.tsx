@@ -345,6 +345,15 @@ interface CueContextValue {
     cast?: CastMember[],
     runtimeAvg?: number
   ) => void;
+  updateShowMetadata: (
+    showId: string,
+    patch: {
+      title?: string;
+      year?: number;
+      posterUrl?: string;
+      totalEpisodes?: number;
+    }
+  ) => void;
 
   toggleMovieWatched: (movieId: string) => void;
   incrementMovieRewatch: (movieId: string, delta: number) => void;
@@ -414,7 +423,28 @@ interface CueContextValue {
     editionIssueCounts?: Partial<Record<ComicEditionId, number>>,
     editionVariants?: Partial<Record<GeneralizedComicEditionId, string[]>>
   ) => void;
-  updateReadTotalUnits: (readId: string, totalUnits: number) => void;
+  updateReadTotalUnits: (
+    readId: string,
+    totalUnits: number,
+    meta?: {
+      source?: 'api' | 'estimated' | 'manual';
+      syncedAt?: string;
+      publicationStatus?: ReadItem['publicationStatus'];
+    }
+  ) => void;
+  updateReadMetadata: (
+    readId: string,
+    patch: {
+      title?: string;
+      creator?: string;
+      year?: number;
+      coverUrl?: string;
+      totalUnits?: number;
+      totalUnitsSource?: ReadItem['totalUnitsSource'];
+      totalUnitsSyncedAt?: string;
+      publicationStatus?: ReadItem['publicationStatus'];
+    }
+  ) => void;
   updateReadFormat: (readId: string, format: ReadItem['format']) => void;
   autoClassifyReadLibrary: () => { comics: number; manga: number };
   resetReadProgress: (readId: string) => void;
@@ -1888,6 +1918,110 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const updateShowMetadata = useCallback(
+    (
+      showId: string,
+      patch: {
+        title?: string;
+        year?: number;
+        posterUrl?: string;
+        totalEpisodes?: number;
+      }
+    ) => {
+      commitState((prev) => {
+        const show = prev.shows[showId];
+        if (!show) return prev;
+        let nextSeasons = show.seasons.map((s) => ({ ...s, episodes: [...s.episodes] }));
+        let nextTotalEpisodes = show.totalEpisodes;
+
+        if (typeof patch.totalEpisodes === 'number' && Number.isFinite(patch.totalEpisodes)) {
+          const targetTotal = Math.max(1, Math.min(2500, Math.round(patch.totalEpisodes)));
+          const currentCount = nextSeasons.reduce((sum, s) => sum + s.episodes.length, 0);
+          if (nextSeasons.length === 0) {
+            nextSeasons = [
+              {
+                number: 1,
+                episodes: Array.from({ length: targetTotal }, (_, idx) => ({
+                  id: `${show.id}-s1e${idx + 1}`,
+                  season: 1,
+                  number: idx + 1,
+                  title: `Episode ${idx + 1}`,
+                  airdate: '',
+                  runtime: show.runtimeAvg || 24,
+                  stillUrl: show.backdropUrl || show.posterUrl,
+                  overview: '',
+                })),
+              },
+            ];
+          } else if (targetTotal > currentCount) {
+            const lastSeason = nextSeasons[nextSeasons.length - 1];
+            const lastEpNum = lastSeason.episodes.reduce(
+              (mx, ep) => Math.max(mx, ep.number),
+              0
+            );
+            const diff = targetTotal - currentCount;
+            for (let i = 1; i <= diff; i += 1) {
+              const epNum = lastEpNum + i;
+              lastSeason.episodes.push({
+                id: `${show.id}-s${lastSeason.number}e${epNum}`,
+                season: lastSeason.number,
+                number: epNum,
+                title: `Episode ${epNum}`,
+                airdate: '',
+                runtime: show.runtimeAvg || 24,
+                stillUrl: show.backdropUrl || show.posterUrl,
+                overview: '',
+              });
+            }
+          } else if (targetTotal < currentCount) {
+            let toRemove = currentCount - targetTotal;
+            for (let sIdx = nextSeasons.length - 1; sIdx >= 0 && toRemove > 0; sIdx -= 1) {
+              const eps = nextSeasons[sIdx].episodes;
+              if (sIdx === 0 && eps.length - toRemove < 1) {
+                const trim = Math.max(0, eps.length - 1);
+                nextSeasons[sIdx].episodes = eps.slice(0, eps.length - trim);
+                toRemove -= trim;
+              } else if (eps.length <= toRemove) {
+                toRemove -= eps.length;
+                nextSeasons.splice(sIdx, 1);
+              } else {
+                nextSeasons[sIdx].episodes = eps.slice(0, eps.length - toRemove);
+                toRemove = 0;
+              }
+            }
+          }
+          nextTotalEpisodes = targetTotal;
+        }
+
+        const nextPoster =
+          patch.posterUrl !== undefined ? patch.posterUrl.trim() : show.posterUrl;
+        const nextBackdrop =
+          patch.posterUrl !== undefined && !show.backdropUrl
+            ? nextPoster
+            : show.backdropUrl;
+
+        return {
+          ...prev,
+          shows: {
+            ...prev.shows,
+            [showId]: {
+              ...show,
+              ...(patch.title?.trim() ? { title: patch.title.trim() } : {}),
+              ...(typeof patch.year === 'number' && Number.isFinite(patch.year)
+                ? { year: Math.round(patch.year) }
+                : {}),
+              posterUrl: nextPoster,
+              backdropUrl: nextBackdrop,
+              seasons: nextSeasons,
+              totalEpisodes: nextTotalEpisodes,
+            },
+          },
+        };
+      });
+    },
+    []
+  );
+
   const rateShow = useCallback(
     (showId: string, rating: number | undefined, source: RatingSource = 'manual') => {
       commitState((prev) => {
@@ -2764,33 +2898,117 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     }
   }, [catchUpPrompt, commitState, setReadUnitsBatch, showToast]);
 
-  const updateReadTotalUnits = useCallback((readId: string, totalUnits: number) => {
-    const safeTotal = Math.max(1, Math.round(totalUnits));
-    commitState((prev) => {
-      const item = prev.readItems[readId];
-      if (!item) return prev;
-      const prog = prev.readProgress[readId];
-      const nextEditionCounts = prog?.edition
-        ? { ...(item.editionIssueCounts || {}), [prog.edition]: safeTotal }
-        : item.editionIssueCounts;
-      const updatedItem: ReadItem = {
-        ...item,
-        totalUnits: safeTotal,
-        baseTotalUnits: prog?.edition ? item.baseTotalUnits : safeTotal,
-        editionIssueCounts: nextEditionCounts,
-      };
-      return {
-        ...prev,
-        readItems: { ...prev.readItems, [readId]: updatedItem },
-        readProgress: prog
-          ? {
-              ...prev.readProgress,
-              [readId]: normalizeReadProgress(updatedItem, prog.currentUnit, prog, prog.completedUnits),
-            }
-          : prev.readProgress,
-      };
-    });
-  }, []);
+  const updateReadTotalUnits = useCallback(
+    (
+      readId: string,
+      totalUnits: number,
+      meta?: {
+        source?: 'api' | 'estimated' | 'manual';
+        syncedAt?: string;
+        publicationStatus?: ReadItem['publicationStatus'];
+      }
+    ) => {
+      const safeTotal = Math.max(1, Math.min(10000, Math.round(totalUnits)));
+      commitState((prev) => {
+        const item = prev.readItems[readId];
+        if (!item) return prev;
+        const prog = prev.readProgress[readId];
+        const nextEditionCounts = prog?.edition
+          ? { ...(item.editionIssueCounts || {}), [prog.edition]: safeTotal }
+          : item.editionIssueCounts;
+        const nextSource = meta?.source ?? 'manual';
+        const nextSyncedAt = meta?.syncedAt ?? new Date().toISOString();
+        const updatedItem: ReadItem = {
+          ...item,
+          totalUnits: safeTotal,
+          totalUnitsSource: nextSource,
+          totalUnitsSyncedAt: nextSyncedAt,
+          ...(meta?.publicationStatus !== undefined
+            ? { publicationStatus: meta.publicationStatus }
+            : {}),
+          baseTotalUnits: prog?.edition ? item.baseTotalUnits : safeTotal,
+          editionIssueCounts: nextEditionCounts,
+        };
+        return {
+          ...prev,
+          readItems: { ...prev.readItems, [readId]: updatedItem },
+          readProgress: prog
+            ? {
+                ...prev.readProgress,
+                [readId]: normalizeReadProgress(updatedItem, prog.currentUnit, prog, prog.completedUnits),
+              }
+            : prev.readProgress,
+        };
+      });
+    },
+    []
+  );
+
+  const updateReadMetadata = useCallback(
+    (
+      readId: string,
+      patch: {
+        title?: string;
+        creator?: string;
+        year?: number;
+        coverUrl?: string;
+        totalUnits?: number;
+        totalUnitsSource?: ReadItem['totalUnitsSource'];
+        totalUnitsSyncedAt?: string;
+        publicationStatus?: ReadItem['publicationStatus'];
+      }
+    ) => {
+      commitState((prev) => {
+        const item = prev.readItems[readId];
+        if (!item) return prev;
+        const prog = prev.readProgress[readId];
+        const nextTotal =
+          typeof patch.totalUnits === 'number' && Number.isFinite(patch.totalUnits)
+            ? Math.max(1, Math.min(10000, Math.round(patch.totalUnits)))
+            : item.totalUnits;
+        const nextEditionCounts =
+          nextTotal !== item.totalUnits && prog?.edition
+            ? { ...(item.editionIssueCounts || {}), [prog.edition]: nextTotal }
+            : item.editionIssueCounts;
+        const cleanCover = patch.coverUrl !== undefined ? patch.coverUrl.trim() : item.coverUrl;
+        const updatedItem: ReadItem = {
+          ...item,
+          ...(patch.title?.trim() ? { title: patch.title.trim() } : {}),
+          ...(patch.creator?.trim() ? { creator: patch.creator.trim() } : {}),
+          ...(typeof patch.year === 'number' && Number.isFinite(patch.year)
+            ? { year: Math.round(patch.year) }
+            : {}),
+          coverUrl: cleanCover,
+          backdropUrl: patch.coverUrl !== undefined ? cleanCover || item.backdropUrl : item.backdropUrl,
+          totalUnits: nextTotal,
+          totalUnitsSource:
+            patch.totalUnitsSource ??
+            (nextTotal !== item.totalUnits ? 'manual' : item.totalUnitsSource),
+          totalUnitsSyncedAt:
+            patch.totalUnitsSyncedAt ??
+            (nextTotal !== item.totalUnits ? new Date().toISOString() : item.totalUnitsSyncedAt),
+          ...(patch.publicationStatus !== undefined
+            ? { publicationStatus: patch.publicationStatus }
+            : {}),
+          baseTotalUnits:
+            nextTotal !== item.totalUnits && !prog?.edition ? nextTotal : item.baseTotalUnits,
+          editionIssueCounts: nextEditionCounts,
+        };
+        return {
+          ...prev,
+          readItems: { ...prev.readItems, [readId]: updatedItem },
+          readProgress:
+            prog && nextTotal !== item.totalUnits
+              ? {
+                  ...prev.readProgress,
+                  [readId]: normalizeReadProgress(updatedItem, prog.currentUnit, prog, prog.completedUnits),
+                }
+              : prev.readProgress,
+        };
+      });
+    },
+    []
+  );
 
   const markReadFinished = useCallback(
     (readId: string) => {
@@ -7375,6 +7593,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         setSeasonFinishedDate,
         setShowMood,
         updateShowEpisodes,
+        updateShowMetadata,
         toggleMovieWatched,
         incrementMovieRewatch,
         toggleMovieWatchlist,
@@ -7405,6 +7624,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         patchReadIssueMeta,
         updateReadEditionCovers,
         updateReadTotalUnits,
+        updateReadMetadata,
         updateReadFormat,
         autoClassifyReadLibrary,
         resetReadProgress,
