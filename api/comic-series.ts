@@ -38,6 +38,24 @@ export interface ComicSeriesIssueItem {
 
 const UA_HEADER = 'CueMediaTracker/1.0 (+https://cue-three-theta.vercel.app)';
 
+async function upstreamFetch(url: string, timeoutMs = 5500): Promise<Response> {
+  const res = await fetch(url, {
+    headers: { 'User-Agent': UA_HEADER },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (res.status !== 429) return res;
+
+  const rawRetry = Number(res.headers.get('Retry-After'));
+  const waitMs = Number.isFinite(rawRetry)
+    ? Math.min(1200, Math.max(300, Math.round(rawRetry * 1000)))
+    : 500;
+  await new Promise((resolve) => setTimeout(resolve, waitMs));
+  return fetch(url, {
+    headers: { 'User-Agent': UA_HEADER },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
+
 const WIKI_PUBLISHER: Record<ComicWikiSlug, string> = {
   marvel: 'Marvel Comics',
   dc: 'DC Comics',
@@ -356,11 +374,11 @@ async function resolveWikiFileUrls(
   const originParam = corsOrigin ? '&origin=*' : '';
   await Promise.allSettled(
     chunks.map(async (chunk) => {
-      const res = await fetch(
+      const res = await upstreamFetch(
         `https://${wiki}.fandom.com/api.php?action=query&titles=${encodeURIComponent(
           chunk.map((f) => `File:${f}`).join('|')
         )}&prop=imageinfo&iiprop=url&iiurlwidth=${width}&redirects=1&format=json${originParam}`,
-        { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(5500) }
+        5500
       );
       if (!res.ok) return;
       const json = (await res.json()) as {
@@ -415,9 +433,9 @@ async function hydrateWikiVolumes(
     )}&prop=categoryinfo&format=json`;
 
     const [volRes, issueRes, catRes] = await Promise.allSettled([
-      fetch(volBatchUrl, { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(5500) }),
-      fetch(issue1BatchUrl, { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(5500) }),
-      fetch(catInfoUrl, { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(5500) }),
+      upstreamFetch(volBatchUrl, 5500),
+      upstreamFetch(issue1BatchUrl, 5500),
+      upstreamFetch(catInfoUrl, 5500),
     ]);
 
     const volMap = new Map<string, MediaWikiQueryPage>();
@@ -567,17 +585,17 @@ async function queryWikiComicVolumes(
 
   try {
     const [prefixRes, searchRes] = await Promise.allSettled([
-      fetch(
+      upstreamFetch(
         `https://${wiki}.fandom.com/api.php?action=query&list=prefixsearch&pssearch=${encodeURIComponent(
           `${clean} Vol `
         )}&pslimit=25&format=json`,
-        { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(5000) }
+        5000
       ),
-      fetch(
+      upstreamFetch(
         `https://${wiki}.fandom.com/api.php?action=query&list=search&srsearch=${encodeURIComponent(
           `"${clean}" Vol`
         )}&srlimit=12&format=json`,
-        { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(5000) }
+        5000
       ),
     ]);
 
@@ -853,10 +871,7 @@ async function discoverCreatorRunAndOmnibus(
     const searchUrl = `https://${wiki}.fandom.com/api.php?action=query&list=search&srsearch=${encodeURIComponent(
       fullPhrase
     )}&srlimit=8&format=json`;
-    const srRes = await fetch(searchUrl, {
-      headers: { 'User-Agent': UA_HEADER },
-      signal: AbortSignal.timeout(5000),
-    });
+    const srRes = await upstreamFetch(searchUrl, 5000);
     if (!srRes.ok) return { seriesItems, omnibusItems };
     const srJson = (await srRes.json()) as {
       query?: { search?: Array<{ title?: string }> };
@@ -874,11 +889,11 @@ async function discoverCreatorRunAndOmnibus(
       }
     }
 
-    const pagesRes = await fetch(
+    const pagesRes = await upstreamFetch(
       `https://${wiki}.fandom.com/api.php?action=query&titles=${encodeURIComponent(
         Array.from(fetchTitles).slice(0, 12).join('|')
       )}&prop=revisions|pageimages&rvprop=content&pithumbsize=500&redirects=1&format=json`,
-      { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(5500) }
+      5500
     );
     if (!pagesRes.ok) return { seriesItems, omnibusItems };
     const pagesJson = (await pagesRes.json()) as {
@@ -1107,11 +1122,11 @@ async function hydrateWikiIssuePages(
     const windowChunks = chunks.slice(c, c + 3);
     const settled = await Promise.allSettled(
       windowChunks.map(async (chunk) => {
-        const res = await fetch(
+        const res = await upstreamFetch(
           `https://${wiki}.fandom.com/api.php?action=query&titles=${encodeURIComponent(
             chunk.items.map((item) => item.pageTitle).join('|')
           )}&prop=pageimages|revisions|categories&rvprop=content&cllimit=max&pithumbsize=320&redirects=1&format=json`,
-          { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(6000) }
+          6000
         );
         if (!res.ok) return [];
         const json = (await res.json()) as {
@@ -1207,11 +1222,11 @@ export async function fetchComicSeriesIssuesPayload(
   const seenNum = new Set<string>();
 
   try {
-    const catRes = await fetch(
+    const catRes = await upstreamFetch(
       `https://${wiki}.fandom.com/api.php?action=query&list=categorymembers&cmtitle=${encodeURIComponent(
         `Category:${baseVol}`
       )}&cmnamespace=0&cmlimit=180&format=json`,
-      { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(5500) }
+      5500
     );
     if (catRes.ok) {
       const json = (await catRes.json()) as {
@@ -1233,11 +1248,11 @@ export async function fetchComicSeriesIssuesPayload(
     }
 
     if (rawIssuePages.length === 0) {
-      const psRes = await fetch(
+      const psRes = await upstreamFetch(
         `https://${wiki}.fandom.com/api.php?action=query&list=prefixsearch&pssearch=${encodeURIComponent(
           `${baseVol} `
         )}&pslimit=100&format=json`,
-        { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(5500) }
+        5500
       );
       if (psRes.ok) {
         const json = (await psRes.json()) as {
@@ -1386,11 +1401,11 @@ export async function fetchComicCollectionIssuesPayload(params: {
 
       const searchResults = await Promise.allSettled(
         searchQueries.slice(0, 3).map(async (q) => {
-          const r = await fetch(
+          const r = await upstreamFetch(
             `https://${wiki}.fandom.com/api.php?action=query&list=search&srsearch=${encodeURIComponent(
               q
             )}&srlimit=6&format=json`,
-            { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(5000) }
+            5000
           );
           if (!r.ok) return [];
           const j = (await r.json()) as {
@@ -1419,11 +1434,11 @@ export async function fetchComicCollectionIssuesPayload(params: {
           }
         }
         const allProbes = Array.from(new Set([...probeList, ...extraFollowups])).slice(0, 14);
-        const pageRes = await fetch(
+        const pageRes = await upstreamFetch(
           `https://${wiki}.fandom.com/api.php?action=query&titles=${encodeURIComponent(
             allProbes.join('|')
           )}&prop=revisions&rvprop=content&redirects=1&format=json`,
-          { headers: { 'User-Agent': UA_HEADER }, signal: AbortSignal.timeout(5500) }
+          5500
         );
         if (pageRes.ok) {
           const pageJson = (await pageRes.json()) as {

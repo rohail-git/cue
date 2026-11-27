@@ -15,6 +15,7 @@ Cue separates media tracking into two layers so you never double-log progress:
 - **Automatic Bi-Directional Sync:** Logging individual comic issues (`#1–6`) automatically advances and checks off any TPBs or Omnibuses containing those issues — and checking off a collected edition retroactively marks its underlying issues read across your library.
 - **Catch-Up Prompt Sheet:** Marking a non-adjacent episode, chapter, or issue prompts to catch up all skipped prior atoms (with a per-title *"Never ask"* toggle).
 - **Finished Date Timeline Sync:** Backdating or editing a title's completion date automatically updates your **Your Days** heatmap grid, **16-Week Pulse**, **When You Engage**, and **Hall of Fame** timelines.
+- **Resilient Multi-API Adapters:** All external providers are normalized into unified Cue schemas with `Promise.allSettled` fault isolation, strict timeouts across client & serverless calls (`src/utils/safeFetch.ts`), and per-host `429` rate-limit cooldown/retry backoff.
 
 ---
 

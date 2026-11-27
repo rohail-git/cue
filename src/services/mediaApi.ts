@@ -38,6 +38,7 @@ import {
   type ResolvedImdbTitle,
 } from '../utils/mediaImport';
 import { extractSeriesTitleFromPageTitle, makeComicAtomicId } from '../utils/atoms';
+import { resilientFetch as fetch } from '../utils/safeFetch';
 
 export type SearchMediaFilter =
   | 'all'
