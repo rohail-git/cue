@@ -7,6 +7,7 @@ import { MediaImage } from '../components/MediaImage';
 import { MobileDomainBar, ScrollUpHistoryFeed } from '../components/ScrollUpHistoryFeed';
 import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { ReadFilter, ReadItem, UpcomingEntry } from '../types';
+import { getComicCollectionSummary } from '../utils/atoms';
 import { getComicEditionLabel, resolveComicEditionCover } from '../utils/editions';
 import { classifyReadFormat } from '../utils/mediaImport';
 import {
@@ -32,6 +33,7 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
 
   const [justBumped, setJustBumped] = useState<Record<string, boolean>>({});
   const [showFinished, setShowFinished] = useState(false);
+  const [comicShelfFilter, setComicShelfFilter] = useState<'all' | 'owned' | 'wishlist'>('all');
   const [selectMode, setSelectMode] = useState(false);
   const [selectedMap, setSelectedMap] = useState<
     Record<string, { kind: 'read'; id: string }>
@@ -62,6 +64,20 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
 
   const filter = state.settings.readFilter;
 
+  const comicShelfCounts = useMemo(() => {
+    let owned = 0;
+    let wishlist = 0;
+    for (const id of state.readOrder) {
+      const r = state.readItems[id];
+      const prog = state.readProgress[id];
+      if (!r || !prog?.bookmarked || r.format !== 'comic') continue;
+      const summary = getComicCollectionSummary(r, prog, state.atomicReadUnits);
+      if (summary.hasAnyOwned) owned += 1;
+      if (summary.hasAnyWishlist) wishlist += 1;
+    }
+    return { owned, wishlist };
+  }, [state.readOrder, state.readItems, state.readProgress, state.atomicReadUnits]);
+
   const handleQuickAdvance = (e: React.MouseEvent, readId: string) => {
     e.stopPropagation();
     if (justBumped[readId]) return;
@@ -89,7 +105,12 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     const all = state.readOrder
       .map((id) => state.readItems[id])
       .filter((r): r is ReadItem => Boolean(r) && Boolean(state.readProgress[r.id]?.bookmarked))
-      .filter((r) => (filter === 'all' ? true : r.format === filter));
+      .filter((r) => (filter === 'all' ? true : r.format === filter))
+      .filter((r) => {
+        if (filter !== 'comic' || comicShelfFilter === 'all') return true;
+        const summary = getComicCollectionSummary(r, state.readProgress[r.id], state.atomicReadUnits);
+        return comicShelfFilter === 'owned' ? summary.hasAnyOwned : summary.hasAnyWishlist;
+      });
 
     const sortItems = (list: ReadItem[]) =>
       [...list].sort((a, b) => {
@@ -139,7 +160,15 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
       caughtUpList: caughtUp,
       finishedList: done,
     };
-  }, [state.readOrder, state.readItems, state.readProgress, state.settings.sortBy, filter]);
+  }, [
+    state.readOrder,
+    state.readItems,
+    state.readProgress,
+    state.atomicReadUnits,
+    state.settings.sortBy,
+    filter,
+    comicShelfFilter,
+  ]);
 
   const upcomingReads = useMemo(() => {
     const items = state.upcoming.filter((u) => u.domain === 'read');
@@ -216,15 +245,19 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
     const upIssueLabel =
       upMeta?.issueLabel ? `Issue ${upMeta.issueLabel}` : stats.nextUpcomingUnit ? `Issue #${stats.nextUpcomingUnit}` : 'Next issue';
     const readDenom = stats.unreleasedCount > 0 ? stats.releasedTotal : stats.total;
+    const collectionSummary = getComicCollectionSummary(item, prog, state.atomicReadUnits);
     const secondaryMeta = [
       item.comicPublisher || item.creator,
       editionLabel || item.comicRunLabel || null,
+      collectionSummary.badgeText,
     ]
       .filter(Boolean)
       .join(' · ');
 
     if (isPosterLayout) {
       const isSel = Boolean(selectedMap[item.id]);
+      const posterCollectTag =
+        collectionSummary.badgeText === 'Wishlist' ? 'Want' : collectionSummary.badgeText;
       return (
         <div
           key={item.id}
@@ -251,6 +284,11 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
               alt={item.title}
               className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
             />
+            {!selectMode && posterCollectTag && (
+              <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-black/75 border border-read/40 text-[9.5px] font-semibold text-read leading-none">
+                {posterCollectTag}
+              </span>
+            )}
             {selectMode ? (
               <span
                 className={`absolute top-2 right-2 h-7 w-7 rounded-full border flex items-center justify-center ${
@@ -426,41 +464,78 @@ export function ReadView({ calendarMode = false }: { calendarMode?: boolean }) {
         }
       >
         {!calendarMode && (
-          <div className="flex items-center justify-between gap-2 mb-5 overflow-x-auto no-scrollbar">
-            <div className="flex items-center gap-2">
-              {filterTabs.map((t) => {
-                const active = filter === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => updateSettings({ readFilter: t.id })}
-                    className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
-                      active
-                        ? 'bg-brand border-brand text-brand-ink'
-                        : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
-                    }`}
-                  >
-                    {t.label}
-                  </button>
-                );
-              })}
+          <div className="mb-5 space-y-2.5">
+            <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
+              <div className="flex items-center gap-2">
+                {filterTabs.map((t) => {
+                  const active = filter === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => {
+                        updateSettings({ readFilter: t.id });
+                        if (t.id !== 'comic') setComicShelfFilter('all');
+                      }}
+                      className={`px-4 py-1.5 rounded-full text-xs font-semibold border shrink-0 transition-colors ${
+                        active
+                          ? 'bg-brand border-brand text-brand-ink'
+                          : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectMode((v) => !v);
+                  setSelectedMap({});
+                }}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 inline-flex items-center gap-1.5 transition-colors ${
+                  selectMode
+                    ? 'bg-white border-white text-[#131519]'
+                    : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
+                }`}
+              >
+                <CheckSquare className="w-3.5 h-3.5" />
+                <span>{selectMode ? 'Cancel' : 'Select'}</span>
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setSelectMode((v) => !v);
-                setSelectedMap({});
-              }}
-              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border shrink-0 inline-flex items-center gap-1.5 transition-colors ${
-                selectMode
-                  ? 'bg-white border-white text-[#131519]'
-                  : 'bg-surface border-white/10 text-ink-dim hover:text-ink'
-              }`}
-            >
-              <CheckSquare className="w-3.5 h-3.5" />
-              <span>{selectMode ? 'Cancel' : 'Select'}</span>
-            </button>
+
+            {filter === 'comic' && (comicShelfCounts.owned > 0 || comicShelfCounts.wishlist > 0) && (
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                {(
+                  [
+                    { id: 'all', label: 'All comics' },
+                    ...(comicShelfCounts.owned > 0
+                      ? [{ id: 'owned' as const, label: `Owned (${comicShelfCounts.owned})` }]
+                      : []),
+                    ...(comicShelfCounts.wishlist > 0
+                      ? [{ id: 'wishlist' as const, label: `Wishlist (${comicShelfCounts.wishlist})` }]
+                      : []),
+                  ] as Array<{ id: 'all' | 'owned' | 'wishlist'; label: string }>
+                ).map((sub) => {
+                  const active = comicShelfFilter === sub.id;
+                  return (
+                    <button
+                      key={sub.id}
+                      type="button"
+                      onClick={() => setComicShelfFilter(sub.id)}
+                      className={`px-3 py-1 rounded-full text-[11px] font-semibold border shrink-0 transition-colors ${
+                        active
+                          ? 'border-read/60 bg-read/15 text-read'
+                          : 'border-white/[0.07] bg-surface text-ink-dim hover:text-ink'
+                      }`}
+                    >
+                      {sub.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 

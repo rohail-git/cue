@@ -15,6 +15,7 @@ import { MediaImage } from '../components/MediaImage';
 import { RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { GameItem, Movie, ReadItem, Show } from '../types';
+import { getComicCollectionSummary } from '../utils/atoms';
 import { evaluateCustomListProgress } from '../utils/containers';
 import { resolveComicEditionCover } from '../utils/editions';
 import { getReadStats, getShowStats } from '../utils/stats';
@@ -41,7 +42,7 @@ export function LibraryGridView({
     rateCollection,
     setCollectionFinishedDate,
   } = useCueStore();
-  const [filter, setFilter] = useState<'all' | 'active' | 'queued' | 'done'>('all');
+  const [filter, setFilter] = useState<'all' | 'active' | 'queued' | 'done' | 'owned' | 'wishlist'>('all');
   const [stepSeriesDraft, setStepSeriesDraft] = useState('');
   const [stepNumDraft, setStepNumDraft] = useState('');
   const [selectMode, setSelectMode] = useState(false);
@@ -606,16 +607,42 @@ export function LibraryGridView({
   }
 
   if (mode === 'read') {
-    const items = state.readOrder
+    const allBookmarked = state.readOrder
       .map((id) => state.readItems[id])
-      .filter((r): r is ReadItem => Boolean(r) && Boolean(state.readProgress[r.id]?.bookmarked))
-      .filter((r) => {
-        if (filter === 'all') return true;
-        const st = getReadStats(r, state.readProgress[r.id]);
-        if (filter === 'done') return st.isFinished;
-        if (filter === 'active') return !st.isFinished && st.current > 0;
-        return st.current === 0;
-      });
+      .filter((r): r is ReadItem => Boolean(r) && Boolean(state.readProgress[r.id]?.bookmarked));
+
+    let ownedComicCount = 0;
+    let wishlistComicCount = 0;
+    for (const r of allBookmarked) {
+      const col = getComicCollectionSummary(r, state.readProgress[r.id], state.atomicReadUnits);
+      if (col.hasAnyOwned) ownedComicCount += 1;
+      if (col.hasAnyWishlist) wishlistComicCount += 1;
+    }
+
+    const items = allBookmarked.filter((r) => {
+      if (filter === 'all') return true;
+      if (filter === 'owned') {
+        return getComicCollectionSummary(r, state.readProgress[r.id], state.atomicReadUnits)
+          .hasAnyOwned;
+      }
+      if (filter === 'wishlist') {
+        return getComicCollectionSummary(r, state.readProgress[r.id], state.atomicReadUnits)
+          .hasAnyWishlist;
+      }
+      const st = getReadStats(r, state.readProgress[r.id]);
+      if (filter === 'done') return st.isFinished;
+      if (filter === 'active') return !st.isFinished && st.current > 0;
+      return st.current === 0;
+    });
+
+    const readFilters = [
+      { id: 'all', label: 'All' },
+      { id: 'active', label: 'Reading' },
+      { id: 'queued', label: 'Want to read' },
+      { id: 'done', label: 'Finished' },
+      ...(ownedComicCount > 0 ? [{ id: 'owned', label: `Owned (${ownedComicCount})` }] : []),
+      ...(wishlistComicCount > 0 ? [{ id: 'wishlist', label: `Wishlist (${wishlistComicCount})` }] : []),
+    ];
 
     return (
       <div className="min-h-dvh pb-20 pt-4 md:pt-24 px-4 sm:px-6 lg:px-10 max-w-5xl mx-auto">
@@ -634,12 +661,7 @@ export function LibraryGridView({
         </div>
         <div className="flex items-center justify-between gap-2 mb-5">
           <div className="flex gap-2 overflow-x-auto no-scrollbar">
-            {[
-              { id: 'all', label: 'All' },
-              { id: 'active', label: 'Reading' },
-              { id: 'queued', label: 'Want to read' },
-              { id: 'done', label: 'Finished' },
-            ].map((f) => (
+            {readFilters.map((f) => (
               <button
                 key={f.id}
                 type="button"
@@ -673,6 +695,13 @@ export function LibraryGridView({
         <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
           {items.map((item) => {
             const st = getReadStats(item, state.readProgress[item.id]);
+            const colSummary = getComicCollectionSummary(
+              item,
+              state.readProgress[item.id],
+              state.atomicReadUnits
+            );
+            const posterCollectTag =
+              colSummary.badgeText === 'Wishlist' ? 'Want' : colSummary.badgeText;
             const isSel = Boolean(selectedMap[`read:${item.id}`]);
             return (
               <button
@@ -703,6 +732,11 @@ export function LibraryGridView({
                     alt={item.title}
                     className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
                   />
+                  {!selectMode && posterCollectTag && (
+                    <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-black/75 border border-read/40 text-[9.5px] font-semibold text-read leading-none">
+                      {posterCollectTag}
+                    </span>
+                  )}
                   {selectMode && (
                     <span
                       className={`absolute top-2 right-2 h-6 w-6 rounded-full border flex items-center justify-center ${

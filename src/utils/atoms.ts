@@ -1,6 +1,7 @@
 import type {
   AtomicReadRecord,
   ComicIssueMeta,
+  ComicOwnershipStatus,
   CueStoreState,
   ReadItem,
   ReadProgress,
@@ -93,6 +94,13 @@ export interface AtomicDateDelta {
   readAt: string | undefined;
 }
 
+export interface AtomicOwnershipDelta {
+  atomicId: string;
+  ownership: ComicOwnershipStatus | undefined;
+  variantNote?: string;
+  updateVariantNote?: boolean;
+}
+
 export interface SyncedContainerSummary {
   readId: string;
   title: string;
@@ -121,7 +129,9 @@ function buildUpdatedProgressForSlots(
   activeSlots: number[],
   nextUnitRatings: Record<number, number> | undefined,
   nextUnitFinishedAt: Record<number, string> | undefined,
-  nowIso: string
+  nowIso: string,
+  nextUnitOwnership?: Record<number, ComicOwnershipStatus>,
+  nextUnitVariantNotes?: Record<number, string>
 ): ReadProgress {
   const total = Math.max(1, item.totalUnits);
   const highSlots = (prev?.completedUnits || []).filter((n) => n > total);
@@ -145,17 +155,30 @@ function buildUpdatedProgressForSlots(
     finishedAt: finished ? prev?.finishedAt || nowIso : undefined,
     ...(nextUnitRatings ? { unitRatings: nextUnitRatings } : {}),
     ...(nextUnitFinishedAt ? { unitFinishedAt: nextUnitFinishedAt } : {}),
+    ...(nextUnitOwnership ? { unitOwnership: nextUnitOwnership } : {}),
+    ...(nextUnitVariantNotes ? { unitVariantNotes: nextUnitVariantNotes } : {}),
   };
 }
 
-/** Synchronizes atomic comic read statuses, ratings, and finish dates across all overlapping Smart Containers. */
+function hasAnyAtomicPayload(rec?: AtomicReadRecord): boolean {
+  if (!rec) return false;
+  return Boolean(
+    rec.count > 0 ||
+      (typeof rec.rating === 'number' && rec.rating > 0) ||
+      rec.ownership ||
+      rec.variantNote
+  );
+}
+
+/** Synchronizes atomic comic read statuses, ratings, ownership, and finish dates across all overlapping Smart Containers. */
 export function syncAtomicReadUnitsAcrossState(
   prev: CueStoreState,
   sourceReadId: string,
   unitDeltas: AtomicDelta[],
   ratingDeltas: AtomicRatingDelta[] = [],
   nowIso: string = new Date().toISOString(),
-  dateDeltas: AtomicDateDelta[] = []
+  dateDeltas: AtomicDateDelta[] = [],
+  ownershipDeltas: AtomicOwnershipDelta[] = []
 ): {
   atomicReadUnits: Record<string, AtomicReadRecord>;
   readProgress: Record<string, ReadProgress>;
@@ -175,14 +198,17 @@ export function syncAtomicReadUnitsAcrossState(
         seriesTitle: d.seriesTitle || cur?.seriesTitle,
         issueLabel: d.issueLabel || cur?.issueLabel,
       };
-    } else if (cur?.rating) {
-      nextAtoms[d.atomicId] = {
+    } else if (cur) {
+      const updated: AtomicReadRecord = {
         ...cur,
         count: 0,
         readAt: undefined,
       };
-    } else {
-      delete nextAtoms[d.atomicId];
+      if (hasAnyAtomicPayload(updated)) {
+        nextAtoms[d.atomicId] = updated;
+      } else {
+        delete nextAtoms[d.atomicId];
+      }
     }
   }
 
@@ -199,7 +225,7 @@ export function syncAtomicReadUnitsAcrossState(
     } else if (cur) {
       const copy = { ...cur };
       delete copy.readAt;
-      if (copy.count > 0 || (typeof copy.rating === 'number' && copy.rating > 0)) {
+      if (hasAnyAtomicPayload(copy)) {
         nextAtoms[d.atomicId] = copy;
       } else {
         delete nextAtoms[d.atomicId];
@@ -218,9 +244,9 @@ export function syncAtomicReadUnitsAcrossState(
         rating: r.rating,
       };
     } else if (cur) {
-      if (cur.count > 0) {
-        const copy = { ...cur };
-        delete copy.rating;
+      const copy = { ...cur };
+      delete copy.rating;
+      if (hasAnyAtomicPayload(copy)) {
         nextAtoms[r.atomicId] = copy;
       } else {
         delete nextAtoms[r.atomicId];
@@ -228,10 +254,38 @@ export function syncAtomicReadUnitsAcrossState(
     }
   }
 
+  const ownershipMap = new Map<string, AtomicOwnershipDelta>();
+  for (const o of ownershipDeltas) {
+    if (!o.atomicId) continue;
+    ownershipMap.set(o.atomicId, o);
+    const cur = nextAtoms[o.atomicId] || { count: 0 };
+    const copy: AtomicReadRecord = { ...cur };
+    if (o.ownership) {
+      copy.ownership = o.ownership;
+    } else {
+      delete copy.ownership;
+    }
+    if (o.updateVariantNote) {
+      const cleanNote = o.variantNote?.trim();
+      if (cleanNote) copy.variantNote = cleanNote;
+      else delete copy.variantNote;
+    }
+    if (hasAnyAtomicPayload(copy)) {
+      nextAtoms[o.atomicId] = copy;
+    } else {
+      delete nextAtoms[o.atomicId];
+    }
+  }
+
   const nextReadProgress: Record<string, ReadProgress> = { ...prev.readProgress };
   const syncedContainers: SyncedContainerSummary[] = [];
 
-  if (statusMap.size === 0 && ratingMap.size === 0 && dateMap.size === 0) {
+  if (
+    statusMap.size === 0 &&
+    ratingMap.size === 0 &&
+    dateMap.size === 0 &&
+    ownershipMap.size === 0
+  ) {
     return {
       atomicReadUnits: nextAtoms,
       readProgress: nextReadProgress,
@@ -250,9 +304,13 @@ export function syncAtomicReadUnitsAcrossState(
     let slotsChanged = false;
     let ratingsChanged = false;
     let datesChanged = false;
+    let ownershipChanged = false;
+    let notesChanged = false;
 
     const nextRatings = otherPrevProg?.unitRatings ? { ...otherPrevProg.unitRatings } : undefined;
     const nextDates = otherPrevProg?.unitFinishedAt ? { ...otherPrevProg.unitFinishedAt } : undefined;
+    const prevUnitOwn = otherPrevProg?.unitOwnership;
+    const prevUnitNotes = otherPrevProg?.unitVariantNotes;
 
     const total = Math.max(1, otherItem.totalUnits);
     for (let u = 1; u <= total; u += 1) {
@@ -290,9 +348,24 @@ export function syncAtomicReadUnitsAcrossState(
           ratingsChanged = true;
         }
       }
+
+      if (ownershipMap.has(atomId)) {
+        const delta = ownershipMap.get(atomId)!;
+        if (prevUnitOwn?.[u] !== delta.ownership) {
+          ownershipChanged = true;
+        }
+        if (delta.updateVariantNote) {
+          const targetNote = delta.variantNote?.trim() || undefined;
+          if ((prevUnitNotes?.[u] || undefined) !== targetNote) {
+            notesChanged = true;
+          }
+        }
+      }
     }
 
-    if (!slotsChanged && !ratingsChanged && !datesChanged) continue;
+    if (!slotsChanged && !ratingsChanged && !datesChanged && !ownershipChanged && !notesChanged) {
+      continue;
+    }
 
     let finalRatings = otherPrevProg?.unitRatings ? { ...otherPrevProg.unitRatings } : undefined;
     if (ratingsChanged) {
@@ -334,6 +407,27 @@ export function syncAtomicReadUnitsAcrossState(
       }
     }
 
+    let finalUnitOwn = prevUnitOwn ? { ...prevUnitOwn } : undefined;
+    let finalUnitNotes = prevUnitNotes ? { ...prevUnitNotes } : undefined;
+    if (ownershipChanged || notesChanged) {
+      if (ownershipChanged && !finalUnitOwn) finalUnitOwn = {};
+      if (notesChanged && !finalUnitNotes) finalUnitNotes = {};
+      for (let u = 1; u <= total; u += 1) {
+        const atomId = getComicIssueAtomicId(otherItem.issueDetails[u]);
+        if (!atomId || !ownershipMap.has(atomId)) continue;
+        const delta = ownershipMap.get(atomId)!;
+        if (ownershipChanged && finalUnitOwn) {
+          if (delta.ownership) finalUnitOwn[u] = delta.ownership;
+          else delete finalUnitOwn[u];
+        }
+        if (notesChanged && delta.updateVariantNote && finalUnitNotes) {
+          const cleanNote = delta.variantNote?.trim();
+          if (cleanNote) finalUnitNotes[u] = cleanNote;
+          else delete finalUnitNotes[u];
+        }
+      }
+    }
+
     const updatedActive = [...slotSet].sort((a, b) => a - b);
     let updatedProg = buildUpdatedProgressForSlots(
       otherItem,
@@ -341,7 +435,9 @@ export function syncAtomicReadUnitsAcrossState(
       updatedActive,
       finalRatings,
       finalDates,
-      nowIso
+      nowIso,
+      finalUnitOwn,
+      finalUnitNotes
     );
     if (ratingsChanged) {
       const avg = getReadUnitsAverage(updatedProg);
@@ -373,7 +469,7 @@ export function syncAtomicReadUnitsAcrossState(
   };
 }
 
-/** Builds a lookup of already-read atomic IDs, ratings, and finish dates from the central ledger and existing library items. */
+/** Builds a lookup of already-read atomic IDs, ratings, ownership, and finish dates from the central ledger and existing library items. */
 export function collectKnownCompletedAtoms(
   state: CueStoreState,
   excludeReadId?: string
@@ -381,15 +477,21 @@ export function collectKnownCompletedAtoms(
   completedIds: Set<string>;
   ratingsByAtom: Map<string, number>;
   datesByAtom: Map<string, string>;
+  ownershipByAtom: Map<string, ComicOwnershipStatus>;
+  variantNotesByAtom: Map<string, string>;
 } {
   const completedIds = new Set<string>();
   const ratingsByAtom = new Map<string, number>();
   const datesByAtom = new Map<string, string>();
+  const ownershipByAtom = new Map<string, ComicOwnershipStatus>();
+  const variantNotesByAtom = new Map<string, string>();
 
   for (const [atomId, rec] of Object.entries(state.atomicReadUnits || {})) {
     if (rec.count > 0) completedIds.add(atomId);
     if (typeof rec.rating === 'number' && rec.rating > 0) ratingsByAtom.set(atomId, rec.rating);
     if (rec.readAt) datesByAtom.set(atomId, rec.readAt);
+    if (rec.ownership) ownershipByAtom.set(atomId, rec.ownership);
+    if (rec.variantNote) variantNotesByAtom.set(atomId, rec.variantNote);
   }
 
   for (const id of state.readOrder) {
@@ -415,12 +517,30 @@ export function collectKnownCompletedAtoms(
         }
       }
     }
+    if (prog.unitOwnership) {
+      for (const [slotStr, own] of Object.entries(prog.unitOwnership)) {
+        const u = Number(slotStr);
+        const atomId = getComicIssueAtomicId(item.issueDetails[u]);
+        if (atomId && own && !ownershipByAtom.has(atomId)) {
+          ownershipByAtom.set(atomId, own);
+        }
+      }
+    }
+    if (prog.unitVariantNotes) {
+      for (const [slotStr, note] of Object.entries(prog.unitVariantNotes)) {
+        const u = Number(slotStr);
+        const atomId = getComicIssueAtomicId(item.issueDetails[u]);
+        if (atomId && note && !variantNotesByAtom.has(atomId)) {
+          variantNotesByAtom.set(atomId, note);
+        }
+      }
+    }
   }
 
-  return { completedIds, ratingsByAtom, datesByAtom };
+  return { completedIds, ratingsByAtom, datesByAtom, ownershipByAtom, variantNotesByAtom };
 }
 
-/** Two-way reconciles a newly hydrated comic item with existing completed atomic bricks in the store. */
+/** Two-way reconciles a newly hydrated comic item with existing completed/collected atomic bricks in the store. */
 export function reconcileHydratedComicItemWithAtoms(
   state: CueStoreState,
   readId: string,
@@ -440,7 +560,13 @@ export function reconcileHydratedComicItemWithAtoms(
   const nowIso = new Date().toISOString();
   const prevProg = state.readProgress[readId];
   const localSlots = new Set(getActiveCompletedSlots(hydratedItem, prevProg));
-  const { completedIds, ratingsByAtom, datesByAtom } = collectKnownCompletedAtoms(state, readId);
+  const {
+    completedIds,
+    ratingsByAtom,
+    datesByAtom,
+    ownershipByAtom,
+    variantNotesByAtom,
+  } = collectKnownCompletedAtoms(state, readId);
   let pulledChanges = false;
   let pulledRatings = false;
 
@@ -448,6 +574,7 @@ export function reconcileHydratedComicItemWithAtoms(
   const deltasToPush: AtomicDelta[] = [];
   const ratingDeltasToPush: AtomicRatingDelta[] = [];
   const dateDeltasToPush: AtomicDateDelta[] = [];
+  const ownershipDeltasToPush: AtomicOwnershipDelta[] = [];
 
   for (let u = 1; u <= total; u += 1) {
     const meta = details[u];
@@ -476,6 +603,22 @@ export function reconcileHydratedComicItemWithAtoms(
       pulledChanges = true;
     }
 
+    const localOwn = prevProg?.unitOwnership?.[u];
+    const localVarNote = prevProg?.unitVariantNotes?.[u];
+    if (localOwn && !ownershipByAtom.has(atomId)) {
+      ownershipDeltasToPush.push({
+        atomicId: atomId,
+        ownership: localOwn,
+        variantNote: localVarNote,
+        updateVariantNote: Boolean(localVarNote),
+      });
+    } else if (!localOwn && ownershipByAtom.has(atomId)) {
+      pulledChanges = true;
+    }
+    if (!localVarNote && variantNotesByAtom.has(atomId)) {
+      pulledChanges = true;
+    }
+
     if (!prevProg?.unitRatings?.[u] && ratingsByAtom.has(atomId)) {
       pulledChanges = true;
       pulledRatings = true;
@@ -489,6 +632,10 @@ export function reconcileHydratedComicItemWithAtoms(
   if (pulledChanges && prevProg) {
     let hydratedRatings = prevProg.unitRatings ? { ...prevProg.unitRatings } : undefined;
     let hydratedDates = prevProg.unitFinishedAt ? { ...prevProg.unitFinishedAt } : undefined;
+    let hydratedOwnership = prevProg.unitOwnership ? { ...prevProg.unitOwnership } : undefined;
+    let hydratedVariantNotes = prevProg.unitVariantNotes
+      ? { ...prevProg.unitVariantNotes }
+      : undefined;
     for (let u = 1; u <= total; u += 1) {
       const atomId = getComicIssueAtomicId(details[u]);
       if (!atomId) continue;
@@ -500,6 +647,14 @@ export function reconcileHydratedComicItemWithAtoms(
         if (!hydratedDates) hydratedDates = {};
         hydratedDates[u] = datesByAtom.get(atomId)!;
       }
+      if (!hydratedOwnership?.[u] && ownershipByAtom.has(atomId)) {
+        if (!hydratedOwnership) hydratedOwnership = {};
+        hydratedOwnership[u] = ownershipByAtom.get(atomId)!;
+      }
+      if (!hydratedVariantNotes?.[u] && variantNotesByAtom.has(atomId)) {
+        if (!hydratedVariantNotes) hydratedVariantNotes = {};
+        hydratedVariantNotes[u] = variantNotesByAtom.get(atomId)!;
+      }
     }
     let nextProg = buildUpdatedProgressForSlots(
       hydratedItem,
@@ -507,7 +662,9 @@ export function reconcileHydratedComicItemWithAtoms(
       [...localSlots].sort((a, b) => a - b),
       hydratedRatings,
       hydratedDates,
-      nowIso
+      nowIso,
+      hydratedOwnership,
+      hydratedVariantNotes
     );
     if (pulledRatings) {
       const avg = getReadUnitsAverage(nextProg);
@@ -521,7 +678,12 @@ export function reconcileHydratedComicItemWithAtoms(
     nextProgressMap[readId] = nextProg;
   }
 
-  if (deltasToPush.length === 0 && ratingDeltasToPush.length === 0 && dateDeltasToPush.length === 0) {
+  if (
+    deltasToPush.length === 0 &&
+    ratingDeltasToPush.length === 0 &&
+    dateDeltasToPush.length === 0 &&
+    ownershipDeltasToPush.length === 0
+  ) {
     return {
       atomicReadUnits: state.atomicReadUnits || {},
       readProgress: nextProgressMap,
@@ -539,11 +701,78 @@ export function reconcileHydratedComicItemWithAtoms(
     deltasToPush,
     ratingDeltasToPush,
     nowIso,
-    dateDeltasToPush
+    dateDeltasToPush,
+    ownershipDeltasToPush
   );
   return {
     atomicReadUnits: synced.atomicReadUnits,
     readProgress: synced.readProgress,
+  };
+}
+
+export interface ComicCollectionSummary {
+  isOwned: boolean;
+  isWishlist: boolean;
+  ownedUnits: number;
+  wishlistUnits: number;
+  hasAnyOwned: boolean;
+  hasAnyWishlist: boolean;
+  badgeText: string | null;
+}
+
+/** Summarizes subtle comic collecting status across container-level, edition-level, and per-issue atoms. */
+export function getComicCollectionSummary(
+  item: ReadItem,
+  prog?: ReadProgress,
+  atomicReadUnits?: Record<string, AtomicReadRecord>
+): ComicCollectionSummary {
+  if (item.format !== 'comic') {
+    return {
+      isOwned: false,
+      isWishlist: false,
+      ownedUnits: 0,
+      wishlistUnits: 0,
+      hasAnyOwned: false,
+      hasAnyWishlist: false,
+      badgeText: null,
+    };
+  }
+
+  const total = Math.max(1, item.totalUnits);
+  let ownedUnits = 0;
+  let wishlistUnits = 0;
+  for (let u = 1; u <= total; u += 1) {
+    const direct = prog?.unitOwnership?.[u];
+    const atomId = getComicIssueAtomicId(item.issueDetails?.[u]);
+    const own = direct || (atomId ? atomicReadUnits?.[atomId]?.ownership : undefined);
+    if (own === 'owned') ownedUnits += 1;
+    else if (own === 'wishlist') wishlistUnits += 1;
+  }
+
+  const isOwned = prog?.ownership === 'owned' || (prog?.ownedEditionIds?.length || 0) > 0;
+  const isWishlist = prog?.ownership === 'wishlist' || (prog?.wishlistEditionIds?.length || 0) > 0;
+  const hasAnyOwned = isOwned || ownedUnits > 0;
+  const hasAnyWishlist = isWishlist || wishlistUnits > 0;
+
+  let badgeText: string | null = null;
+  if (item.comicKind === 'series' && ownedUnits > 0 && prog?.ownership !== 'owned') {
+    badgeText = `${ownedUnits}/${total} owned`;
+  } else if (isOwned) {
+    badgeText = 'Owned';
+  } else if (isWishlist) {
+    badgeText = 'Wishlist';
+  } else if (wishlistUnits > 0) {
+    badgeText = `${wishlistUnits} wanted`;
+  }
+
+  return {
+    isOwned,
+    isWishlist,
+    ownedUnits,
+    wishlistUnits,
+    hasAnyOwned,
+    hasAnyWishlist,
+    badgeText,
   };
 }
 

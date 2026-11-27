@@ -21,6 +21,7 @@ import type {
   ComicEditionId,
   ComicEditionRecord,
   ComicIssueMeta,
+  ComicOwnershipStatus,
   CompletionRun,
   CueStoreState,
   CustomListStep,
@@ -66,6 +67,7 @@ import {
 import { lookupKnownGameChapters } from '../utils/gameChapters';
 import {
   type AtomicDelta,
+  type AtomicOwnershipDelta,
   type SyncedContainerSummary,
   detectNonAdjacentPriorAtoms,
   extractReadItemIsbn,
@@ -350,6 +352,23 @@ interface CueContextValue {
     readId: string,
     unitNumber: number,
     dateYmd: string | undefined
+  ) => void;
+  setReadOwnership: (readId: string, ownership: ComicOwnershipStatus | undefined) => void;
+  setReadCollectionNote: (readId: string, note: string) => void;
+  setReadUnitOwnership: (
+    readId: string,
+    unitNumber: number,
+    ownership: ComicOwnershipStatus | undefined
+  ) => void;
+  setReadUnitVariantNote: (readId: string, unitNumber: number, note: string) => void;
+  setAllReadUnitsOwnership: (
+    readId: string,
+    ownership: ComicOwnershipStatus | undefined
+  ) => void;
+  toggleComicEditionOwnership: (
+    readId: string,
+    editionId: string,
+    target: ComicOwnershipStatus
   ) => void;
   setReadMood: (readId: string, mood: PersonalMood | undefined) => void;
   setReadEdition: (readId: string, edition: ComicEditionId) => void;
@@ -3046,6 +3065,289 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         };
       });
       showToast(normalizedIso ? `Updated ${labelForToast} date` : `Cleared ${labelForToast} date`);
+    },
+    [showToast]
+  );
+
+  const setReadOwnership = useCallback(
+    (readId: string, ownership: ComicOwnershipStatus | undefined) => {
+      commitState((prev) => {
+        const existing = prev.readProgress[readId];
+        return {
+          ...prev,
+          readProgress: {
+            ...prev.readProgress,
+            [readId]: {
+              ...(existing || {}),
+              status: existing?.status || 'want_to_read',
+              currentUnit: existing?.currentUnit || 0,
+              rereadCount: existing?.rereadCount || 0,
+              bookmarked: existing?.bookmarked ?? true,
+              ownership,
+            },
+          },
+        };
+      });
+      showToast(
+        ownership === 'owned'
+          ? 'Added to comic collection'
+          : ownership === 'wishlist'
+            ? 'Added to comic wishlist'
+            : 'Removed from comic collection'
+      );
+    },
+    [showToast]
+  );
+
+  const setReadCollectionNote = useCallback(
+    (readId: string, note: string) => {
+      const clean = note.trim();
+      commitState((prev) => {
+        const existing = prev.readProgress[readId];
+        return {
+          ...prev,
+          readProgress: {
+            ...prev.readProgress,
+            [readId]: {
+              ...(existing || {}),
+              status: existing?.status || 'want_to_read',
+              currentUnit: existing?.currentUnit || 0,
+              rereadCount: existing?.rereadCount || 0,
+              bookmarked: existing?.bookmarked ?? true,
+              collectionNote: clean || undefined,
+            },
+          },
+        };
+      });
+      showToast(clean ? 'Saved shelf note' : 'Cleared shelf note');
+    },
+    [showToast]
+  );
+
+  const setReadUnitOwnership = useCallback(
+    (readId: string, unitNumber: number, ownership: ComicOwnershipStatus | undefined) => {
+      commitState((prev) => {
+        const item = prev.readItems[readId];
+        if (!item || unitNumber < 1 || unitNumber > item.totalUnits) return prev;
+        const existing = prev.readProgress[readId];
+        const nextUnitOwnership = { ...(existing?.unitOwnership || {}) };
+        if (ownership) {
+          nextUnitOwnership[unitNumber] = ownership;
+        } else {
+          delete nextUnitOwnership[unitNumber];
+        }
+        const rawNextState: CueStoreState = {
+          ...prev,
+          readProgress: {
+            ...prev.readProgress,
+            [readId]: {
+              ...(existing || {}),
+              status: existing?.status || 'want_to_read',
+              currentUnit: existing?.currentUnit || 0,
+              rereadCount: existing?.rereadCount || 0,
+              bookmarked: existing?.bookmarked ?? true,
+              unitOwnership: nextUnitOwnership,
+            },
+          },
+        };
+        const atomId = getComicIssueAtomicId(item.issueDetails?.[unitNumber]);
+        if (!atomId) return rawNextState;
+        const synced = syncAtomicReadUnitsAcrossState(
+          rawNextState,
+          readId,
+          [],
+          [],
+          new Date().toISOString(),
+          [],
+          [{ atomicId: atomId, ownership }]
+        );
+        return {
+          ...rawNextState,
+          atomicReadUnits: synced.atomicReadUnits,
+          readProgress: synced.readProgress,
+        };
+      });
+    },
+    []
+  );
+
+  const setReadUnitVariantNote = useCallback(
+    (readId: string, unitNumber: number, note: string) => {
+      const clean = note.trim();
+      commitState((prev) => {
+        const item = prev.readItems[readId];
+        if (!item || unitNumber < 1 || unitNumber > item.totalUnits) return prev;
+        const existing = prev.readProgress[readId];
+        const nextNotes = { ...(existing?.unitVariantNotes || {}) };
+        if (clean) {
+          nextNotes[unitNumber] = clean;
+        } else {
+          delete nextNotes[unitNumber];
+        }
+        const rawNextState: CueStoreState = {
+          ...prev,
+          readProgress: {
+            ...prev.readProgress,
+            [readId]: {
+              ...(existing || {}),
+              status: existing?.status || 'want_to_read',
+              currentUnit: existing?.currentUnit || 0,
+              rereadCount: existing?.rereadCount || 0,
+              bookmarked: existing?.bookmarked ?? true,
+              unitVariantNotes: nextNotes,
+            },
+          },
+        };
+        const atomId = getComicIssueAtomicId(item.issueDetails?.[unitNumber]);
+        if (!atomId) return rawNextState;
+        const synced = syncAtomicReadUnitsAcrossState(
+          rawNextState,
+          readId,
+          [],
+          [],
+          new Date().toISOString(),
+          [],
+          [
+            {
+              atomicId: atomId,
+              ownership: existing?.unitOwnership?.[unitNumber],
+              variantNote: clean || undefined,
+              updateVariantNote: true,
+            },
+          ]
+        );
+        return {
+          ...rawNextState,
+          atomicReadUnits: synced.atomicReadUnits,
+          readProgress: synced.readProgress,
+        };
+      });
+      showToast(clean ? 'Saved variant note' : 'Cleared variant note');
+    },
+    [showToast]
+  );
+
+  const setAllReadUnitsOwnership = useCallback(
+    (readId: string, ownership: ComicOwnershipStatus | undefined) => {
+      commitState((prev) => {
+        const item = prev.readItems[readId];
+        if (!item) return prev;
+        const existing = prev.readProgress[readId];
+        const total = Math.max(1, item.totalUnits);
+        const nextUnitOwnership: Record<number, ComicOwnershipStatus> = {};
+        const ownershipDeltas: AtomicOwnershipDelta[] = [];
+
+        for (let u = 1; u <= total; u += 1) {
+          if (ownership) nextUnitOwnership[u] = ownership;
+          const atomId = getComicIssueAtomicId(item.issueDetails?.[u]);
+          if (atomId) {
+            ownershipDeltas.push({ atomicId: atomId, ownership });
+          }
+        }
+
+        const rawNextState: CueStoreState = {
+          ...prev,
+          readProgress: {
+            ...prev.readProgress,
+            [readId]: {
+              ...(existing || {}),
+              status: existing?.status || 'want_to_read',
+              currentUnit: existing?.currentUnit || 0,
+              rereadCount: existing?.rereadCount || 0,
+              bookmarked: existing?.bookmarked ?? true,
+              ownership,
+              unitOwnership: nextUnitOwnership,
+            },
+          },
+        };
+
+        if (ownershipDeltas.length === 0) return rawNextState;
+        const synced = syncAtomicReadUnitsAcrossState(
+          rawNextState,
+          readId,
+          [],
+          [],
+          new Date().toISOString(),
+          [],
+          ownershipDeltas
+        );
+        return {
+          ...rawNextState,
+          atomicReadUnits: synced.atomicReadUnits,
+          readProgress: synced.readProgress,
+        };
+      });
+      showToast(
+        ownership === 'owned'
+          ? 'Marked all issues owned'
+          : ownership === 'wishlist'
+            ? 'Marked all issues wanted'
+            : 'Cleared owned issues'
+      );
+    },
+    [showToast]
+  );
+
+  const toggleComicEditionOwnership = useCallback(
+    (readId: string, editionId: string, target: ComicOwnershipStatus) => {
+      let msg = 'Removed from collection';
+      commitState((prev) => {
+        const existing = prev.readProgress[readId];
+        const ownedSet = new Set(existing?.ownedEditionIds || []);
+        const wishSet = new Set(existing?.wishlistEditionIds || []);
+
+        if (target === 'owned') {
+          if (ownedSet.has(editionId)) {
+            ownedSet.delete(editionId);
+            msg = 'Removed edition from collection';
+          } else {
+            ownedSet.add(editionId);
+            wishSet.delete(editionId);
+            msg = 'Edition marked owned';
+          }
+        } else {
+          if (wishSet.has(editionId)) {
+            wishSet.delete(editionId);
+            msg = 'Removed edition from wishlist';
+          } else {
+            wishSet.add(editionId);
+            ownedSet.delete(editionId);
+            msg = 'Edition added to wishlist';
+          }
+        }
+
+        const nextOwnedIds = [...ownedSet];
+        const nextWishIds = [...wishSet];
+        let nextOwnership = existing?.ownership;
+        if (nextOwnedIds.length > 0) {
+          nextOwnership = 'owned';
+        } else if (nextWishIds.length > 0) {
+          if (nextOwnership !== 'owned') nextOwnership = 'wishlist';
+        } else if (
+          (existing?.ownedEditionIds?.length || 0) > 0 ||
+          (existing?.wishlistEditionIds?.length || 0) > 0
+        ) {
+          nextOwnership = undefined;
+        }
+
+        return {
+          ...prev,
+          readProgress: {
+            ...prev.readProgress,
+            [readId]: {
+              ...(existing || {}),
+              status: existing?.status || 'want_to_read',
+              currentUnit: existing?.currentUnit || 0,
+              rereadCount: existing?.rereadCount || 0,
+              bookmarked: existing?.bookmarked ?? true,
+              ownedEditionIds: nextOwnedIds,
+              wishlistEditionIds: nextWishIds,
+              ownership: nextOwnership,
+            },
+          },
+        };
+      });
+      showToast(msg);
     },
     [showToast]
   );
@@ -6470,6 +6772,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         rateReadUnit,
         rateReadItem,
         setReadUnitFinishedDate,
+        setReadOwnership,
+        setReadCollectionNote,
+        setReadUnitOwnership,
+        setReadUnitVariantNote,
+        setAllReadUnitsOwnership,
+        toggleComicEditionOwnership,
         setReadMood,
         setReadEdition,
         selectComicEdition,

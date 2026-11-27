@@ -53,10 +53,14 @@ export interface ComicIssueMeta {
   atomicId?: string;
 }
 
+export type ComicOwnershipStatus = 'owned' | 'wishlist';
+
 export interface AtomicReadRecord {
   readAt?: string;
   count: number;
   rating?: number;
+  ownership?: ComicOwnershipStatus;
+  variantNote?: string;
   seriesTitle?: string;
   issueLabel?: string;
 }
@@ -247,6 +251,12 @@ export interface ReadProgress {
   ratingSource?: RatingSource;
   unitRatings?: Record<number, number>;
   unitFinishedAt?: Record<number, string>;
+  ownership?: ComicOwnershipStatus;
+  collectionNote?: string;
+  unitOwnership?: Record<number, ComicOwnershipStatus>;
+  unitVariantNotes?: Record<number, string>;
+  ownedEditionIds?: string[];
+  wishlistEditionIds?: string[];
   mood?: PersonalMood;
 }
 

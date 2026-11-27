@@ -28,7 +28,8 @@ const FILTER_FORMAT_ORDER: ComicEditionFormat[] = [
 ];
 
 export function ReadEditionsView({ readId }: { readId: string }) {
-  const { state, goBack, selectComicEdition, updateReadEditionsCatalog } = useCueStore();
+  const { state, goBack, selectComicEdition, updateReadEditionsCatalog, toggleComicEditionOwnership } =
+    useCueStore();
   const item = state.readItems[readId];
   const progress = state.readProgress[readId];
 
@@ -232,6 +233,8 @@ export function ReadEditionsView({ readId }: { readId: string }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
         {visibleEditions.map((ed) => {
           const isActive = ed.id === activeRecordId;
+          const isEdOwned = Boolean(progress?.ownedEditionIds?.includes(ed.id));
+          const isEdWish = Boolean(progress?.wishlistEditionIds?.includes(ed.id));
           const completedIssues = Math.min(
             ed.issueCount,
             completedList.filter((u) => u <= ed.issueCount).length
@@ -249,12 +252,19 @@ export function ReadEditionsView({ readId }: { readId: string }) {
             .join(' · ');
 
           return (
-            <button
+            <div
               key={ed.id}
-              type="button"
+              role="button"
+              tabIndex={0}
               onClick={() => selectComicEdition(item.id, ed)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  selectComicEdition(item.id, ed);
+                }
+              }}
               aria-pressed={isActive}
-              className={`w-full rounded-[20px] p-3.5 border text-left flex gap-3.5 transition-colors ${
+              className={`w-full rounded-[20px] p-3.5 border text-left flex gap-3.5 cursor-pointer transition-colors ${
                 isActive
                   ? 'bg-surface-raised border-brand'
                   : 'bg-surface border-white/[0.06] hover:bg-surface-raised/70'
@@ -271,27 +281,59 @@ export function ReadEditionsView({ readId }: { readId: string }) {
 
               <div className="min-w-0 flex-1 flex flex-col justify-between">
                 <div>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span
-                      className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
-                        ed.format === 'compact'
-                          ? 'bg-brand/20 text-brand'
-                          : 'bg-white/8 text-ink-dim'
-                      }`}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                      <span
+                        className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                          ed.format === 'compact'
+                            ? 'bg-brand/20 text-brand'
+                            : 'bg-white/8 text-ink-dim'
+                        }`}
+                      >
+                        {fmtLabel}
+                      </span>
+                      {isActive && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-watched/20 text-watched">
+                          <Check className="w-3 h-3" strokeWidth={2.5} />
+                          <span>Active</span>
+                        </span>
+                      )}
+                      {ed.source === 'custom' && (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-white/8 text-ink-dim">
+                          Custom
+                        </span>
+                      )}
+                    </div>
+
+                    <div
+                      className="flex items-center gap-1 shrink-0"
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      {fmtLabel}
-                    </span>
-                    {isActive && (
-                      <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-watched/20 text-watched">
-                        <Check className="w-3 h-3" strokeWidth={2.5} />
-                        <span>Active</span>
-                      </span>
-                    )}
-                    {ed.source === 'custom' && (
-                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-white/8 text-ink-dim">
-                        Custom
-                      </span>
-                    )}
+                      <button
+                        type="button"
+                        onClick={() => toggleComicEditionOwnership(item.id, ed.id, 'owned')}
+                        aria-pressed={isEdOwned}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border transition-colors ${
+                          isEdOwned
+                            ? 'border-read/60 bg-read/18 text-read'
+                            : 'border-white/10 text-ink-faint hover:text-ink hover:border-white/25'
+                        }`}
+                      >
+                        {isEdOwned ? 'Owned' : 'Own'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleComicEditionOwnership(item.id, ed.id, 'wishlist')}
+                        aria-pressed={isEdWish}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border transition-colors ${
+                          isEdWish
+                            ? 'border-dashed border-read/60 bg-read/10 text-read'
+                            : 'border-white/10 text-ink-faint hover:text-ink hover:border-white/25'
+                        }`}
+                      >
+                        Want
+                      </button>
+                    </div>
                   </div>
 
                   <p className="text-sm font-semibold text-ink leading-snug line-clamp-2 mt-1.5">
@@ -324,7 +366,7 @@ export function ReadEditionsView({ readId }: { readId: string }) {
                   </div>
                 </div>
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
