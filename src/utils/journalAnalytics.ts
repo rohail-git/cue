@@ -1,8 +1,16 @@
 import { MOOD_OPTIONS } from '../components/PersonalNotesSection';
 import type { CueStoreState, MediaDomain, PersonalMood } from '../types';
-import { countDeduplicatedReadUnits } from './atoms';
+import { countDeduplicatedReadUnits, getComicIssueAtomicId } from './atoms';
+import { KNOWN_BOOK_SERIES, KNOWN_MOVIE_COLLECTIONS } from './containers';
 import { resolveComicEditionCover } from './editions';
-import { cleanDisplayGenres, getAllEpisodes, getEpisodeKey, getReadStats, getShowStats } from './stats';
+import {
+  cleanDisplayGenres,
+  formatEpisodeCode,
+  getAllEpisodes,
+  getEpisodeKey,
+  getReadStats,
+  getShowStats,
+} from './stats';
 
 export type JournalStatsScope = 'all' | MediaDomain;
 
@@ -449,6 +457,7 @@ export function computeJournalAdvancedStats(
   // Fallback synthetic timestamps from progress records if history lacks older entries
   const recordedMediaKeys = new Set<string>();
   const hasEventOnFinishDate = new Set<string>();
+  const seenHistoryUnitDates = new Set<string>();
   const events: ActivityEvent[] = [];
 
   for (const h of state.history || []) {
@@ -467,6 +476,9 @@ export function computeJournalAdvancedStats(
     if (customFinish && effectiveDateIso === customFinish.dateIso) {
       hasEventOnFinishDate.add(mediaKey);
     }
+    if (h.codeLabel) {
+      seenHistoryUnitDates.add(`${mediaKey}:${h.codeLabel}:${effectiveDateIso}`);
+    }
     const mins = h.domain === 'watch' ? 42 : h.domain === 'read' ? 12 : 60;
     events.push({
       ts: effectiveTs,
@@ -477,7 +489,7 @@ export function computeJournalAdvancedStats(
     });
   }
 
-    for (const [mediaKey, customFinish] of finishedByMediaKey.entries()) {
+  for (const [mediaKey, customFinish] of finishedByMediaKey.entries()) {
     recordedMediaKeys.add(mediaKey);
     if (!hasEventOnFinishDate.has(mediaKey)) {
       events.push({
@@ -488,6 +500,157 @@ export function computeJournalAdvancedStats(
         posterUrl: customFinish.posterUrl,
       });
     }
+  }
+
+  // Include explicit per-atom (episode, issue/chapter, game chapter), season, and collection finished dates
+  // when history doesn't already cover that exact atom + date (supports backdating & cross-container sync).
+  if (includesWatch) {
+    for (const id of state.showOrder) {
+      const show = state.shows[id];
+      const prog = state.showProgress[id];
+      if (!show || !prog) continue;
+      const mediaKey = `watch:${show.id}`;
+      for (const [epKey, dateStr] of Object.entries(prog.episodeFinishedAt || {})) {
+        const parsed = parseCalendarAwareTimestamp(dateStr);
+        if (!parsed) continue;
+        const m = epKey.match(/^S(\d+)E(\d+)$/i);
+        const codeLabel = m ? formatEpisodeCode(Number(m[1]), Number(m[2])) : epKey;
+        const dedupeKey = `${mediaKey}:${codeLabel}:${parsed.dateIso}`;
+        if (seenHistoryUnitDates.has(dedupeKey)) continue;
+        seenHistoryUnitDates.add(dedupeKey);
+        recordedMediaKeys.add(mediaKey);
+        events.push({
+          ts: parsed.ts,
+          domain: 'watch',
+          minutes: Math.max(20, show.runtimeAvg || 42),
+          title: show.title,
+          posterUrl: show.posterUrl,
+        });
+      }
+      for (const [seasonStr, dateStr] of Object.entries(prog.seasonFinishedAt || {})) {
+        const parsed = parseCalendarAwareTimestamp(dateStr);
+        if (!parsed) continue;
+        const codeLabel = `Season ${seasonStr} Complete`;
+        const dedupeKey = `${mediaKey}:${codeLabel}:${parsed.dateIso}`;
+        if (seenHistoryUnitDates.has(dedupeKey)) continue;
+        // Skip synthetic season event if an episode finish or media finish already covers that date for this show
+        const coveredByEp = [...seenHistoryUnitDates].some(
+          (k) => k.startsWith(`${mediaKey}:`) && k.endsWith(`:${parsed.dateIso}`)
+        );
+        if (coveredByEp || finishedByMediaKey.get(mediaKey)?.dateIso === parsed.dateIso) continue;
+        seenHistoryUnitDates.add(dedupeKey);
+        recordedMediaKeys.add(mediaKey);
+        events.push({
+          ts: parsed.ts,
+          domain: 'watch',
+          minutes: Math.max(30, show.runtimeAvg || 42),
+          title: `${show.title} · Season ${seasonStr}`,
+          posterUrl: show.posterUrl,
+        });
+      }
+    }
+  }
+  if (includesRead) {
+    const seenComicAtomDates = new Set<string>();
+    for (const id of state.readOrder) {
+      const item = state.readItems[id];
+      const prog = state.readProgress[id];
+      if (!item || !prog) continue;
+      const mediaKey = `read:${item.id}`;
+      const poster = resolveComicEditionCover(item, prog.edition, prog);
+      for (const [unitStr, dateStr] of Object.entries(prog.unitFinishedAt || {})) {
+        const parsed = parseCalendarAwareTimestamp(dateStr);
+        if (!parsed) continue;
+        const unitNum = Number(unitStr);
+        const atomId =
+          item.format === 'comic'
+            ? getComicIssueAtomicId(item.issueDetails?.[unitNum])
+            : undefined;
+        if (atomId) {
+          const atomDateKey = `${atomId}:${parsed.dateIso}`;
+          if (seenComicAtomDates.has(atomDateKey)) continue;
+          seenComicAtomDates.add(atomDateKey);
+        }
+        const codeLabel = item.unit === 'issues' ? `Issue #${unitStr}` : `Ch. ${unitStr}`;
+        const dedupeKey = `${mediaKey}:${codeLabel}:${parsed.dateIso}`;
+        if (seenHistoryUnitDates.has(dedupeKey)) continue;
+        seenHistoryUnitDates.add(dedupeKey);
+        recordedMediaKeys.add(mediaKey);
+        events.push({
+          ts: parsed.ts,
+          domain: 'read',
+          minutes: item.unit === 'issues' ? 10 : 12,
+          title: item.title,
+          posterUrl: poster,
+        });
+      }
+    }
+  }
+  if (includesPlay) {
+    for (const id of state.gameOrder) {
+      const game = state.games[id];
+      const prog = state.gameProgress[id];
+      if (!game || !prog) continue;
+      const mediaKey = `play:${game.id}`;
+      const unit = game.chapterUnit || 'chapters';
+      for (const [chapStr, dateStr] of Object.entries(prog.chapterFinishedAt || {})) {
+        const parsed = parseCalendarAwareTimestamp(dateStr);
+        if (!parsed) continue;
+        const codeLabel =
+          unit === 'acts'
+            ? `Act ${chapStr}`
+            : unit === 'missions'
+              ? `Mission ${chapStr}`
+              : unit === 'milestones'
+                ? `Milestone ${chapStr}`
+                : `Ch. ${chapStr}`;
+        const dedupeKey = `${mediaKey}:${codeLabel}:${parsed.dateIso}`;
+        if (seenHistoryUnitDates.has(dedupeKey)) continue;
+        seenHistoryUnitDates.add(dedupeKey);
+        recordedMediaKeys.add(mediaKey);
+        events.push({
+          ts: parsed.ts,
+          domain: 'play',
+          minutes: 45,
+          title: game.title,
+          posterUrl: game.coverUrl,
+        });
+      }
+    }
+  }
+  for (const [colKey, dateStr] of Object.entries(state.collectionFinishedAt || {})) {
+    const parsed = parseCalendarAwareTimestamp(dateStr);
+    if (!parsed) continue;
+    let colDomain: MediaDomain = 'watch';
+    let colTitle = 'Collection';
+    if (colKey.startsWith('movie-col:')) {
+      colDomain = 'watch';
+      const id = colKey.slice('movie-col:'.length);
+      colTitle = KNOWN_MOVIE_COLLECTIONS.find((c) => c.id === id)?.name || 'Movie Collection';
+    } else if (colKey.startsWith('book-series:')) {
+      colDomain = 'read';
+      const id = colKey.slice('book-series:'.length);
+      colTitle = KNOWN_BOOK_SERIES.find((b) => b.id === id)?.name || 'Book Series';
+    } else if (colKey.startsWith('list:')) {
+      const id = colKey.slice('list:'.length);
+      const list = (state.lists || []).find((l) => l.id === id);
+      colTitle = list?.name || 'Custom List';
+      const firstKind = list?.items[0]?.kind;
+      colDomain = list?.steps?.length
+        ? 'read'
+        : firstKind === 'read'
+          ? 'read'
+          : firstKind === 'game'
+            ? 'play'
+            : 'watch';
+    }
+    if (scope !== 'all' && scope !== colDomain) continue;
+    events.push({
+      ts: parsed.ts,
+      domain: colDomain,
+      minutes: colDomain === 'read' ? 15 : 45,
+      title: colTitle,
+    });
   }
 
   // Include extra dated rewatch / reread / replay completion runs so each run

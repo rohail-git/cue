@@ -10,6 +10,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { BulkActionBar } from '../components/BulkActionBar';
+import { CompactFinishedDateRow, formatFinishedDate } from '../components/FinishedDateCard';
 import { MediaImage } from '../components/MediaImage';
 import { RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import { useCueStore, useModalBackHandler } from '../store/useCueStore';
@@ -38,6 +39,7 @@ export function LibraryGridView({
     toggleReadingOrderStep,
     bulkUpdateItems,
     rateCollection,
+    setCollectionFinishedDate,
   } = useCueStore();
   const [filter, setFilter] = useState<'all' | 'active' | 'queued' | 'done'>('all');
   const [stepSeriesDraft, setStepSeriesDraft] = useState('');
@@ -168,6 +170,13 @@ export function LibraryGridView({
               onManualRate={(r) => rateCollection(colKey, r, 'manual')}
             />
           )}
+
+          <CompactFinishedDateRow
+            variant="inline"
+            label="Collection finished"
+            finishedAt={state.collectionFinishedAt?.[colKey]}
+            onChangeDate={(ymd) => setCollectionFinishedDate(colKey, ymd)}
+          />
         </section>
 
         {(list.isOrdered || (list.steps && list.steps.length > 0)) ? (
@@ -210,7 +219,9 @@ export function LibraryGridView({
             {list.steps && list.steps.length > 0 && (
               <div className="space-y-2">
                 {list.steps.map((step, idx) => {
-                  const done = (state.atomicReadUnits?.[step.atomicId]?.count || 0) > 0;
+                  const atomRec = state.atomicReadUnits?.[step.atomicId];
+                  const done = (atomRec?.count || 0) > 0;
+                  const stepDate = done ? formatFinishedDate(atomRec?.readAt) : null;
                   return (
                     <div
                       key={step.id}
@@ -240,8 +251,17 @@ export function LibraryGridView({
                           >
                             {step.title}
                           </p>
-                          <p className="text-[11px] text-ink-dim truncate">
-                            {step.seriesTitle} · Issue #{step.issueNumber}
+                          <p className="text-[11px] text-ink-dim truncate tabular-nums">
+                            {[
+                              step.seriesTitle,
+                              `Issue #${step.issueNumber}`,
+                              stepDate ? `Read ${stepDate}` : null,
+                              typeof atomRec?.rating === 'number' && atomRec.rating > 0
+                                ? `★ ${atomRec.rating}`
+                                : null,
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')}
                           </p>
                         </div>
                       </div>

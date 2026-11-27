@@ -72,6 +72,7 @@ export function RatingControl({
 
 interface HeroRatingCardProps {
   value?: number;
+  ratingSource?: RatingSource;
   onChange: (next: number | undefined) => void;
   promptLabel?: string;
   ariaPrefix?: string;
@@ -80,6 +81,7 @@ interface HeroRatingCardProps {
 /** Tactile large 5-star rating card with half-star support for Simple detail views. */
 export function HeroRatingCard({
   value = 0,
+  ratingSource,
   onChange,
   promptLabel = 'Rate this title',
   ariaPrefix = 'Rate',
@@ -89,9 +91,16 @@ export function HeroRatingCard({
   return (
     <div className="rounded-[22px] bg-surface border border-white/[0.06] px-4 py-4">
       <div className="flex items-center justify-between gap-2 mb-2.5">
-        <span className="text-xs font-semibold text-ink-dim">
-          {rated ? 'Your rating' : promptLabel}
-        </span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs font-semibold text-ink-dim">
+            {rated ? 'Your rating' : promptLabel}
+          </span>
+          {rated && ratingSource === 'auto' && (
+            <span className="px-2 py-0.5 rounded-full bg-brand/15 text-brand text-[10px] font-semibold">
+              Auto avg
+            </span>
+          )}
+        </div>
         {rated ? (
           <div className="flex items-center gap-2">
             <span className="text-sm font-bold text-brand tabular-nums">
@@ -171,6 +180,7 @@ export function SuggestedRatingBanner({
   const suggested = roundRatingTenth(calculatedAvg);
   const needsAccept =
     !currentRating || (ratingSource !== 'auto' && Math.abs(currentRating - suggested) >= 0.05);
+  const isAutoSynced = Boolean(currentRating && ratingSource === 'auto' && !needsAccept);
 
   return (
     <div
@@ -179,20 +189,29 @@ export function SuggestedRatingBanner({
       } flex items-center justify-between gap-3 flex-wrap`}
     >
       <div className="min-w-0">
-        <p className="text-xs font-semibold text-ink">
-          {label} · Calculated avg:{' '}
-          <span className="text-brand tabular-nums">{calculatedAvg.toFixed(2)}</span>{' '}
-          <span className="text-ink-dim font-normal">
-            (from {ratedCount} {ratedCount === 1 ? unitWord.replace(/s$/, '') : unitWord})
-          </span>
-        </p>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <p className="text-xs font-semibold text-ink">
+            {label} · Calculated avg:{' '}
+            <span className="text-brand tabular-nums">{calculatedAvg.toFixed(2)}</span>{' '}
+            <span className="text-ink-dim font-normal">
+              (from {ratedCount} {ratedCount === 1 ? unitWord.replace(/s$/, '') : unitWord})
+            </span>
+          </p>
+          {isAutoSynced && (
+            <span className="px-2 py-0.5 rounded-full bg-brand/15 text-brand text-[10px] font-semibold">
+              Auto avg
+            </span>
+          )}
+        </div>
         {typeof currentRating === 'number' && currentRating > 0 && (
           <p className="text-[11px] text-ink-dim mt-0.5">
             Your rating:{' '}
             <span className="text-ink font-semibold tabular-nums">
               {formatRating(currentRating)}
             </span>{' '}
-            <span>({ratingSource === 'manual' ? 'manual override' : 'from avg'})</span>
+            <span>
+              {ratingSource === 'manual' ? '(manual override)' : '(auto-applied · tap stars to override)'}
+            </span>
           </p>
         )}
       </div>

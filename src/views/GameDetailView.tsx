@@ -21,16 +21,20 @@ import {
 } from 'lucide-react';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
-import { FinishedDateRow, formatFinishedDate } from '../components/FinishedDateCard';
+import {
+  CompactFinishedDateRow,
+  FinishedDateRow,
+  formatFinishedDate,
+} from '../components/FinishedDateCard';
 import { GameChapterSuggestSheet } from '../components/GameChapterSuggestSheet';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
-import { HeroRatingCard, RatingControl } from '../components/RatingControl';
+import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import { fetchGameChapterInfo } from '../services/mediaApi';
 import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { DetailCardMode, GameChapterUnit, GamePlatform } from '../types';
 import { getOfficialGameChapter, lookupKnownGameChapters } from '../utils/gameChapters';
-import { formatRating } from '../utils/ratings';
+import { formatRating, getGameChaptersAverage } from '../utils/ratings';
 import { cleanDisplayGenres, formatGameMeta } from '../utils/stats';
 
 const PLATFORMS: GamePlatform[] = ['PC', 'PS5', 'Switch', 'Xbox', 'Steam Deck'];
@@ -69,6 +73,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
     toggleGameBookmark,
     rateGame,
     rateGameChapter,
+    setGameChapterFinishedDate,
     setGameChapterTitle,
     setGameMood,
     setMediaFinishedDate,
@@ -547,7 +552,8 @@ export function GameDetailView({ gameId }: { gameId: string }) {
               <section className="pt-4 pb-2">
                 <HeroRatingCard
                   value={progress?.rating}
-                  onChange={(r) => rateGame(game.id, r)}
+                  ratingSource={progress?.ratingSource}
+                  onChange={(r) => rateGame(game.id, r, 'manual')}
                   promptLabel="Rate this game"
                   ariaPrefix={`Rate ${game.title}`}
                 />
@@ -1122,11 +1128,29 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                   </div>
                   <RatingControl
                     value={progress?.rating}
-                    onChange={(r) => rateGame(game.id, r)}
+                    onChange={(r) => rateGame(game.id, r, 'manual')}
                     labelPrefix="Rate game"
                     allowClear
                   />
                 </div>
+
+                {(() => {
+                  const gameChapAvg = getGameChaptersAverage(progress);
+                  if (!gameChapAvg || gameChapAvg.count === 0) return null;
+                  return (
+                    <SuggestedRatingBanner
+                      compact
+                      label={game.title}
+                      calculatedAvg={gameChapAvg.avg}
+                      ratedCount={gameChapAvg.count}
+                      unitWord={chapterUnit}
+                      currentRating={progress?.rating}
+                      ratingSource={progress?.ratingSource}
+                      onAcceptAvg={(avg) => rateGame(game.id, avg, 'auto')}
+                      onManualRate={(r) => rateGame(game.id, r, 'manual')}
+                    />
+                  );
+                })()}
 
                 {game.overview && (
                   <div>
@@ -1304,6 +1328,13 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                   </button>
                 </div>
               </div>
+
+              <CompactFinishedDateRow
+                variant="drawer"
+                label={`${chapterSingleCap} finished`}
+                finishedAt={progress?.chapterFinishedAt?.[n]}
+                onChangeDate={(ymd) => setGameChapterFinishedDate(game.id, n, ymd)}
+              />
 
               <div className="flex items-center justify-between p-3 rounded-2xl bg-surface border border-white/8">
                 <span className="text-sm font-medium text-ink">Chapter rating</span>

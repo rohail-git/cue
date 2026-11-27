@@ -213,8 +213,10 @@ export interface ShowProgress {
   rating?: number;
   ratingSource?: RatingSource;
   episodeRatings?: Record<string, number>;
+  episodeFinishedAt?: Record<string, string>;
   seasonRatings?: Record<number, number>;
   seasonRatingSource?: Record<number, RatingSource>;
+  seasonFinishedAt?: Record<number, string>;
   mood?: PersonalMood;
 }
 
@@ -244,6 +246,7 @@ export interface ReadProgress {
   rating?: number;
   ratingSource?: RatingSource;
   unitRatings?: Record<number, number>;
+  unitFinishedAt?: Record<number, string>;
   mood?: PersonalMood;
 }
 
@@ -253,6 +256,7 @@ export interface GameProgress {
   completionPct: number;
   currentChapter?: number;
   chapterRatings?: Record<number, number>;
+  chapterFinishedAt?: Record<number, string>;
   chapterTitles?: Record<number, string>;
   playthroughCount: number;
   platinum: boolean;
@@ -262,6 +266,7 @@ export interface GameProgress {
   finishedAt?: string;
   completedRuns?: CompletionRun[];
   rating?: number;
+  ratingSource?: RatingSource;
   mood?: PersonalMood;
 }
 
@@ -410,6 +415,7 @@ export interface CueStoreState {
   journalEntries: JournalEntry[];
   lists: CustomList[];
   collectionRatings?: Record<string, CollectionRating>;
+  collectionFinishedAt?: Record<string, string>;
   mindFeedback?: CueMindFeedback;
   profile: UserProfile;
   notifications: AppNotification[];

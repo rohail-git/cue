@@ -19,6 +19,7 @@ import {
   isMovieReleased,
 } from './stats';
 import { getComicIssueAtomicId } from './atoms';
+import { applyAutoRating } from './ratings';
 
 export function normalizeCollectionKey(title: string): string {
   return title
@@ -800,13 +801,18 @@ export function evaluateCustomListProgress(
   // Ordered issue-level comic reading orders (e.g., Secret Wars, HoX/PoX, Annihilation)
   if (list.steps && list.steps.length > 0) {
     let completedSteps = 0;
+    const stepRatings: number[] = [];
     let firstUnread: NonNullable<CustomList['steps']>[number] | null = null;
     for (const step of list.steps) {
-      const done = (state.atomicReadUnits?.[step.atomicId]?.count || 0) > 0;
+      const atom = state.atomicReadUnits?.[step.atomicId];
+      const done = (atom?.count || 0) > 0;
       if (done) {
         completedSteps += 1;
       } else if (!firstUnread) {
         firstUnread = step;
+      }
+      if (typeof atom?.rating === 'number' && atom.rating > 0) {
+        stepRatings.push(atom.rating);
       }
     }
     const total = list.steps.length;
@@ -816,8 +822,11 @@ export function evaluateCustomListProgress(
       completedItems: completedSteps,
       averageRatio: total > 0 ? completedSteps / total : 0,
       isComplete: total > 0 && completedSteps >= total,
-      calculatedAvg: null,
-      ratedCount: 0,
+      calculatedAvg:
+        stepRatings.length > 0
+          ? stepRatings.reduce((s, r) => s + r, 0) / stepRatings.length
+          : null,
+      ratedCount: stepRatings.length,
       nextItem: firstUnread
         ? {
             kind: 'read',
@@ -916,4 +925,50 @@ export function evaluateCustomListProgress(
     ratedCount: ratings.length,
     nextItem,
   };
+}
+
+/**
+ * Recomputes automatic average ratings for custom lists, matched movie collections,
+ * and matched book series whenever member titles or atom ratings change.
+ * Respects any manual collection rating overwrite (`source !== 'auto'`).
+ */
+export function recomputeAutoCollectionRatings(state: CueStoreState): CueStoreState {
+  const prevRatings = state.collectionRatings || {};
+  const nextRatings = { ...prevRatings };
+  let changed = false;
+
+  const applyForKey = (colKey: string, calculatedAvg: number | null) => {
+    const cur = nextRatings[colKey];
+    const resolved = applyAutoRating(cur?.rating, cur?.source, calculatedAvg);
+    if (resolved.rating !== undefined && resolved.source) {
+      if (cur?.rating !== resolved.rating || cur?.source !== resolved.source) {
+        nextRatings[colKey] = { rating: resolved.rating, source: resolved.source };
+        changed = true;
+      }
+    } else if (cur && cur.source === 'auto') {
+      delete nextRatings[colKey];
+      changed = true;
+    }
+  };
+
+  for (const list of state.lists || []) {
+    const ev = evaluateCustomListProgress(list, state);
+    applyForKey(`list:${list.id}`, ev.calculatedAvg);
+  }
+
+  for (const col of KNOWN_MOVIE_COLLECTIONS) {
+    const ev = evaluateMovieCollectionProgress(col, state);
+    if (ev.entries.some((e) => Boolean(e.movieId))) {
+      applyForKey(`movie-col:${col.id}`, ev.calculatedAvg);
+    }
+  }
+
+  for (const series of KNOWN_BOOK_SERIES) {
+    const ev = evaluateBookSeriesProgress(series, state);
+    if (ev.entries.some((e) => Boolean(e.readId))) {
+      applyForKey(`book-series:${series.id}`, ev.calculatedAvg);
+    }
+  }
+
+  return changed ? { ...state, collectionRatings: nextRatings } : state;
 }

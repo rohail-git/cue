@@ -20,7 +20,11 @@ import {
 } from 'lucide-react';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
-import { FinishedDateRow, formatFinishedDate } from '../components/FinishedDateCard';
+import {
+  CompactFinishedDateRow,
+  FinishedDateRow,
+  formatFinishedDate,
+} from '../components/FinishedDateCard';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
@@ -63,6 +67,8 @@ export function ShowDetailView({ showId }: { showId: string }) {
     rateEpisode,
     rateSeason,
     rateShow,
+    setEpisodeFinishedDate,
+    setSeasonFinishedDate,
     setShowMood,
     setMediaFinishedDate,
     addCompletionRun,
@@ -245,7 +251,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
         </div>
 
         {showSeasonSuggestion && (
-          <div className="mb-3">
+          <div className="mb-3 space-y-2">
             {epAvg ? (
               <SuggestedRatingBanner
                 compact
@@ -270,6 +276,12 @@ export function ShowDetailView({ showId }: { showId: string }) {
                 />
               </div>
             )}
+            <CompactFinishedDateRow
+              variant="inline"
+              label={`Season ${season.number} finished`}
+              finishedAt={progress?.seasonFinishedAt?.[season.number]}
+              onChangeDate={(ymd) => setSeasonFinishedDate(show.id, season.number, ymd)}
+            />
           </div>
         )}
 
@@ -679,6 +691,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
               <section className="pt-4 pb-2">
                 <HeroRatingCard
                   value={progress?.rating}
+                  ratingSource={progress?.ratingSource}
                   onChange={(r) => rateShow(show.id, r, 'manual')}
                   promptLabel="Rate this show"
                   ariaPrefix={`Rate ${show.title}`}
@@ -745,6 +758,18 @@ export function ShowDetailView({ showId }: { showId: string }) {
 
                       {isOpen && (
                         <div className="divide-y divide-white/[0.06] pt-1">
+                          {(seasonDone || Boolean(progress?.seasonFinishedAt?.[season.number]) || Boolean(progress?.seasonRatings?.[season.number])) && (
+                            <div className="pb-2.5 pt-1">
+                              <CompactFinishedDateRow
+                                variant="inline"
+                                label={`Season ${season.number} finished`}
+                                finishedAt={progress?.seasonFinishedAt?.[season.number]}
+                                onChangeDate={(ymd) =>
+                                  setSeasonFinishedDate(show.id, season.number, ymd)
+                                }
+                              />
+                            </div>
+                          )}
                           {season.episodes.map((ep) => {
                             const epKey = getEpisodeKey(ep.season, ep.number);
                             const count = progress?.episodeCounts?.[epKey] || 0;
@@ -1186,6 +1211,24 @@ export function ShowDetailView({ showId }: { showId: string }) {
                   </button>
                 </div>
               </div>
+
+              <CompactFinishedDateRow
+                variant="drawer"
+                label="Episode finished"
+                finishedAt={
+                  progress?.episodeFinishedAt?.[
+                    getEpisodeKey(activeEpisodeDrawer.season, activeEpisodeDrawer.number)
+                  ]
+                }
+                onChangeDate={(ymd) =>
+                  setEpisodeFinishedDate(
+                    show.id,
+                    activeEpisodeDrawer.season,
+                    activeEpisodeDrawer.number,
+                    ymd
+                  )
+                }
+              />
 
               <div className="flex items-center justify-between p-3 rounded-2xl bg-surface border border-white/8">
                 <span className="text-sm font-medium text-ink">Episode rating</span>

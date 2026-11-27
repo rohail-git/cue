@@ -22,7 +22,11 @@ import {
 } from 'lucide-react';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
-import { FinishedDateRow, formatFinishedDate } from '../components/FinishedDateCard';
+import {
+  CompactFinishedDateRow,
+  FinishedDateRow,
+  formatFinishedDate,
+} from '../components/FinishedDateCard';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
@@ -79,7 +83,9 @@ export function ReadDetailView({ readId }: { readId: string }) {
     toggleReadBookmark,
     rateReadUnit,
     rateReadItem,
+    setReadUnitFinishedDate,
     rateCollection,
+    setCollectionFinishedDate,
     setReadMood,
     setMediaFinishedDate,
     addCompletionRun,
@@ -669,6 +675,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
               <section className="pt-4 pb-2">
                 <HeroRatingCard
                   value={progress?.rating}
+                  ratingSource={progress?.ratingSource}
                   onChange={(r) => rateReadItem(item.id, r, 'manual')}
                   promptLabel={`Rate this ${formatLabel.toLowerCase()}`}
                   ariaPrefix={`Rate ${item.title}`}
@@ -1313,6 +1320,12 @@ export function ReadDetailView({ readId }: { readId: string }) {
                   />
                 </div>
               )}
+              <CompactFinishedDateRow
+                variant="inline"
+                label="Series finished"
+                finishedAt={state.collectionFinishedAt?.[seriesRatingKey]}
+                onChangeDate={(ymd) => setCollectionFinishedDate(seriesRatingKey, ymd)}
+              />
             </section>
           )}
 
@@ -1744,6 +1757,19 @@ export function ReadDetailView({ readId }: { readId: string }) {
                   <span>{done ? 'Read' : 'Mark as read'}</span>
                 </button>
               </div>
+
+              <CompactFinishedDateRow
+                variant="drawer"
+                label={item.unit === 'issues' ? 'Issue finished' : 'Chapter finished'}
+                finishedAt={
+                  progress?.unitFinishedAt?.[u] ||
+                  (() => {
+                    const aId = getComicIssueAtomicId(meta);
+                    return aId ? state.atomicReadUnits?.[aId]?.readAt : undefined;
+                  })()
+                }
+                onChangeDate={(ymd) => setReadUnitFinishedDate(item.id, u, ymd)}
+              />
 
               <div className="flex items-center justify-between p-3 rounded-2xl bg-surface border border-white/8">
                 <span className="text-sm font-medium text-ink">

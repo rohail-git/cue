@@ -5,6 +5,7 @@ import type {
   ReadItem,
   ReadProgress,
 } from '../types';
+import { applyAutoRating, getReadUnitsAverage } from './ratings';
 
 export type ComicWikiSlug =
   | 'marvel'
@@ -87,6 +88,11 @@ export interface AtomicRatingDelta {
   rating: number | undefined;
 }
 
+export interface AtomicDateDelta {
+  atomicId: string;
+  readAt: string | undefined;
+}
+
 export interface SyncedContainerSummary {
   readId: string;
   title: string;
@@ -114,6 +120,7 @@ function buildUpdatedProgressForSlots(
   prev: ReadProgress | undefined,
   activeSlots: number[],
   nextUnitRatings: Record<number, number> | undefined,
+  nextUnitFinishedAt: Record<number, string> | undefined,
   nowIso: string
 ): ReadProgress {
   const total = Math.max(1, item.totalUnits);
@@ -137,16 +144,18 @@ function buildUpdatedProgressForSlots(
     lastReadAt: activeCount > 0 ? nowIso : prev?.lastReadAt,
     finishedAt: finished ? prev?.finishedAt || nowIso : undefined,
     ...(nextUnitRatings ? { unitRatings: nextUnitRatings } : {}),
+    ...(nextUnitFinishedAt ? { unitFinishedAt: nextUnitFinishedAt } : {}),
   };
 }
 
-/** Synchronizes atomic comic read statuses and ratings across all overlapping Smart Containers. */
+/** Synchronizes atomic comic read statuses, ratings, and finish dates across all overlapping Smart Containers. */
 export function syncAtomicReadUnitsAcrossState(
   prev: CueStoreState,
   sourceReadId: string,
   unitDeltas: AtomicDelta[],
   ratingDeltas: AtomicRatingDelta[] = [],
-  nowIso: string = new Date().toISOString()
+  nowIso: string = new Date().toISOString(),
+  dateDeltas: AtomicDateDelta[] = []
 ): {
   atomicReadUnits: Record<string, AtomicReadRecord>;
   readProgress: Record<string, ReadProgress>;
@@ -177,6 +186,27 @@ export function syncAtomicReadUnitsAcrossState(
     }
   }
 
+  const dateMap = new Map<string, string | undefined>();
+  for (const d of dateDeltas) {
+    if (!d.atomicId) continue;
+    dateMap.set(d.atomicId, d.readAt);
+    const cur = nextAtoms[d.atomicId];
+    if (d.readAt) {
+      nextAtoms[d.atomicId] = {
+        ...(cur || { count: 1 }),
+        readAt: d.readAt,
+      };
+    } else if (cur) {
+      const copy = { ...cur };
+      delete copy.readAt;
+      if (copy.count > 0 || (typeof copy.rating === 'number' && copy.rating > 0)) {
+        nextAtoms[d.atomicId] = copy;
+      } else {
+        delete nextAtoms[d.atomicId];
+      }
+    }
+  }
+
   const ratingMap = new Map<string, number | undefined>();
   for (const r of ratingDeltas) {
     if (!r.atomicId) continue;
@@ -201,7 +231,7 @@ export function syncAtomicReadUnitsAcrossState(
   const nextReadProgress: Record<string, ReadProgress> = { ...prev.readProgress };
   const syncedContainers: SyncedContainerSummary[] = [];
 
-  if (statusMap.size === 0 && ratingMap.size === 0) {
+  if (statusMap.size === 0 && ratingMap.size === 0 && dateMap.size === 0) {
     return {
       atomicReadUnits: nextAtoms,
       readProgress: nextReadProgress,
@@ -218,9 +248,11 @@ export function syncAtomicReadUnitsAcrossState(
     const beforeSlots = getActiveCompletedSlots(otherItem, otherPrevProg);
     const slotSet = new Set(beforeSlots);
     let slotsChanged = false;
+    let ratingsChanged = false;
+    let datesChanged = false;
 
     const nextRatings = otherPrevProg?.unitRatings ? { ...otherPrevProg.unitRatings } : undefined;
-    let ratingsChanged = false;
+    const nextDates = otherPrevProg?.unitFinishedAt ? { ...otherPrevProg.unitFinishedAt } : undefined;
 
     const total = Math.max(1, otherItem.totalUnits);
     for (let u = 1; u <= total; u += 1) {
@@ -232,9 +264,22 @@ export function syncAtomicReadUnitsAcrossState(
         if (shouldComplete && !slotSet.has(u)) {
           slotSet.add(u);
           slotsChanged = true;
+          if (!nextDates?.[u] && nextAtoms[atomId]?.readAt) {
+            datesChanged = true;
+          }
         } else if (!shouldComplete && slotSet.has(u)) {
           slotSet.delete(u);
           slotsChanged = true;
+          if (nextDates?.[u]) {
+            datesChanged = true;
+          }
+        }
+      }
+
+      if (dateMap.has(atomId)) {
+        const targetDate = dateMap.get(atomId);
+        if (nextDates?.[u] !== targetDate) {
+          datesChanged = true;
         }
       }
 
@@ -243,16 +288,11 @@ export function syncAtomicReadUnitsAcrossState(
         const curRating = nextRatings?.[u];
         if (targetRating !== curRating) {
           ratingsChanged = true;
-          if (typeof targetRating === 'number' && targetRating > 0) {
-            if (!nextRatings) {
-              // initialized lazily below
-            }
-          }
         }
       }
     }
 
-    if (!slotsChanged && !ratingsChanged) continue;
+    if (!slotsChanged && !ratingsChanged && !datesChanged) continue;
 
     let finalRatings = otherPrevProg?.unitRatings ? { ...otherPrevProg.unitRatings } : undefined;
     if (ratingsChanged) {
@@ -269,14 +309,49 @@ export function syncAtomicReadUnitsAcrossState(
       }
     }
 
+    let finalDates = otherPrevProg?.unitFinishedAt ? { ...otherPrevProg.unitFinishedAt } : undefined;
+    if (datesChanged) {
+      if (!finalDates) finalDates = {};
+      for (let u = 1; u <= total; u += 1) {
+        const atomId = getComicIssueAtomicId(otherItem.issueDetails[u]);
+        if (!atomId) continue;
+        if (dateMap.has(atomId)) {
+          const targetDate = dateMap.get(atomId);
+          if (targetDate) {
+            finalDates[u] = targetDate;
+          } else {
+            delete finalDates[u];
+          }
+        } else if (statusMap.has(atomId)) {
+          if (statusMap.get(atomId)) {
+            if (!finalDates[u] && nextAtoms[atomId]?.readAt) {
+              finalDates[u] = nextAtoms[atomId].readAt;
+            }
+          } else {
+            delete finalDates[u];
+          }
+        }
+      }
+    }
+
     const updatedActive = [...slotSet].sort((a, b) => a - b);
-    const updatedProg = buildUpdatedProgressForSlots(
+    let updatedProg = buildUpdatedProgressForSlots(
       otherItem,
       otherPrevProg,
       updatedActive,
       finalRatings,
+      finalDates,
       nowIso
     );
+    if (ratingsChanged) {
+      const avg = getReadUnitsAverage(updatedProg);
+      const auto = applyAutoRating(updatedProg.rating, updatedProg.ratingSource, avg?.avg ?? null);
+      updatedProg = {
+        ...updatedProg,
+        rating: auto.rating,
+        ratingSource: auto.source,
+      };
+    }
     nextReadProgress[otherId] = updatedProg;
 
     if (slotsChanged) {
@@ -298,17 +373,23 @@ export function syncAtomicReadUnitsAcrossState(
   };
 }
 
-/** Builds a lookup of already-read atomic IDs from both the central ledger and existing library items. */
+/** Builds a lookup of already-read atomic IDs, ratings, and finish dates from the central ledger and existing library items. */
 export function collectKnownCompletedAtoms(
   state: CueStoreState,
   excludeReadId?: string
-): { completedIds: Set<string>; ratingsByAtom: Map<string, number> } {
+): {
+  completedIds: Set<string>;
+  ratingsByAtom: Map<string, number>;
+  datesByAtom: Map<string, string>;
+} {
   const completedIds = new Set<string>();
   const ratingsByAtom = new Map<string, number>();
+  const datesByAtom = new Map<string, string>();
 
   for (const [atomId, rec] of Object.entries(state.atomicReadUnits || {})) {
     if (rec.count > 0) completedIds.add(atomId);
     if (typeof rec.rating === 'number' && rec.rating > 0) ratingsByAtom.set(atomId, rec.rating);
+    if (rec.readAt) datesByAtom.set(atomId, rec.readAt);
   }
 
   for (const id of state.readOrder) {
@@ -319,7 +400,11 @@ export function collectKnownCompletedAtoms(
     const active = getActiveCompletedSlots(item, prog);
     for (const u of active) {
       const atomId = getComicIssueAtomicId(item.issueDetails[u]);
-      if (atomId) completedIds.add(atomId);
+      if (atomId) {
+        completedIds.add(atomId);
+        const unitDate = prog.unitFinishedAt?.[u];
+        if (unitDate && !datesByAtom.has(atomId)) datesByAtom.set(atomId, unitDate);
+      }
     }
     if (prog.unitRatings) {
       for (const [slotStr, rating] of Object.entries(prog.unitRatings)) {
@@ -332,7 +417,7 @@ export function collectKnownCompletedAtoms(
     }
   }
 
-  return { completedIds, ratingsByAtom };
+  return { completedIds, ratingsByAtom, datesByAtom };
 }
 
 /** Two-way reconciles a newly hydrated comic item with existing completed atomic bricks in the store. */
@@ -355,13 +440,14 @@ export function reconcileHydratedComicItemWithAtoms(
   const nowIso = new Date().toISOString();
   const prevProg = state.readProgress[readId];
   const localSlots = new Set(getActiveCompletedSlots(hydratedItem, prevProg));
-  const { completedIds, ratingsByAtom } = collectKnownCompletedAtoms(state, readId);
-  const nextRatings = prevProg?.unitRatings ? { ...prevProg.unitRatings } : undefined;
+  const { completedIds, ratingsByAtom, datesByAtom } = collectKnownCompletedAtoms(state, readId);
   let pulledChanges = false;
+  let pulledRatings = false;
 
   const total = Math.max(1, hydratedItem.totalUnits);
   const deltasToPush: AtomicDelta[] = [];
   const ratingDeltasToPush: AtomicRatingDelta[] = [];
+  const dateDeltasToPush: AtomicDateDelta[] = [];
 
   for (let u = 1; u <= total; u += 1) {
     const meta = details[u];
@@ -381,39 +467,61 @@ export function reconcileHydratedComicItemWithAtoms(
       if (typeof localRating === 'number' && localRating > 0 && !ratingsByAtom.has(atomId)) {
         ratingDeltasToPush.push({ atomicId: atomId, rating: localRating });
       }
+      const localDate = prevProg?.unitFinishedAt?.[u];
+      if (localDate && !datesByAtom.has(atomId)) {
+        dateDeltasToPush.push({ atomicId: atomId, readAt: localDate });
+      }
     } else if (completedIds.has(atomId)) {
       localSlots.add(u);
       pulledChanges = true;
     }
 
     if (!prevProg?.unitRatings?.[u] && ratingsByAtom.has(atomId)) {
-      if (!nextRatings) {
-        // create lazily
-      }
+      pulledChanges = true;
+      pulledRatings = true;
+    }
+    if (!prevProg?.unitFinishedAt?.[u] && datesByAtom.has(atomId)) {
       pulledChanges = true;
     }
   }
 
-  let nextProgressMap: Record<string, ReadProgress> = { ...state.readProgress };
+  const nextProgressMap: Record<string, ReadProgress> = { ...state.readProgress };
   if (pulledChanges && prevProg) {
     let hydratedRatings = prevProg.unitRatings ? { ...prevProg.unitRatings } : undefined;
+    let hydratedDates = prevProg.unitFinishedAt ? { ...prevProg.unitFinishedAt } : undefined;
     for (let u = 1; u <= total; u += 1) {
       const atomId = getComicIssueAtomicId(details[u]);
-      if (atomId && !hydratedRatings?.[u] && ratingsByAtom.has(atomId)) {
+      if (!atomId) continue;
+      if (!hydratedRatings?.[u] && ratingsByAtom.has(atomId)) {
         if (!hydratedRatings) hydratedRatings = {};
         hydratedRatings[u] = ratingsByAtom.get(atomId)!;
       }
+      if (!hydratedDates?.[u] && datesByAtom.has(atomId)) {
+        if (!hydratedDates) hydratedDates = {};
+        hydratedDates[u] = datesByAtom.get(atomId)!;
+      }
     }
-    nextProgressMap[readId] = buildUpdatedProgressForSlots(
+    let nextProg = buildUpdatedProgressForSlots(
       hydratedItem,
       prevProg,
       [...localSlots].sort((a, b) => a - b),
       hydratedRatings,
+      hydratedDates,
       nowIso
     );
+    if (pulledRatings) {
+      const avg = getReadUnitsAverage(nextProg);
+      const auto = applyAutoRating(nextProg.rating, nextProg.ratingSource, avg?.avg ?? null);
+      nextProg = {
+        ...nextProg,
+        rating: auto.rating,
+        ratingSource: auto.source,
+      };
+    }
+    nextProgressMap[readId] = nextProg;
   }
 
-  if (deltasToPush.length === 0 && ratingDeltasToPush.length === 0) {
+  if (deltasToPush.length === 0 && ratingDeltasToPush.length === 0 && dateDeltasToPush.length === 0) {
     return {
       atomicReadUnits: state.atomicReadUnits || {},
       readProgress: nextProgressMap,
@@ -430,7 +538,8 @@ export function reconcileHydratedComicItemWithAtoms(
     readId,
     deltasToPush,
     ratingDeltasToPush,
-    nowIso
+    nowIso,
+    dateDeltasToPush
   );
   return {
     atomicReadUnits: synced.atomicReadUnits,

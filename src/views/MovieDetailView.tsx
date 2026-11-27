@@ -13,7 +13,11 @@ import {
 } from 'lucide-react';
 import { CoverLightbox } from '../components/CoverLightbox';
 import { DetailModeToggle } from '../components/DetailModeToggle';
-import { FinishedDateRow, formatFinishedDate } from '../components/FinishedDateCard';
+import {
+  CompactFinishedDateRow,
+  FinishedDateRow,
+  formatFinishedDate,
+} from '../components/FinishedDateCard';
 import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
@@ -36,6 +40,7 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
     toggleMovieWatchlist,
     rateMovie,
     rateCollection,
+    setCollectionFinishedDate,
     setMovieMood,
     setMediaFinishedDate,
     addCompletionRun,
@@ -404,6 +409,12 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
                       />
                     </div>
                   )}
+                  <CompactFinishedDateRow
+                    variant="inline"
+                    label="Collection finished"
+                    finishedAt={state.collectionFinishedAt?.[colKey]}
+                    onChangeDate={(ymd) => setCollectionFinishedDate(colKey, ymd)}
+                  />
                 </section>
               )}
 

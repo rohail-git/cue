@@ -1,4 +1,4 @@
-import type { ReadProgress, Show, ShowProgress } from '../types';
+import type { GameProgress, RatingSource, ReadProgress, Show, ShowProgress } from '../types';
 import { getEpisodeKey } from './stats';
 
 export function roundRatingHalf(avg: number): number {
@@ -72,5 +72,45 @@ export function getReadUnitsAverage(
   return {
     avg: vals.reduce((s, r) => s + r, 0) / vals.length,
     count: vals.length,
+  };
+}
+
+export function getGameChaptersAverage(
+  progress?: GameProgress
+): { avg: number; count: number } | null {
+  const vals = Object.values(progress?.chapterRatings || {}).filter(
+    (r): r is number => typeof r === 'number' && r > 0
+  );
+  if (vals.length === 0) return null;
+  return {
+    avg: vals.reduce((s, r) => s + r, 0) / vals.length,
+    count: vals.length,
+  };
+}
+
+/**
+ * Applies an atom-derived average rating automatically while preserving explicit or
+ * legacy manual ratings (`source !== 'auto'`) until the user resets back to auto.
+ */
+export function applyAutoRating(
+  currentRating: number | undefined,
+  currentSource: RatingSource | undefined,
+  calculatedAvg: number | null
+): { rating: number | undefined; source: RatingSource | undefined } {
+  if (typeof currentRating === 'number' && currentRating > 0 && currentSource !== 'auto') {
+    return {
+      rating: currentRating,
+      source: currentSource || 'manual',
+    };
+  }
+  if (calculatedAvg !== null && Number.isFinite(calculatedAvg) && calculatedAvg > 0) {
+    return {
+      rating: roundRatingTenth(calculatedAvg),
+      source: 'auto',
+    };
+  }
+  return {
+    rating: undefined,
+    source: undefined,
   };
 }
