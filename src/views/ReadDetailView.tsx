@@ -180,7 +180,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const progress = state.readProgress[readId];
 
   useEffect(() => {
-    if (!item || item.format !== 'comic' || item.comicKind === 'series') return;
+    if (!item || item.format !== 'comic' || item.comicKind === 'series' || isCollectedComicItem(item)) return;
     if (fetchedCoversRef.current.has(item.id)) return;
     const uniqueCoverCount = item.editionCovers ? new Set(Object.values(item.editionCovers)).size : 0;
     const needsCounts = !item.editionIssueCounts;
@@ -279,7 +279,14 @@ export function ReadDetailView({ readId }: { readId: string }) {
               item.id,
               col.issues,
               nextKey,
-              col.totalIssues > 0 ? col.totalIssues : undefined
+              col.totalIssues > 0 ? col.totalIssues : undefined,
+              {
+                coverUrl: col.coverUrl,
+                publisher: col.publisher,
+                year: col.year,
+                wiki: col.wiki,
+                collectionPageTitle: col.collectionPageTitle,
+              }
             );
             return;
           }

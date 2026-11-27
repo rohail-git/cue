@@ -3629,7 +3629,7 @@ async function searchComicSeries(query: string): Promise<LiveSearchResult[]> {
   }
 }
 
-export const COMIC_ISSUE_CACHE_VERSION = 'ca8';
+export const COMIC_ISSUE_CACHE_VERSION = 'ca9';
 
 export async function fetchComicSeriesIssues(
   wiki: ComicWikiSlug,
@@ -3670,6 +3670,9 @@ export async function fetchComicCollectionIssues(params: {
   totalIssues: number;
   wiki?: 'marvel' | 'dc' | 'imagecomics';
   collectionPageTitle?: string;
+  coverUrl?: string;
+  publisher?: string;
+  year?: number;
   issues: Record<number, ComicIssueMeta>;
 }> {
   try {
@@ -3677,7 +3680,7 @@ export async function fetchComicCollectionIssues(params: {
       mode: 'collection',
       title: params.title,
       limit: String(Math.max(1, Math.min(120, Math.round(params.limit || 100)))),
-      v: '1',
+      v: '2',
     });
     if (params.isbn) qs.set('isbn', params.isbn);
     if (params.publisher) qs.set('publisher', params.publisher);
@@ -3693,12 +3696,18 @@ export async function fetchComicCollectionIssues(params: {
       totalIssues?: number;
       wiki?: 'marvel' | 'dc' | 'imagecomics';
       collectionPageTitle?: string;
+      coverUrl?: string;
+      publisher?: string;
+      year?: number;
       issues?: Record<number, ComicIssueMeta>;
     };
     return {
       totalIssues: data.totalIssues || Object.keys(data.issues || {}).length,
       wiki: data.wiki,
       collectionPageTitle: data.collectionPageTitle,
+      coverUrl: data.coverUrl,
+      publisher: data.publisher,
+      year: data.year,
       issues: data.issues || {},
     };
   } catch {
@@ -5907,10 +5916,19 @@ export async function enrichImportCandidate(
           });
           if (Object.keys(col.issues).length > 0) {
             const total = col.totalIssues || readItem.totalUnits;
+            const resolvedCover = col.coverUrl || readItem.coverUrl;
+            const resolvedPub = col.publisher || readItem.comicPublisher;
             readItem = {
               ...readItem,
               comicKind: 'collection',
+              ...(col.wiki ? { comicSeriesWiki: col.wiki } : {}),
+              ...(col.collectionPageTitle ? { comicSeriesVolTitle: col.collectionPageTitle } : {}),
+              ...(resolvedPub ? { comicPublisher: resolvedPub } : {}),
+              ...(readItem.creator === 'Author' && resolvedPub ? { creator: resolvedPub } : {}),
+              ...(col.year ? { year: col.year } : {}),
+              ...(resolvedCover ? { coverUrl: resolvedCover, backdropUrl: resolvedCover } : {}),
               totalUnits: total,
+              baseTotalUnits: total,
               issueDetails: col.issues,
               issueDetailsKey: `default::${total}::${COMIC_ISSUE_CACHE_VERSION}`,
             };

@@ -1924,14 +1924,14 @@ export async function fetchComicSeriesIssuesPayload(
   return { totalIssues, issues };
 }
 
-/** Parses "Collects X #1-25, Y (2014) #1-8, ..." blurbs from book descriptions. */
-function parseCollectsClauses(overview?: string): Array<{
+/** Parses "Collects X #1-25, Y (2014) #1-8, ..." or "COLLECTING: ..." blurbs from book descriptions. */
+export function parseCollectsClauses(overview?: string): Array<{
   seriesQuery: string;
   targetYear?: number;
   nums: number[];
 }> {
   if (!overview) return [];
-  const collectMatch = overview.match(/collects?\s+([^.]+)/i);
+  const collectMatch = overview.match(/collect(?:s|ing)?\s*:?\s+((?:[^.\n]|\.(?=\d))+)/i);
   if (!collectMatch?.[1]) return [];
   const clause = collectMatch[1]
     .replace(/\band\s+material\s+from\b/gi, ', ')
@@ -1947,24 +1947,82 @@ function parseCollectsClauses(overview?: string): Array<{
     const part = partRaw.trim();
     if (!part) continue;
     const m = part.match(
-      /^(?:([A-Za-z0-9:'’&.\-\s]+?)\s*(?:\((\d{4})\))?\s*)?#(\d+)(?:\s*[-–—to]+\s*#?(\d+))?/i
+      /^(?:([A-Za-z0-9:'’&?!.\-\s]+?)\s*(?:\((\d{4})\))?\s+)?#?(\d+(?:\.\d+)?)(?:\s*[-–—to]+\s*#?(\d+(?:\.\d+)?))?$/i
     );
     if (!m) continue;
-    const rawSeries = (m[1] || '').trim();
+    const rawSeries = (m[1] || '').replace(/[?:]+$/, '').trim();
     const seriesQuery = rawSeries.length >= 2 ? rawSeries : lastSeriesQuery;
     if (!seriesQuery) continue;
     const targetYear = m[2] ? Number(m[2]) : rawSeries ? undefined : lastYear;
     lastSeriesQuery = seriesQuery;
     lastYear = targetYear;
 
-    const start = Number(m[3]);
-    const end = m[4] ? Number(m[4]) : start;
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start || end - start > 100) continue;
+    const startRaw = Number(m[3]);
+    const endRaw = m[4] ? Number(m[4]) : startRaw;
+    if (!Number.isFinite(startRaw) || !Number.isFinite(endRaw)) continue;
+    if (!Number.isInteger(startRaw) || startRaw === endRaw) {
+      out.push({ seriesQuery, targetYear, nums: [startRaw] });
+      continue;
+    }
+    const start = Math.round(startRaw);
+    const end = Math.round(endRaw);
+    if (end < start || end - start > 100) continue;
     const nums: number[] = [];
     for (let n = start; n <= end; n += 1) nums.push(n);
     out.push({ seriesQuery, targetYear, nums });
   }
   return out;
+}
+
+const COLLECTION_TITLE_STOP_WORDS = new Set([
+  'the',
+  'of',
+  'and',
+  'for',
+  'in',
+  'on',
+  'to',
+  'by',
+  'vol',
+  'volume',
+  'omnibus',
+  'compendium',
+  'complete',
+  'collection',
+  'epic',
+  'deluxe',
+  'absolute',
+  'library',
+  'masterworks',
+  'edition',
+  'hardcover',
+  'softcover',
+  'trade',
+  'paperback',
+  'tpb',
+  'tp',
+  'hc',
+  'collected',
+]);
+
+function extractCollectionDistinctTokens(rawTitle: string): string[] {
+  const words = normTitle(
+    rawTitle
+      .replace(/\([^)]*\)/g, ' ')
+      .replace(/\bVol\.?\s*\d+(?:\s+\d+)?\s*$/i, ' ')
+  )
+    .split(/\s+/)
+    .filter((w) => w.length >= 2 && !COLLECTION_TITLE_STOP_WORDS.has(w) && !/^\d+$/.test(w));
+  return Array.from(new Set(words));
+}
+
+function normalizeCollectionBaseTitle(rawTitle: string): string {
+  return normTitle(
+    rawTitle
+      .replace(/\s*\(Collected\)\s*$/i, '')
+      .replace(/\bVol\.?\s*\d+(?:\s+\d+)?\s*$/i, '')
+      .replace(/\b(?:tpb|tp|hc|hardcover|softcover|trade\s+paperback|edition)\b/gi, '')
+  );
 }
 
 /** Resolves any Omnibus, TPB, Hardcover, or ISBN-added comic collection into its individual atomic issues. */
@@ -1980,6 +2038,9 @@ export async function fetchComicCollectionIssuesPayload(params: {
   totalIssues: number;
   wiki?: ComicWikiSlug;
   collectionPageTitle?: string;
+  coverUrl?: string;
+  publisher?: string;
+  year?: number;
   issues: Record<number, ComicSeriesIssueItem>;
 }> {
   const { title, isbn, overview, publisher, wikiHint, pageTitleHint, limit = 100 } = params;
@@ -1991,7 +2052,8 @@ export async function fetchComicCollectionIssuesPayload(params: {
 
   const volNumMatch = title.match(/\b(?:vol\.?|volume|book)\s*(\d+)\b/i);
   const volNum = volNumMatch ? Number(volNumMatch[1]) : 1;
-  const cleanTitle = title
+  const trimmedTitle = title.replace(/\s+(?:tpb|tp|hc|hardcover)$/i, '').trim();
+  const cleanTitle = trimmedTitle
     .replace(/\([^)]*\)/g, ' ')
     .replace(/\bvol\.?\s*\d+\b/gi, '')
     .replace(/\bvolume\s*\d+\b/gi, '')
@@ -2007,8 +2069,8 @@ export async function fetchComicCollectionIssuesPayload(params: {
         if (hyphenIsbn13) searchQueries.push(hyphenIsbn13);
         searchQueries.push(cleanIsbn);
       }
-      searchQueries.push(title.trim());
-      if (cleanTitle && normTitle(cleanTitle) !== normTitle(title)) {
+      searchQueries.push(trimmedTitle || title.trim());
+      if (cleanTitle && normTitle(cleanTitle) !== normTitle(trimmedTitle || title)) {
         searchQueries.push(cleanTitle);
       }
 
@@ -2030,8 +2092,8 @@ export async function fetchComicCollectionIssuesPayload(params: {
         pushCand(`${cleanTitle} Vol 1 ${volNum}`);
         pushCand(`${cleanTitle} Vol ${volNum} 1`);
       } else if (wiki === 'dc' || wiki === 'imagecomics') {
-        pushCand(`${title.trim()}`);
-        pushCand(`${title.trim()} (Collected)`);
+        pushCand(trimmedTitle);
+        pushCand(`${trimmedTitle} (Collected)`);
         pushCand(`${cleanTitle} Vol. ${volNum} (Collected)`);
       }
 
@@ -2040,7 +2102,7 @@ export async function fetchComicCollectionIssuesPayload(params: {
           const r = await upstreamFetch(
             `https://${wiki}.fandom.com/api.php?action=query&list=search&srsearch=${encodeURIComponent(
               q
-            )}&srlimit=6&format=json`,
+            )}&srlimit=8&format=json`,
             5000
           );
           if (!r.ok) return [];
@@ -2058,7 +2120,7 @@ export async function fetchComicCollectionIssuesPayload(params: {
       }
 
       if (candidateTitles.length > 0) {
-        const probeList = candidateTitles.slice(0, 10);
+        const probeList = candidateTitles.slice(0, 12);
         // For Marvel volume pages, also speculatively include `<title> <volNum>`
         const extraFollowups: string[] = [];
         if (wiki === 'marvel') {
@@ -2069,11 +2131,11 @@ export async function fetchComicCollectionIssuesPayload(params: {
             }
           }
         }
-        const allProbes = Array.from(new Set([...probeList, ...extraFollowups])).slice(0, 14);
+        const allProbes = Array.from(new Set([...probeList, ...extraFollowups])).slice(0, 16);
         const pageRes = await upstreamFetch(
           `https://${wiki}.fandom.com/api.php?action=query&titles=${encodeURIComponent(
             allProbes.join('|')
-          )}&prop=revisions&rvprop=content&redirects=1&format=json`,
+          )}&prop=revisions|pageimages&rvprop=content&pithumbsize=600&redirects=1&format=json`,
           5500
         );
         if (pageRes.ok) {
@@ -2084,12 +2146,16 @@ export async function fetchComicCollectionIssuesPayload(params: {
             (p) => p.title && p.missing === undefined
           );
 
-          // Rank pages by collected issue list count + title/ISBN + format compatibility
+          // Rank pages strictly by exact title/ISBN compatibility, missing token guard, and format match
           const wantsBigCollection =
             /\b(?:omnibus|compendium|complete\s+collection|epic\s+collection|absolute|library\s+edition|masterworks|deluxe\s+edition|colossal)\b/i.test(
               title
             );
+          const queryBaseNorm = normalizeCollectionBaseTitle(trimmedTitle || title);
+          const queryDistinctTokens = extractCollectionDistinctTokens(trimmedTitle || title);
+
           let bestPage: MediaWikiQueryPage | undefined;
+          let bestWt = '';
           let bestIssues: string[] = [];
           let bestScore = -1;
 
@@ -2107,7 +2173,6 @@ export async function fetchComicCollectionIssuesPayload(params: {
             const cleanPageTitle = (p.title || '')
               .replace(/\s*\(Collected\)\s*$/i, '')
               .trim();
-            const pageIsSmallTpb = /\b(?:tpb|trade\s+paperback)\b/i.test(cleanPageTitle);
             const pageIsBigCollection =
               /\b(?:omnibus|compendium|complete\s+collection|epic\s+collection|absolute|library\s+edition|masterworks|deluxe|colossal)\b/i.test(
                 cleanPageTitle
@@ -2116,6 +2181,27 @@ export async function fetchComicCollectionIssuesPayload(params: {
             // Prevent trade paperback or full-series index pages from hijacking Compendium / Omnibus collections
             if (wantsBigCollection && !hasExactIsbn && !pageIsBigCollection) {
               continue;
+            }
+
+            const pageBaseNorm = normalizeCollectionBaseTitle(cleanPageTitle);
+            const pageDistinctTokens = extractCollectionDistinctTokens(cleanPageTitle);
+            const pageTokenSet = new Set(pageDistinctTokens);
+            const queryTokenSet = new Set(queryDistinctTokens);
+
+            const exactBaseMatch = Boolean(queryBaseNorm && pageBaseNorm === queryBaseNorm);
+            const matchedTokens = queryDistinctTokens.filter((t) => pageTokenSet.has(t)).length;
+            const missingFromPage = queryDistinctTokens.filter((t) => !pageTokenSet.has(t));
+            const extraOnPage = pageDistinctTokens.filter((t) => !queryTokenSet.has(t));
+
+            // Guard against generic shorter titles (e.g. "Captain America Omnibus") hijacking subtitled omnibuses
+            if (!hasExactIsbn && !hasLooseIsbn && !exactBaseMatch) {
+              if (matchedTokens === 0) continue;
+              if (
+                missingFromPage.length > 0 &&
+                matchedTokens / Math.max(1, queryDistinctTokens.length) < 0.75
+              ) {
+                continue;
+              }
             }
 
             const pageVolMatch =
@@ -2128,24 +2214,21 @@ export async function fetchComicCollectionIssuesPayload(params: {
                   ? 2
                   : -2
                 : 0;
-            const titleOverlap =
-              normTitle(cleanPageTitle).includes(normTitle(cleanTitle)) ||
-              normTitle(cleanTitle).includes(normTitle(cleanPageTitle).replace(/\bvol\s+\d+.*$/i, '').trim())
-                ? 2
-                : 0;
-            if (!hasExactIsbn && !hasLooseIsbn && titleOverlap === 0) {
-              continue;
-            }
             const formatBoost = wantsBigCollection && pageIsBigCollection ? 25 : 0;
+            const titleScore = exactBaseMatch
+              ? 120
+              : matchedTokens * 18 - missingFromPage.length * 35 - extraOnPage.length * 20;
+
             const score =
               (hasExactIsbn ? 200 : hasLooseIsbn ? 60 : 0) +
-              titleOverlap * 10 +
+              titleScore +
               volMatchBoost * 15 +
               formatBoost +
-              Math.min(10, issueList.length / 10);
+              Math.min(5, issueList.length / 20);
             if (score > bestScore) {
               bestScore = score;
               bestPage = p;
+              bestWt = wt;
               bestIssues = issueList;
             }
           }
@@ -2157,10 +2240,18 @@ export async function fetchComicCollectionIssuesPayload(params: {
               seriesTitle: deriveSeriesTitleFromPageTitle(ip),
             }));
             const issues = await hydrateWikiIssuePages(wiki, specs, limit);
+            const yearMatch = bestWt.match(/\|\s*Year\s*=\s*(\d{4})\b/i);
+            const resolvedYear = yearMatch ? Number(yearMatch[1]) : undefined;
+            const coverUrl = bestPage.thumbnail?.source
+              ? upscaleFandomThumb(bestPage.thumbnail.source)
+              : undefined;
             return {
               totalIssues: specs.length,
               wiki,
               collectionPageTitle: bestPage.title,
+              coverUrl,
+              publisher: WIKI_PUBLISHER[wiki],
+              year: resolvedYear,
               issues,
             };
           }

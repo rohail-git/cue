@@ -23,6 +23,7 @@ import type {
   ComicEditionRecord,
   ComicIssueMeta,
   ComicOwnershipStatus,
+  ComicWikiSlug,
   CompletionRun,
   CueStoreState,
   CustomListStep,
@@ -392,7 +393,14 @@ interface CueContextValue {
     readId: string,
     issueDetails: Record<number, ComicIssueMeta>,
     detailsKey: string,
-    resolvedTotalUnits?: number
+    resolvedTotalUnits?: number,
+    metaPatch?: {
+      coverUrl?: string;
+      publisher?: string;
+      year?: number;
+      wiki?: ComicWikiSlug;
+      collectionPageTitle?: string;
+    }
   ) => void;
   patchReadIssueMeta: (
     readId: string,
@@ -3560,7 +3568,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       readId: string,
       issueDetails: Record<number, ComicIssueMeta>,
       detailsKey: string,
-      resolvedTotalUnits?: number
+      resolvedTotalUnits?: number,
+      metaPatch?: {
+        coverUrl?: string;
+        publisher?: string;
+        year?: number;
+        wiki?: ComicWikiSlug;
+        collectionPageTitle?: string;
+      }
     ) => {
       commitState((prev) => {
         const item = prev.readItems[readId];
@@ -3578,6 +3593,15 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 ? resolvedTotalUnits
                 : item.totalUnits
             : item.totalUnits;
+
+        const patchedCover =
+          isCollectionDefault &&
+          metaPatch?.coverUrl &&
+          (!item.coverUrl || item.id.startsWith('imp-read-') || /openlibrary\.org/i.test(item.coverUrl))
+            ? metaPatch.coverUrl
+            : undefined;
+        const patchedPub = metaPatch?.publisher || item.comicPublisher;
+
         const updatedItem: ReadItem = {
           ...item,
           totalUnits: nextTotal,
@@ -3585,13 +3609,27 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
             (isDefaultSeriesEdition || isCollectionDefault) && resolvedTotalUnits && resolvedTotalUnits > 0
               ? nextTotal
               : item.baseTotalUnits,
+          ...(patchedCover ? { coverUrl: patchedCover, backdropUrl: patchedCover } : {}),
+          ...(patchedPub ? { comicPublisher: patchedPub } : {}),
+          ...(item.creator === 'Author' && patchedPub ? { creator: patchedPub } : {}),
+          ...(item.id.startsWith('imp-read-') && metaPatch?.year ? { year: metaPatch.year } : {}),
+          ...(metaPatch?.wiki ? { comicSeriesWiki: metaPatch.wiki } : {}),
+          ...(metaPatch?.collectionPageTitle
+            ? { comicSeriesVolTitle: metaPatch.collectionPageTitle }
+            : {}),
           issueDetails,
           issueDetailsKey: detailsKey,
         };
-        const nextProgForSelf =
-          prog && nextTotal !== item.totalUnits
-            ? normalizeReadProgress(updatedItem, prog.currentUnit, prog, prog.completedUnits)
-            : prog;
+
+        let nextProgForSelf = prog;
+        if (prog && nextTotal !== item.totalUnits) {
+          if (item.id.startsWith('imp-read-') && !item.issueDetails && prog.status === 'finished') {
+            const fullSlots = Array.from({ length: nextTotal }, (_, idx) => idx + 1);
+            nextProgForSelf = normalizeReadProgress(updatedItem, nextTotal, prog, fullSlots);
+          } else {
+            nextProgForSelf = normalizeReadProgress(updatedItem, prog.currentUnit, prog, prog.completedUnits);
+          }
+        }
         const intermediate: CueStoreState = {
           ...prev,
           readItems: {
