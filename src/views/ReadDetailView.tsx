@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Archive,
   Bookmark,
@@ -51,9 +51,13 @@ import {
 } from '../utils/atoms';
 import { getMediaCollectionBadge } from '../utils/collection';
 import {
+  buildPreviewReadItemFromIncludedSeries,
   evaluateBookSeriesProgress,
+  evaluateIncludedComicSeries,
   evaluateOverlappingComicContainers,
   findBookSeries,
+  type IncludedComicSeriesContainer,
+  type OverlappingComicContainer,
 } from '../utils/containers';
 import {
   getComicEditionLabel,
@@ -106,6 +110,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
     updateReadTotalUnits,
     updateReadFormat,
     resetReadProgress,
+    addLiveReadToStore,
     addJournalEntry,
     toggleItemInList,
     createCustomList,
@@ -136,6 +141,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
     () => sessionDetailModeByReadId.get(readId) || state.settings.detailMode || 'simple'
   );
   const [expandedBuckets, setExpandedBuckets] = useState<Record<number, boolean>>({ 0: true });
+  const [showAllContainers, setShowAllContainers] = useState(false);
   const fetchedCoversRef = useRef<Set<string>>(new Set());
   const fetchedIssueKeyRef = useRef<Set<string>>(new Set());
   const fetchedSingleIssueRef = useRef<Set<string>>(new Set());
@@ -143,6 +149,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   useEffect(() => {
     setDetailMode(sessionDetailModeByReadId.get(readId) || state.settings.detailMode || 'simple');
     setExpandedBuckets({ 0: true });
+    setShowAllContainers(false);
     setActiveUnitDrawer(null);
     setUnitNoteText('');
   }, [readId, state.settings.detailMode]);
@@ -358,6 +365,140 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const evalBookSeries = bookSeries ? evaluateBookSeriesProgress(bookSeries, state) : null;
   const overlappingContainers =
     item.format === 'comic' ? evaluateOverlappingComicContainers(item, state) : [];
+  const includedSeriesContainers = useMemo(
+    () =>
+      item.format === 'comic'
+        ? evaluateIncludedComicSeries(item, state, overlappingContainers)
+        : [],
+    [item, state, overlappingContainers]
+  );
+
+  type SmartContainerRowEntry =
+    | { kind: 'overlap'; data: OverlappingComicContainer }
+    | { kind: 'included'; data: IncludedComicSeriesContainer };
+
+  const allSmartContainerEntries: SmartContainerRowEntry[] = [
+    ...overlappingContainers.map((data) => ({ kind: 'overlap' as const, data })),
+    ...includedSeriesContainers.map((data) => ({ kind: 'included' as const, data })),
+  ];
+  const PRIMARY_CONTAINER_LIMIT = 3;
+  const primaryContainerEntries = allSmartContainerEntries.slice(0, PRIMARY_CONTAINER_LIMIT);
+  const overflowContainerEntries = allSmartContainerEntries.slice(PRIMARY_CONTAINER_LIMIT);
+
+  const handleOpenIncludedSeries = (series: IncludedComicSeriesContainer) => {
+    if (!state.readItems[series.readId]) {
+      addLiveReadToStore(buildPreviewReadItemFromIncludedSeries(series), 'want_to_read', false);
+    }
+    pushRoute({ view: 'read-detail', readId: series.readId });
+  };
+
+  const renderSmartContainerRow = (
+    entry: SmartContainerRowEntry,
+    variant: 'simple' | 'advanced'
+  ) => {
+    const isOverlap = entry.kind === 'overlap';
+    const c = entry.data;
+    const pct = Math.round(c.ratio * 100);
+    const subText = isOverlap
+      ? `${c.sharedCompleted}/${c.sharedTotal} shared issues · `
+      : `${c.sharedCompleted}/${c.sharedTotal} issues in edition · `;
+    const rightStat = isOverlap
+      ? `${pct}% (${(c as OverlappingComicContainer).containerRead}/${(c as OverlappingComicContainer).containerTotal})`
+      : `${pct}%`;
+
+    return (
+      <button
+        key={`${entry.kind}-${c.readId}`}
+        type="button"
+        onClick={() =>
+          isOverlap
+            ? pushRoute({ view: 'read-detail', readId: c.readId })
+            : handleOpenIncludedSeries(c as IncludedComicSeriesContainer)
+        }
+        className={`w-full rounded-xl bg-background/60 hover:bg-surface-raised border border-white/[0.06] flex items-center text-left transition-colors ${
+          variant === 'advanced' ? 'px-3 py-2.5 gap-3' : 'px-2.5 py-2 gap-2.5'
+        }`}
+      >
+        <div
+          className={`rounded-md overflow-hidden border border-white/10 bg-surface shrink-0 ${
+            variant === 'advanced' ? 'w-9 aspect-[2/3]' : 'w-8 h-12'
+          }`}
+        >
+          <MediaImage
+            src={c.coverUrl}
+            alt={c.title}
+            className="w-full h-full object-cover"
+          />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <p
+              className={`font-semibold text-ink truncate ${
+                variant === 'advanced' ? 'text-sm' : 'text-xs'
+              }`}
+            >
+              {c.title}
+            </p>
+            {!isOverlap && (
+              <span className="text-[9.5px] font-medium px-1.5 py-[1px] rounded-full bg-white/[0.06] text-ink-dim shrink-0">
+                Included
+              </span>
+            )}
+          </div>
+          <p
+            className={`text-ink-dim tabular-nums mt-0.5 truncate ${
+              variant === 'advanced' ? 'text-xs' : 'text-[11px]'
+            }`}
+          >
+            {subText}
+            <span className={c.isComplete ? 'text-watched font-semibold' : ''}>
+              {rightStat}
+            </span>
+          </p>
+          <div
+            className={`w-full rounded-full bg-white/10 overflow-hidden mt-1.5 ${
+              variant === 'advanced' ? 'h-1' : 'h-[2.5px]'
+            }`}
+          >
+            <div
+              className="h-full bg-watched transition-all duration-300"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        </div>
+        <ChevronRight
+          className={`text-ink-faint shrink-0 ${variant === 'advanced' ? 'w-4 h-4' : 'w-3.5 h-3.5'}`}
+        />
+      </button>
+    );
+  };
+
+  const renderOverflowContainersSection = (variant: 'simple' | 'advanced') => {
+    if (overflowContainerEntries.length === 0) return null;
+    return (
+      <div className="pt-1.5 border-t border-white/[0.06] space-y-2">
+        <button
+          type="button"
+          onClick={() => setShowAllContainers((v) => !v)}
+          className="w-full flex items-center justify-between gap-2 px-1 py-1 text-left text-[11px] font-semibold text-ink-dim hover:text-ink transition-colors"
+        >
+          <span className="truncate">
+            Additional containers &amp; series ({overflowContainerEntries.length} more)
+          </span>
+          {showAllContainers ? (
+            <ChevronUp className="w-3.5 h-3.5 shrink-0" />
+          ) : (
+            <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+          )}
+        </button>
+        {showAllContainers && (
+          <div className="space-y-2">
+            {overflowContainerEntries.map((entry) => renderSmartContainerRow(entry, variant))}
+          </div>
+        )}
+      </div>
+    );
+  };
   const seriesRatingKey = bookSeries ? `book-series:${bookSeries.id}` : '';
   const storedSeriesRating = seriesRatingKey ? state.collectionRatings?.[seriesRatingKey] : undefined;
   const collectionSummary = getComicCollectionSummary(item, progress, state.atomicReadUnits);
@@ -722,7 +863,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
               </section>
 
               {/* Synced Smart Containers */}
-              {overlappingContainers.length > 0 && (
+              {allSmartContainerEntries.length > 0 && (
                 <section className="pt-2 pb-1">
                   <div className="rounded-2xl bg-surface border border-white/[0.07] p-3.5 space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
@@ -732,44 +873,18 @@ export function ReadDetailView({ readId }: { readId: string }) {
                           Synced Smart Containers
                         </span>
                       </div>
-                      <span className="text-[10.5px] font-medium text-ink-faint shrink-0">
-                        No double-logging
+                      <span className="text-[10.5px] font-medium text-ink-faint shrink-0 tabular-nums">
+                        {allSmartContainerEntries.length > PRIMARY_CONTAINER_LIMIT
+                          ? `No double-logging · ${allSmartContainerEntries.length} linked`
+                          : 'No double-logging'}
                       </span>
                     </div>
                     <div className="space-y-2">
-                      {overlappingContainers.map((c) => (
-                        <button
-                          key={c.readId}
-                          type="button"
-                          onClick={() => pushRoute({ view: 'read-detail', readId: c.readId })}
-                          className="w-full rounded-xl bg-background/60 hover:bg-surface-raised border border-white/[0.06] px-2.5 py-2 flex items-center gap-2.5 text-left transition-colors"
-                        >
-                          <div className="w-8 h-12 rounded-md overflow-hidden border border-white/10 bg-surface shrink-0">
-                            <MediaImage
-                              src={c.coverUrl}
-                              alt={c.title}
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-semibold text-ink truncate">{c.title}</p>
-                            <p className="text-[11px] text-ink-dim tabular-nums mt-0.5">
-                              {c.sharedCompleted}/{c.sharedTotal} shared issues ·{' '}
-                              <span className={c.isComplete ? 'text-watched font-semibold' : ''}>
-                                {Math.round(c.ratio * 100)}% ({c.containerRead}/{c.containerTotal})
-                              </span>
-                            </p>
-                            <div className="h-[2.5px] w-full rounded-full bg-white/10 overflow-hidden mt-1.5">
-                              <div
-                                className="h-full bg-watched transition-all duration-300"
-                                style={{ width: `${Math.round(c.ratio * 100)}%` }}
-                              />
-                            </div>
-                          </div>
-                          <ChevronRight className="w-3.5 h-3.5 text-ink-faint shrink-0" />
-                        </button>
-                      ))}
+                      {primaryContainerEntries.map((entry) =>
+                        renderSmartContainerRow(entry, 'simple')
+                      )}
                     </div>
+                    {renderOverflowContainersSection('simple')}
                   </div>
                 </section>
               )}
@@ -1262,7 +1377,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
           )}
 
           {/* Advanced Smart Container: Overlapping Comic Runs & Collections */}
-          {detailMode === 'advanced' && overlappingContainers.length > 0 && (
+          {detailMode === 'advanced' && allSmartContainerEntries.length > 0 && (
             <section className="rounded-[22px] bg-surface border border-white/[0.06] p-4 mb-5 space-y-3">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div>
@@ -1271,47 +1386,21 @@ export function ReadDetailView({ readId }: { readId: string }) {
                     <span>Synced Smart Containers</span>
                   </p>
                   <h2 className="font-display font-bold text-base text-ink mt-0.5">
-                    Connected Collections & Runs
+                    Connected Collections &amp; Runs
                   </h2>
                 </div>
-                <span className="text-[11px] font-semibold text-ink-dim px-2.5 py-1 rounded-full bg-white/[0.06]">
-                  Auto-synced atoms
+                <span className="text-[11px] font-semibold text-ink-dim px-2.5 py-1 rounded-full bg-white/[0.06] tabular-nums">
+                  {allSmartContainerEntries.length > PRIMARY_CONTAINER_LIMIT
+                    ? `Auto-synced atoms · ${allSmartContainerEntries.length}`
+                    : 'Auto-synced atoms'}
                 </span>
               </div>
               <div className="space-y-2">
-                {overlappingContainers.map((c) => (
-                  <button
-                    key={c.readId}
-                    type="button"
-                    onClick={() => pushRoute({ view: 'read-detail', readId: c.readId })}
-                    className="w-full rounded-xl bg-background/60 hover:bg-surface-raised border border-white/[0.06] px-3 py-2.5 flex items-center gap-3 text-left transition-colors"
-                  >
-                    <div className="w-9 aspect-[2/3] rounded-md overflow-hidden border border-white/10 bg-surface shrink-0">
-                      <MediaImage
-                        src={c.coverUrl}
-                        alt={c.title}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-ink truncate">{c.title}</p>
-                      <p className="text-xs text-ink-dim tabular-nums mt-0.5">
-                        {c.sharedCompleted}/{c.sharedTotal} shared issues ·{' '}
-                        <span className={c.isComplete ? 'text-watched font-semibold' : ''}>
-                          {Math.round(c.ratio * 100)}% ({c.containerRead}/{c.containerTotal})
-                        </span>
-                      </p>
-                      <div className="h-1 w-full rounded-full bg-white/10 overflow-hidden mt-1.5">
-                        <div
-                          className="h-full bg-watched transition-all duration-300"
-                          style={{ width: `${Math.round(c.ratio * 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                    <ChevronRight className="w-4 h-4 text-ink-faint shrink-0" />
-                  </button>
-                ))}
+                {primaryContainerEntries.map((entry) =>
+                  renderSmartContainerRow(entry, 'advanced')
+                )}
               </div>
+              {renderOverflowContainersSection('advanced')}
             </section>
           )}
 

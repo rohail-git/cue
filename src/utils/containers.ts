@@ -18,7 +18,12 @@ import {
   getShowStats,
   isMovieReleased,
 } from './stats';
-import { getComicIssueAtomicId } from './atoms';
+import {
+  type ComicWikiSlug,
+  extractSeriesTitleFromPageTitle,
+  getComicIssueAtomicId,
+  isCollectedComicItem,
+} from './atoms';
 import { applyAutoRating } from './ratings';
 
 export function normalizeCollectionKey(title: string): string {
@@ -756,16 +761,20 @@ export function evaluateOverlappingComicContainers(
 
     let sharedTotal = 0;
     let sharedCompleted = 0;
+    let liveContainerRead = 0;
     for (let u = 1; u <= otherTotal; u += 1) {
       const atomId = getComicIssueAtomicId(other.issueDetails[u]);
+      const isAtomRead = Boolean(atomId && (state.atomicReadUnits?.[atomId]?.count || 0) > 0);
+      const isRead = otherCompletedSet.has(u) || isAtomRead;
+      if (isRead) liveContainerRead += 1;
       if (atomId && sourceAtoms.has(atomId)) {
         sharedTotal += 1;
-        if (otherCompletedSet.has(u)) sharedCompleted += 1;
+        if (isRead) sharedCompleted += 1;
       }
     }
     if (sharedTotal === 0) continue;
 
-    const containerRead = Math.min(otherTotal, otherCompletedSet.size);
+    const containerRead = Math.min(otherTotal, Math.max(otherCompletedSet.size, liveContainerRead));
     matches.push({
       readId: otherId,
       title: other.title,
@@ -781,6 +790,183 @@ export function evaluateOverlappingComicContainers(
   }
 
   return matches.sort((a, b) => b.sharedTotal - a.sharedTotal || b.ratio - a.ratio);
+}
+
+export interface IncludedComicSeriesContainer {
+  readId: string;
+  title: string;
+  coverUrl: string;
+  publisher?: string;
+  year: number;
+  wiki?: ComicWikiSlug;
+  volTitle?: string;
+  sharedTotal: number;
+  sharedCompleted: number;
+  ratio: number;
+  isComplete: boolean;
+}
+
+function extractCanonicalVolTitleFromPageTitle(pageTitle?: string): string | undefined {
+  if (!pageTitle) return undefined;
+  const m = pageTitle.match(/^(.+?\s+Vol\s+\d+)\b/i);
+  return m?.[1]?.trim();
+}
+
+function extractYearFromReleaseText(raw?: string): number | undefined {
+  const m = raw?.match(/\b(19\d\d|20\d\d)\b/);
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * Automatically derives constituent parent comic series directly from a collected edition's
+ * issue list so Synced Smart Containers populates immediately without manual searches.
+ */
+export function evaluateIncludedComicSeries(
+  item: ReadItem,
+  state: CueStoreState,
+  existingOverlaps: OverlappingComicContainer[]
+): IncludedComicSeriesContainer[] {
+  if (item.format !== 'comic' || !isCollectedComicItem(item) || !item.issueDetails) {
+    return [];
+  }
+
+  const sourceProg = state.readProgress[item.id];
+  const sourceCompletedSet = new Set(getCompletedReadUnits(item, sourceProg));
+  const total = Math.max(1, item.totalUnits);
+
+  // Build deduplication sets against containers already present in state.readItems
+  const existingIds = new Set<string>([item.id]);
+  const existingVolKeys = new Set<string>();
+  const existingSeriesAtoms = new Set<string>();
+  for (const overlap of existingOverlaps) {
+    existingIds.add(overlap.readId);
+    const other = state.readItems[overlap.readId];
+    if (!other) continue;
+    if (other.comicSeriesVolTitle) {
+      existingVolKeys.add(normalizeCollectionKey(other.comicSeriesVolTitle));
+    }
+    if (other.comicKind === 'series' && other.issueDetails) {
+      for (const meta of Object.values(other.issueDetails)) {
+        const atomId = getComicIssueAtomicId(meta);
+        if (atomId) existingSeriesAtoms.add(atomId);
+      }
+    }
+  }
+
+  interface GroupAcc {
+    readId: string;
+    title: string;
+    coverUrl: string;
+    wiki?: ComicWikiSlug;
+    volTitle?: string;
+    year?: number;
+    atomIds: Set<string>;
+    sharedTotal: number;
+    sharedCompleted: number;
+  }
+
+  const groups = new Map<string, GroupAcc>();
+
+  for (let u = 1; u <= total; u += 1) {
+    const meta = item.issueDetails[u];
+    if (!meta) continue;
+    const wiki = meta.wiki;
+    const volTitle = extractCanonicalVolTitleFromPageTitle(meta.pageTitle) || meta.seriesTitle;
+    const seriesTitle =
+      meta.seriesTitle || extractSeriesTitleFromPageTitle(meta.pageTitle) || volTitle;
+    if (!seriesTitle) continue;
+
+    const slugSource = (volTitle || seriesTitle).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const canonicalId = wiki && volTitle
+      ? `comic-series-${wiki}-${slugSource}`
+      : `comic-series-auto-${slugSource}`;
+    const groupKey = volTitle
+      ? `${wiki || 'auto'}::${normalizeCollectionKey(volTitle)}`
+      : normalizeCollectionKey(seriesTitle);
+
+    const atomId = getComicIssueAtomicId(meta);
+    const isRead =
+      sourceCompletedSet.has(u) ||
+      Boolean(atomId && (state.atomicReadUnits?.[atomId]?.count || 0) > 0);
+    const issueYear = extractYearFromReleaseText(meta.releaseDateIso || meta.releaseDate);
+
+    const prev = groups.get(groupKey);
+    if (!prev) {
+      const atomIds = new Set<string>();
+      if (atomId) atomIds.add(atomId);
+      groups.set(groupKey, {
+        readId: canonicalId,
+        title: seriesTitle,
+        coverUrl: meta.coverUrl || item.coverUrl,
+        wiki,
+        volTitle,
+        year: issueYear,
+        atomIds,
+        sharedTotal: 1,
+        sharedCompleted: isRead ? 1 : 0,
+      });
+    } else {
+      prev.sharedTotal += 1;
+      if (isRead) prev.sharedCompleted += 1;
+      if (!prev.coverUrl && meta.coverUrl) prev.coverUrl = meta.coverUrl;
+      if (issueYear && (!prev.year || issueYear < prev.year)) prev.year = issueYear;
+      if (atomId) prev.atomIds.add(atomId);
+    }
+  }
+
+  const out: IncludedComicSeriesContainer[] = [];
+  for (const g of groups.values()) {
+    if (existingIds.has(g.readId)) continue;
+    if (g.volTitle && existingVolKeys.has(normalizeCollectionKey(g.volTitle))) continue;
+    let overlapsSeriesInLibrary = false;
+    for (const a of g.atomIds) {
+      if (existingSeriesAtoms.has(a)) {
+        overlapsSeriesInLibrary = true;
+        break;
+      }
+    }
+    if (overlapsSeriesInLibrary) continue;
+
+    out.push({
+      readId: g.readId,
+      title: g.title,
+      coverUrl: g.coverUrl || item.coverUrl,
+      publisher: item.comicPublisher || item.creator,
+      year: g.year || item.year,
+      wiki: g.wiki,
+      volTitle: g.volTitle,
+      sharedTotal: g.sharedTotal,
+      sharedCompleted: g.sharedCompleted,
+      ratio: Math.min(1, g.sharedCompleted / Math.max(1, g.sharedTotal)),
+      isComplete: g.sharedCompleted >= g.sharedTotal,
+    });
+  }
+
+  return out.sort((a, b) => b.sharedTotal - a.sharedTotal || a.title.localeCompare(b.title));
+}
+
+export function buildPreviewReadItemFromIncludedSeries(
+  series: IncludedComicSeriesContainer
+): ReadItem {
+  const pub = series.publisher || 'Marvel Comics';
+  return {
+    id: series.readId,
+    format: 'comic',
+    unit: 'issues',
+    comicKind: 'series',
+    comicPublisher: pub,
+    comicSeriesWiki: series.wiki,
+    comicSeriesVolTitle: series.volTitle || series.title,
+    title: series.title,
+    creator: pub,
+    year: series.year,
+    totalUnits: Math.max(1, series.sharedTotal),
+    genres: ['Comics'],
+    rating: 4.7,
+    coverUrl: series.coverUrl,
+    backdropUrl: series.coverUrl,
+    overview: `${series.title} (${series.year}) published by ${pub}.`,
+  };
 }
 
 export interface EvaluatedCustomList {

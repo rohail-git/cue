@@ -429,16 +429,19 @@ export function syncAtomicReadUnitsAcrossState(
     }
 
     const updatedActive = [...slotSet].sort((a, b) => a - b);
-    let updatedProg = buildUpdatedProgressForSlots(
-      otherItem,
-      otherPrevProg,
-      updatedActive,
-      finalRatings,
-      finalDates,
-      nowIso,
-      finalUnitOwn,
-      finalUnitNotes
-    );
+    let updatedProg = {
+      ...buildUpdatedProgressForSlots(
+        otherItem,
+        otherPrevProg,
+        updatedActive,
+        finalRatings,
+        finalDates,
+        nowIso,
+        finalUnitOwn,
+        finalUnitNotes
+      ),
+      bookmarked: otherPrevProg ? otherPrevProg.bookmarked : false,
+    };
     if (ratingsChanged) {
       const avg = getReadUnitsAverage(updatedProg);
       const auto = applyAutoRating(updatedProg.rating, updatedProg.ratingSource, avg?.avg ?? null);
@@ -629,11 +632,11 @@ export function reconcileHydratedComicItemWithAtoms(
   }
 
   const nextProgressMap: Record<string, ReadProgress> = { ...state.readProgress };
-  if (pulledChanges && prevProg) {
-    let hydratedRatings = prevProg.unitRatings ? { ...prevProg.unitRatings } : undefined;
-    let hydratedDates = prevProg.unitFinishedAt ? { ...prevProg.unitFinishedAt } : undefined;
-    let hydratedOwnership = prevProg.unitOwnership ? { ...prevProg.unitOwnership } : undefined;
-    let hydratedVariantNotes = prevProg.unitVariantNotes
+  if (pulledChanges) {
+    let hydratedRatings = prevProg?.unitRatings ? { ...prevProg.unitRatings } : undefined;
+    let hydratedDates = prevProg?.unitFinishedAt ? { ...prevProg.unitFinishedAt } : undefined;
+    let hydratedOwnership = prevProg?.unitOwnership ? { ...prevProg.unitOwnership } : undefined;
+    let hydratedVariantNotes = prevProg?.unitVariantNotes
       ? { ...prevProg.unitVariantNotes }
       : undefined;
     for (let u = 1; u <= total; u += 1) {
@@ -656,16 +659,19 @@ export function reconcileHydratedComicItemWithAtoms(
         hydratedVariantNotes[u] = variantNotesByAtom.get(atomId)!;
       }
     }
-    let nextProg = buildUpdatedProgressForSlots(
-      hydratedItem,
-      prevProg,
-      [...localSlots].sort((a, b) => a - b),
-      hydratedRatings,
-      hydratedDates,
-      nowIso,
-      hydratedOwnership,
-      hydratedVariantNotes
-    );
+    let nextProg: ReadProgress = {
+      ...buildUpdatedProgressForSlots(
+        hydratedItem,
+        prevProg,
+        [...localSlots].sort((a, b) => a - b),
+        hydratedRatings,
+        hydratedDates,
+        nowIso,
+        hydratedOwnership,
+        hydratedVariantNotes
+      ),
+      bookmarked: prevProg ? prevProg.bookmarked : false,
+    };
     if (pulledRatings) {
       const avg = getReadUnitsAverage(nextProg);
       const auto = applyAutoRating(nextProg.rating, nextProg.ratingSource, avg?.avg ?? null);
