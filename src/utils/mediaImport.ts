@@ -1,6 +1,7 @@
 import type {
   CueStoreState,
   GameItem,
+  GamePlatform,
   Movie,
   ReadItem,
   Show,
@@ -15,6 +16,7 @@ export type ImportSourceType =
   | 'letterboxd'
   | 'goodreads'
   | 'trakt-tvtime-json'
+  | 'text-finished-log'
   | 'cue-backup'
   | 'unknown';
 
@@ -49,6 +51,9 @@ export interface ImportCandidate {
   readStatus?: 'reading' | 'want_to_read' | 'finished';
   totalUnits?: number;
   dateStr?: string;
+  extraRuns?: Array<{ finishedAt: string; note?: string; rating?: number }>;
+  seasonDates?: Record<number, string>;
+  platformHint?: GamePlatform;
   overview?: string;
   needsResolution?: boolean;
   rowNumber?: number;
@@ -1210,6 +1215,953 @@ function parseJsonImport(rawText: string): ParsedImportBatch {
   };
 }
 
+const MONTH_INDEX_BY_ABBR: Record<string, number> = {
+  jan: 1,
+  feb: 2,
+  mar: 3,
+  apr: 4,
+  may: 5,
+  jun: 6,
+  jul: 7,
+  aug: 8,
+  sep: 9,
+  sept: 9,
+  oct: 10,
+  nov: 11,
+  dec: 12,
+};
+
+const GCAL_HEADER_RE =
+  /^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{4}),\s+(mon|tue|wed|thu|fri|sat|sun)$/i;
+
+const GENERIC_DATE_LINE_RE =
+  /^(?:(\d{4}-\d{2}-\d{2})|((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}))\s*(?:[-–—:|]|•)?\s+(.+)$/i;
+
+const COMPANION_BLOCKLIST = new Set([
+  'you',
+  'me',
+  'us',
+  'him',
+  'her',
+  'them',
+  'superman',
+  'dignity',
+  'god',
+  'cheats',
+  'all',
+  'every',
+  'fire',
+  'love',
+  'death',
+  'wolves',
+  'dragons',
+  'monsters',
+  'giants',
+  'my',
+  'your',
+  'the',
+]);
+
+const TEXT_LOG_SHOW_HINTS = [
+  'the boys',
+  'star trek',
+  'star wars: visions',
+  'dark',
+  'stranger things',
+  'walking dead',
+  'daryl dixon',
+  'the bear',
+  'reacher',
+  'ted lasso',
+  'peacemaker',
+  'fallout',
+  'daredevil',
+  'the pitt',
+  'lincoln lawyer',
+  'only murders',
+  'love death & robots',
+  'love, death & robots',
+  'agatha all along',
+  'creature commandos',
+  'lanterns',
+  'spider-noir',
+  'visionquest',
+  'knight of the seven kingdoms',
+  'alien: earth',
+  'secret level',
+  'caped crusader',
+  'my adventures with superman',
+  "x-men '97",
+  'mandalorian',
+  'wandavision',
+  'loki',
+  'arcane',
+  'invincible',
+  'severance',
+  'succession',
+  'andor',
+  'brooklyn nine-nine',
+  'parks and recreation',
+  'modern family',
+  'new girl',
+  'community',
+  'defending jacob',
+  'umbrella academy',
+  'queen\'s gambit',
+  'falcon and the winter soldier',
+  'life in pieces',
+  'ultimate spider-man',
+  'bad batch',
+  'nine perfect strangers',
+  'hawkeye',
+  'book of boba fett',
+  'mare of easttown',
+  'moon knight',
+  'obi-wan kenobi',
+  'ms. marvel',
+  'sherlock',
+  'legend of vox machina',
+  'under the banner of heaven',
+  'the old man',
+  'black bird',
+  'gravity falls',
+  'over the garden wall',
+  'she-hulk',
+  'rings of power',
+  'the crown',
+  'tales of the jedi',
+  'chernobyl',
+  'tulsa king',
+  'wednesday',
+  'house of the dragon',
+  'big little lies',
+  'mayfair witches',
+  'silo',
+  'black mirror',
+  'secret invasion',
+  'ahsoka',
+  'pokemon sun and moon',
+  'avengers assemble',
+  'harley quinn',
+  'martin mystery',
+  'transformers: war for cybertron',
+  'transformers: war for cybertron trilogy',
+  'sean combs',
+  'the boroughs',
+  "widow's bay",
+  'solos',
+  'atlanta',
+];
+
+const TEXT_LOG_ANIME_HINTS = [
+  ...KNOWN_ANIME_HINTS,
+  'fire force',
+  'my hero academia',
+  'dr. stone',
+  'dr stone',
+  'kaiju no. 8',
+  'kaiju no 8',
+  'oshino ko',
+  'oshi no ko',
+  'mushoku tensei',
+  'gachiakuta',
+  'witch hat atelier',
+  'takopi',
+  'fragrant flower',
+  'smoking behind the supermarket',
+  'tales of wedding rings',
+  'you and i are polar opposites',
+  'cells at work',
+  'castlevania',
+  'promised neverland',
+  'fate/stay night',
+  'fruits basket',
+  'god of high school',
+  're:zero',
+  'deca-dence',
+  'haikyu',
+  'higurashi',
+  'made in abyss',
+  'kaguya-sama',
+  'redo of healer',
+  'way of the househusband',
+  'yu-gi-oh',
+  'tokyo revengers',
+  'jojo',
+  'devil is a part-timer',
+  'ranking of kings',
+  'cyberpunk: edgerunners',
+  'sailor moon',
+  'spy × family',
+  'summer time rendering',
+  'eminence in shadow',
+  'tiger & bunny',
+  'odd taxi',
+  'gintama',
+  'misfit of demon king academy',
+  'uncle from another world',
+  'magical revolution',
+  'revenger',
+  'farming life in another world',
+  'handyman saitou',
+  'blue lock',
+  'campfire cooking',
+  'strongest exorcist',
+  'arknights',
+  'tengoku daimakyo',
+  'edens zero',
+  'atelier ryza',
+  'bastard!!',
+  'gundam',
+  'tower of god',
+  'chillin',
+  'to your eternity',
+  'infinite darkness',
+  'orange',
+  'hidden dungeon',
+];
+
+const TEXT_LOG_GAME_HINTS = [
+  'resident evil',
+  'uncharted',
+  'kingdom hearts',
+  'mortal kombat',
+  'sekiro',
+  'death stranding',
+  'devil may cry',
+  'ghost of tsushima',
+  'spider-man remastered',
+  "marvel's spider-man",
+  'miles morales',
+  'control',
+  'god of war',
+  'final fantasy vii remake',
+  'final fantasy xv',
+  'star wars jedi',
+  'injustice 2',
+  'code vein',
+  'one piece: pirate warriors',
+  'gotham knights',
+  'evil within',
+  'callisto protocol',
+  'telltale series',
+  'batman: the enemy within',
+  'walking dead: the final season',
+  'man of medan',
+  'lego marvel super heroes',
+  'halo:',
+  'halo 2',
+  'halo 3',
+  'halo 4',
+  'nioh',
+  'god eater',
+  'zenless zone zero',
+  'onimusha',
+  'marvel cosmic invasion',
+  'pokemon soulsilver',
+  'monster hunter',
+  'fire emblem',
+];
+
+export function normalizeImportDateIso(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return `${trimmed}T12:00:00.000Z`;
+  const parsed = Date.parse(trimmed);
+  if (Number.isNaN(parsed)) return undefined;
+  return new Date(parsed).toISOString();
+}
+
+function formatYmd(year: number, month: number, day: number): string {
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function formatHumanDateLabel(ymd?: string): string {
+  if (!ymd) return '';
+  const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return ymd;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${months[Number(m[2]) - 1] || m[2]} ${Number(m[3])}, ${m[1]}`;
+}
+
+function isVenueOrAddressLine(line: string): boolean {
+  if (/^[\p{Extended_Pictographic}]/u.test(line)) return false;
+  if (/^(?:fully\s+)?(?:finished|rewatched|watched|reread|replayed|completed|played|beat|read)\b/i.test(line)) {
+    return false;
+  }
+  return (
+    /\b[A-Z]\d[A-Z]\s*\d[A-Z]\d\b/.test(line) ||
+    /,\s*ON\b/i.test(line) ||
+    /,\s*Canada\s*$/i.test(line) ||
+    /^\d+\s+[A-Z][\w\s]+,\s*[A-Z]/.test(line) ||
+    /\b(?:Landmark|Cineplex|AMC|Regal)\s+Cinemas?\b/i.test(line)
+  );
+}
+
+interface ParsedTextLogOccurrence {
+  rowNumber: number;
+  kind: ImportCandidate['kind'];
+  domain: ImportCandidate['domain'];
+  mediaType: ImportCandidate['mediaType'];
+  title: string;
+  year: number;
+  explicitYear?: number;
+  creator?: string;
+  userRating?: number;
+  dateYmd?: string;
+  seasonNum?: number;
+  notes: string[];
+  platformHint?: GamePlatform;
+  genreHints: string[];
+  rawLine: string;
+}
+
+function extractTrailingCompanions(input: string): { title: string; companions?: string } {
+  const m = input.match(
+    /^(.*?)\s+\bwith\s+([A-Z][a-z]+(?:\s*,\s*[A-Z][a-z]+)*(?:\s*,?\s*(?:and|&)\s+[A-Z][a-z]+)?)\s*$/
+  );
+  if (!m) return { title: input };
+  const names = m[2]
+    .split(/,|\band\b|&/i)
+    .map((n) => n.trim().toLowerCase())
+    .filter(Boolean);
+  if (names.length === 0 || names.some((n) => COMPANION_BLOCKLIST.has(n))) {
+    return { title: input };
+  }
+  return { title: m[1].trim(), companions: `with ${m[2].trim()}` };
+}
+
+function parseFinishedLogLine(
+  rawLine: string,
+  rowNumber: number,
+  dateYmd?: string
+): ParsedTextLogOccurrence | null {
+  let text = rawLine.trim().replace(/^[-*•]\s+/, '').trim();
+  if (!text) return null;
+
+  const notes: string[] = [];
+
+  // 1. Inline star ratings (⭐)
+  const stars = text.match(/⭐/g);
+  const userRating = stars ? Math.max(1, Math.min(5, stars.length)) : undefined;
+  text = text.replace(/⭐[\uFE0F]*/g, '').replace(/\s+/g, ' ').trim();
+
+  // 2. Leading emoji domain hints
+  let emojiHint: 'show' | 'movie' | 'game' | 'read' | undefined;
+  let forceReadNovel = false;
+  let forceReadComic = false;
+
+  const leadingEmojis: string[] = [];
+  while (true) {
+    const em = text.match(/^([\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}][\uFE0F\u200D]*)\s*/u);
+    if (!em) break;
+    leadingEmojis.push(em[1].replace(/[\uFE0F\u200D]/g, ''));
+    text = text.slice(em[0].length).trim();
+  }
+  for (const e of leadingEmojis) {
+    if (e === '📺') emojiHint = 'show';
+    else if (e === '🎬') emojiHint = 'movie';
+    else if (e === '🍿') {
+      emojiHint = 'movie';
+      notes.push('Theater');
+    } else if (e === '🎮' || e === '🕹') emojiHint = 'game';
+    else if (e === '📖') emojiHint = 'read';
+    else if (e === '📱') {
+      emojiHint = 'read';
+      forceReadComic = true;
+      notes.push('Digital');
+    } else if (e === '🤖' || e === '🎧') {
+      emojiHint = 'read';
+      forceReadNovel = true;
+      notes.push('Audiobook');
+    }
+  }
+
+  // 3. Action verb prefix
+  let verbRead = false;
+  let verbWatch = false;
+  const verbMatch = text.match(
+    /^(?:(Fully\s+Finished|Finished\s+Reading|Finished\s+Watching|Finished\s+Playing|Finished|Rewatched|Reread|Replayed|Completed|Watched|Played|Beat|Read)\s+)/i
+  );
+  if (verbMatch) {
+    const v = verbMatch[1].toLowerCase();
+    if (v.includes('reading') || v === 'reread' || v === 'read') verbRead = true;
+    if (v === 'rewatched' || v.includes('watching')) {
+      verbWatch = true;
+      if (v === 'rewatched') notes.push('Rewatch');
+    }
+    text = text.slice(verbMatch[0].length).trim();
+  }
+
+  if (!text) return null;
+
+  // 4. Trailing parenthetical note like "(Up To Season 4)" or "(with Cheats)" before companion check
+  text = text.replace(/\s+\((Up\s+To\s+Season\s+\d+|Day\s+\d+\/\d+|with\s+Cheats)\)\s*$/i, (_m, q) => {
+    notes.push(q.trim());
+    return '';
+  });
+  text = text.replace(/\s+\((with\s+Cheats)\)/i, (_m, q) => {
+    notes.push(q.trim());
+    return '';
+  });
+
+  // 5. Trailing companion names ("with Mazra, Adeel and Aliza")
+  const comp = extractTrailingCompanions(text);
+  text = comp.title;
+  if (comp.companions) notes.push(comp.companions);
+
+  // Check trailing note again if companion was after it (e.g. "Community with Mazra (Up To Season 4)")
+  text = text.replace(/\s+\((Up\s+To\s+Season\s+\d+|Day\s+\d+\/\d+|with\s+Cheats)\)\s*$/i, (_m, q) => {
+    notes.push(q.trim());
+    return '';
+  });
+
+  // 6. Explicit inline media qualifiers
+  let explicitTagKind: ImportCandidate['kind'] | undefined;
+  let platformHint: GamePlatform | undefined;
+
+  if (/\(audiobook\)/i.test(text)) {
+    explicitTagKind = 'read';
+    forceReadNovel = true;
+    notes.push('Audiobook');
+    text = text.replace(/\s*\(audiobook\)/gi, '').trim();
+  }
+  const tvTagMatch = text.match(/\((?:(\d{4})\s+)?(?:TV\s+series|miniseries)\)/i);
+  let explicitYearFromTag: number | undefined;
+  if (tvTagMatch) {
+    explicitTagKind = 'show';
+    if (tvTagMatch[1]) explicitYearFromTag = Number(tvTagMatch[1]);
+    text = text.replace(/\s*\((?:\d{4}\s+)?(?:TV\s+series|miniseries)\)/gi, '').trim();
+  }
+  if (/\(video\s+game\)/i.test(text)) {
+    explicitTagKind = 'game';
+    text = text.replace(/\s*\(video\s+game\)/gi, '').trim();
+  }
+  if (/\(film\s+series\)/i.test(text)) {
+    explicitTagKind = 'movie';
+    notes.push('Film series');
+    text = text.replace(/\s*\(film\s+series\)/gi, '').trim();
+  }
+
+  // Platform / run qualifiers
+  const runQualifiers: Array<[RegExp, string, GamePlatform?]> = [
+    [/\s*\(PC\)\s*/i, 'PC', 'PC'],
+    [/\s*\(PS5([^)]*)\)\s*/i, 'PS5', 'PS5'],
+    [/\s*\(PS4([^)]*)\)\s*/i, 'PS4', 'PS5'],
+    [/\s*\(Switch\)\s*/i, 'Switch', 'Switch'],
+    [/\s*\(Xbox[^)]*\)\s*/i, 'Xbox', 'Xbox'],
+    [/\s*\(GameCube\)\s*/i, 'GameCube'],
+    [/\s+on\s+(PS5|PS4|Switch|PC|Xbox)\b/i, '$1'],
+    [/\s*\((base\s+game|mid-game|version\s+[\d.]+)\)\s*/i, '$1'],
+    [/\s*\[(1st\s+run|2nd\s+run|\d+(?:st|nd|rd|th)\s+run)\]\s*/i, '$1'],
+    [/\s*\((finale|DiC\s+dub)\)\s*/i, '$1'],
+  ];
+  for (const [re, label, plat] of runQualifiers) {
+    const m = text.match(re);
+    if (m) {
+      const resolvedLabel = label === '$1' ? m[1] : label;
+      notes.push(resolvedLabel);
+      if (plat && !platformHint) platformHint = plat;
+      else if (/\bPS5\b/i.test(m[1] || '')) platformHint = 'PS5';
+      else if (/\bPC\b/i.test(m[1] || '')) platformHint = 'PC';
+      else if (/\bSwitch\b/i.test(m[1] || '')) platformHint = 'Switch';
+      else if (/\bXbox\b/i.test(m[1] || '')) platformHint = 'Xbox';
+      if (plat || /\bon\s+(?:PS5|PS4|Switch|PC|Xbox)\b|\b(?:1st|2nd)\s+run\b|\bbase game\b|\bmid-game\b|\bGameCube\b/i.test(m[0])) {
+        if (!explicitTagKind && !emojiHint) explicitTagKind = 'game';
+      }
+      text = text.replace(re, ' ').replace(/\s+/g, ' ').trim();
+    }
+  }
+
+  if (/\bNew\s+Game\s+Plus\b/i.test(text)) {
+    notes.push('New Game Plus');
+    if (!explicitTagKind && !emojiHint) explicitTagKind = 'game';
+    text = text.replace(/\s+\bNew\s+Game\s+Plus\b/i, '').trim();
+  }
+  if (/\s+Again$/i.test(text)) {
+    notes.push('Replay / Rewatch');
+    text = text.replace(/\s+Again$/i, '').trim();
+  }
+
+  // 7. Extract season / part qualifiers BEFORE final classification (explicit season overrides 🎬 movie emoji)
+  let seasonNum: number | undefined;
+  let hasExplicitSeason = false;
+  let candidateTitle = text;
+
+  const parenSeasonMatch = candidateTitle.match(
+    /\s*\(season\s+(\d+)(?:\s*(?:part|volume|:)[^)]*)?\)(?:\s*\((?:part|volume)[^)]*\))*/i
+  );
+  if (parenSeasonMatch) {
+    seasonNum = Number(parenSeasonMatch[1]);
+    hasExplicitSeason = true;
+    const partMatch = parenSeasonMatch[0].match(/\((part\s+\d+|volume\s+\d+|Fishman Island)\)/i);
+    notes.push(
+      `Season ${seasonNum}${partMatch ? ` · ${partMatch[1]}` : ''}`
+    );
+    candidateTitle = candidateTitle.replace(parenSeasonMatch[0], '').trim();
+    // Also clean leftover subtitle/part parens like "(season 16: Punk Hazard)"
+    candidateTitle = candidateTitle.replace(/\s*\([^)]*season[^)]*\)/gi, '').trim();
+  }
+
+  // Match unparenthesized Season markers: "Title Season 2", "Title - Season 3: Subtitle", "Title 2nd Season"
+  if (!hasExplicitSeason) {
+    const bareSeasonMatch = candidateTitle.match(
+      /(?:\s*[-–—:]\s*|\s+)Season\s+(\d+)(?:\s*[:\-–—]\s*([^([]+))?(?:\s+Part\s+(\d+))?$/i
+    );
+    if (bareSeasonMatch) {
+      seasonNum = Number(bareSeasonMatch[1]);
+      hasExplicitSeason = true;
+      notes.push(`Season ${seasonNum}${bareSeasonMatch[3] ? ` Part ${bareSeasonMatch[3]}` : ''}`);
+      candidateTitle = candidateTitle.slice(0, bareSeasonMatch.index).trim();
+    }
+  }
+
+  if (!hasExplicitSeason) {
+    const ordinalSeasonMatch = candidateTitle.match(/\s+(?:(\d+)(?:st|nd|rd|th)\s+Season)\s*$/i);
+    if (ordinalSeasonMatch) {
+      seasonNum = Number(ordinalSeasonMatch[1]);
+      hasExplicitSeason = true;
+      notes.push(`Season ${seasonNum}`);
+      candidateTitle = candidateTitle.slice(0, ordinalSeasonMatch.index).trim();
+    }
+  }
+
+  // Clean trailing "(part N)" / "Part N" on non-movie/non-game titles (e.g. "Spy x Family (part 1)", "Mushoku Tensei Part 2")
+  if (/\s*\(part\s+(\d+)\)\s*$/i.test(candidateTitle)) {
+    const pm = candidateTitle.match(/\s*\(part\s+(\d+)\)\s*$/i)!;
+    notes.push(`Part ${pm[1]}`);
+    hasExplicitSeason = true;
+    candidateTitle = candidateTitle.slice(0, pm.index).trim();
+  }
+
+  if (/\s+OVA'?s$/i.test(candidateTitle)) {
+    notes.push("OVAs");
+    hasExplicitSeason = true;
+    candidateTitle = candidateTitle.replace(/\s+OVA'?s$/i, '').trim();
+  }
+
+  // 8. Extract explicit release year (YYYY) at end of title
+  let explicitYear: number | undefined = explicitYearFromTag;
+  const trailingYearMatch = candidateTitle.match(/\s*\((19\d\d|20\d\d)\)\s*$/);
+  if (trailingYearMatch) {
+    explicitYear = Number(trailingYearMatch[1]);
+    const stripped = candidateTitle.slice(0, trailingYearMatch.index).trim();
+    // Preserve year on "One Piece (2023)" so live-action doesn't merge into anime "One Piece", and keep on Read events
+    if (emojiHint !== 'read' && !verbRead && stripped.toLowerCase() !== 'one piece') {
+      candidateTitle = stripped;
+    }
+  }
+  if (candidateTitle.toLowerCase() === 'one piece' && explicitYear === 2023) {
+    candidateTitle = 'One Piece (2023)';
+  }
+
+  // Strip leftover `: The Final Season Part N` or trailing `Part N` for known anime/TV shows (never Dune: Part One or Compilation Part I)
+  const lowerCand = candidateTitle.toLowerCase();
+  if (
+    /\s+(?:part\s+\d+|volume\s+\d+|:\s*volume\s+\d+|:\s*the\s+final(?:\s+season(?:\s+part\s+\d+)?)?)$/i.test(
+      candidateTitle
+    ) &&
+    !/dune:\s*part|last of us\s+part|compilation\s+part/i.test(lowerCand) &&
+    emojiHint !== 'read' &&
+    !verbRead
+  ) {
+    const pm = candidateTitle.match(
+      /(\s+(?:part\s+\d+|volume\s+\d+|:\s*volume\s+\d+|:\s*the\s+final(?:\s+season(?:\s+part\s+\d+)?)?))$/i
+    )!;
+    notes.push(pm[1].replace(/^[:\s]+/, '').trim());
+    hasExplicitSeason = true;
+    candidateTitle = candidateTitle.slice(0, pm.index).trim();
+  }
+
+  // Strip Roman II suffix on Mob Psycho 100 II if needed? Keep distinct or normalize cleanly; keep "Mob Psycho 100" when followed by " II"
+  if (/^mob psycho 100 ii$/i.test(candidateTitle)) {
+    seasonNum = 2;
+    hasExplicitSeason = true;
+    notes.push('Season 2');
+    candidateTitle = 'Mob Psycho 100';
+  }
+  if (/^haikyu!+(?:\s+to\s+the\s+top)?$/i.test(candidateTitle)) {
+    hasExplicitSeason = true;
+    candidateTitle = 'Haikyu!!';
+  }
+
+  // 9. Author extraction for audiobooks / novels ("Title by Author, translated by ...")
+  let creator: string | undefined;
+  const looksBookLine =
+    emojiHint === 'read' || verbRead || forceReadNovel;
+  if (
+    looksBookLine &&
+    !/\b(?:omnibus|hc|tp|tpb|vol\.|volume|complete collection|edition)\b/i.test(candidateTitle)
+  ) {
+    const transMatch = candidateTitle.match(/,\s*(translated\s+by\s+.+)$/i);
+    if (transMatch) {
+      notes.push(transMatch[1].trim());
+      candidateTitle = candidateTitle.slice(0, transMatch.index).trim();
+    }
+    const byMatch = candidateTitle.match(/^(.+?)\s+by\s+([A-Z][^,()]{2,50})$/);
+    if (byMatch) {
+      candidateTitle = byMatch[1].trim();
+      creator = byMatch[2].trim();
+    }
+  }
+
+  // 10. Final domain & mediaType classification
+  const titleNorm = normalizeFoldLower(candidateTitle);
+  const fullLower = normalizeFoldLower(text);
+
+  let kind: ImportCandidate['kind'] = 'movie';
+  let mediaType: ImportCandidate['mediaType'] = 'movie';
+
+  const looksComicOrBookKeywords =
+    /\b(omnibus|reading order|compendium|complete collection|epic collection|dc compact)\b/i.test(
+      candidateTitle
+    ) ||
+    /\s+(?:TP|TPB|HC)$/i.test(candidateTitle) ||
+    /\bVol\.\s*\d+\b.*\b(?:TP|HC)\b/i.test(candidateTitle) ||
+    /^war of kings$/i.test(candidateTitle);
+
+  const looksMangaInLog =
+    /\((?:manga|manhwa|manhua)\)/i.test(candidateTitle) ||
+    /\b(?:welcome back,?\s+papa|hidden dungeon only i can enter|betrayed by the hero|dragon ball super)\b/i.test(
+      candidateTitle
+    );
+
+  const knownGameMatch =
+    Boolean(lookupKnownGameChapters(candidateTitle)) ||
+    TEXT_LOG_GAME_HINTS.some((kw) => titleNorm.includes(kw));
+
+  const knownAnimeMatch =
+    titleNorm !== 'one piece (2023)' &&
+    TEXT_LOG_ANIME_HINTS.some((kw) => titleNorm.includes(kw));
+  const knownShowMatch = TEXT_LOG_SHOW_HINTS.some((kw) => titleNorm.includes(kw));
+
+  // Explicit season always overrides 🎬 movie emoji (e.g. "🎬 Finished X-Men '97 (season 2)")
+  if (emojiHint === 'read' || verbRead || explicitTagKind === 'read' || looksComicOrBookKeywords) {
+    kind = 'read';
+    if (forceReadNovel) {
+      mediaType = 'novel';
+    } else if (looksMangaInLog) {
+      mediaType = 'manga';
+    } else if (
+      forceReadComic ||
+      /\s+(?:TP|TPB|HC)$/i.test(candidateTitle) ||
+      /\b(?:omnibus|reading order|dc compact|compendium|complete collection|epic collection)\b/i.test(
+        candidateTitle
+      ) ||
+      /^war of kings$/i.test(candidateTitle)
+    ) {
+      mediaType = 'comic';
+    } else {
+      mediaType = classifyReadFormat({
+        title: candidateTitle,
+        author: creator,
+        genres: notes,
+      });
+    }
+  } else if (emojiHint === 'game' || explicitTagKind === 'game' || (!emojiHint && knownGameMatch && !hasExplicitSeason)) {
+    kind = 'game';
+    mediaType = 'game';
+  } else if (emojiHint === 'show' || explicitTagKind === 'show' || hasExplicitSeason) {
+    kind = 'show';
+    mediaType = knownAnimeMatch ? 'anime' : 'tv';
+  } else if (emojiHint === 'movie' || explicitTagKind === 'movie') {
+    kind = 'movie';
+    mediaType = 'movie';
+  } else if (knownGameMatch) {
+    kind = 'game';
+    mediaType = 'game';
+  } else if (knownAnimeMatch) {
+    kind = 'show';
+    mediaType = 'anime';
+  } else if (knownShowMatch) {
+    kind = 'show';
+    mediaType = 'tv';
+  } else if (/\b(?:trilogy|marathon)\b/i.test(fullLower) || verbWatch || explicitYear) {
+    kind = 'movie';
+    mediaType = 'movie';
+  }
+
+  // Refine TV show vs Anime if movie/show edge case (e.g. Demon Slayer: Infinity Castle -> movie, Dragon Ball Z -> show)
+  if (kind === 'show' && knownAnimeMatch) {
+    mediaType = 'anime';
+  }
+
+  const domain: ImportCandidate['domain'] =
+    kind === 'read' ? 'read' : kind === 'game' ? 'play' : 'watch';
+
+  const derivedYear =
+    explicitYear ||
+    (dateYmd ? Number(dateYmd.slice(0, 4)) : undefined) ||
+    2024;
+
+  const genreHints =
+    mediaType === 'anime'
+      ? ['Anime']
+      : kind === 'show'
+        ? ['Series']
+        : kind === 'game'
+          ? ['Video Game']
+          : mediaType === 'comic'
+            ? ['Comics']
+            : mediaType === 'manga'
+              ? ['Manga']
+              : kind === 'read'
+                ? ['Fiction']
+                : ['Feature Film'];
+
+  return {
+    rowNumber,
+    kind,
+    domain,
+    mediaType,
+    title: candidateTitle,
+    year: derivedYear,
+    explicitYear,
+    creator,
+    userRating,
+    dateYmd,
+    seasonNum,
+    notes: Array.from(new Set(notes.filter(Boolean))),
+    platformHint,
+    genreHints,
+    rawLine,
+  };
+}
+
+function consolidateTextLogOccurrences(
+  occurrences: ParsedTextLogOccurrence[]
+): ImportCandidate[] {
+  const groups = new Map<string, ParsedTextLogOccurrence[]>();
+
+  for (const occ of occurrences) {
+    const titleKey = normalizeImportTitle(occ.title);
+    if (!titleKey) continue;
+    const yearSuffix = occ.kind === 'movie' && occ.explicitYear ? `::${occ.explicitYear}` : '';
+    const key = `${occ.kind}::${titleKey}${yearSuffix}`;
+    const list = groups.get(key) || [];
+    list.push(occ);
+    groups.set(key, list);
+  }
+
+  const candidates: ImportCandidate[] = [];
+  let idx = 0;
+
+  for (const list of groups.values()) {
+    // Deduplicate identical dateYmd entries (keeping richer rating/notes/title)
+    const byDate = new Map<string, ParsedTextLogOccurrence>();
+    const undated: ParsedTextLogOccurrence[] = [];
+
+    for (const occ of list) {
+      if (!occ.dateYmd) {
+        undated.push(occ);
+        continue;
+      }
+      const prev = byDate.get(occ.dateYmd);
+      if (!prev) {
+        byDate.set(occ.dateYmd, occ);
+      } else {
+        byDate.set(occ.dateYmd, {
+          ...prev,
+          userRating: Math.max(prev.userRating || 0, occ.userRating || 0) || undefined,
+          creator: prev.creator || occ.creator,
+          platformHint: prev.platformHint || occ.platformHint,
+          seasonNum: prev.seasonNum ?? occ.seasonNum,
+          notes: Array.from(new Set([...prev.notes, ...occ.notes])),
+          mediaType: prev.mediaType === 'anime' || occ.mediaType === 'anime' ? 'anime' : occ.mediaType,
+          explicitYear: prev.explicitYear || occ.explicitYear,
+        });
+      }
+    }
+
+    const sortedDated = Array.from(byDate.values()).sort((a, b) =>
+      (a.dateYmd || '').localeCompare(b.dateYmd || '')
+    );
+    const ordered = [...sortedDated, ...undated];
+    const latest = sortedDated[sortedDated.length - 1] || ordered[0];
+    const first = ordered[0];
+
+    const extraRuns: NonNullable<ImportCandidate['extraRuns']> = sortedDated.map((occ) => ({
+      finishedAt: normalizeImportDateIso(occ.dateYmd!)!,
+      ...(occ.notes.length > 0 ? { note: occ.notes.join(' · ') } : {}),
+      ...(occ.userRating ? { rating: occ.userRating } : {}),
+    }));
+
+    const seasonDates: Record<number, string> = {};
+    for (const occ of ordered) {
+      if (occ.kind === 'show' && occ.seasonNum && occ.dateYmd) {
+        seasonDates[occ.seasonNum] = normalizeImportDateIso(occ.dateYmd)!;
+      }
+    }
+
+    const bestRating = ordered.reduce<number | undefined>(
+      (best, occ) => (occ.userRating && (!best || occ.userRating > best) ? occ.userRating : best),
+      undefined
+    );
+
+    const allNotes = Array.from(new Set(ordered.flatMap((o) => o.notes)));
+    const summaryBits: string[] = [];
+    if (latest.dateYmd) summaryBits.push(`Finished ${formatHumanDateLabel(latest.dateYmd)}`);
+    if (extraRuns.length > 1) summaryBits.push(`${extraRuns.length} logged runs`);
+    if (allNotes.length > 0) summaryBits.push(allNotes.slice(0, 4).join(' · '));
+
+    idx += 1;
+    candidates.push({
+      tempId: `txt-${idx}-${normalizeImportTitle(latest.title).replace(/\s+/g, '-').slice(0, 18)}`,
+      kind: latest.kind,
+      domain: latest.domain,
+      mediaType: ordered.some((o) => o.mediaType === 'anime') ? 'anime' : latest.mediaType,
+      title: latest.title,
+      year: latest.explicitYear || first.year || latest.year,
+      genres: latest.genreHints,
+      creator: ordered.find((o) => o.creator)?.creator,
+      userRating: bestRating,
+      completed: true,
+      readStatus: latest.kind === 'read' ? 'finished' : undefined,
+      dateStr: latest.dateYmd ? normalizeImportDateIso(latest.dateYmd) : undefined,
+      extraRuns: extraRuns.length > 0 ? extraRuns : undefined,
+      seasonDates: Object.keys(seasonDates).length > 0 ? seasonDates : undefined,
+      platformHint: ordered.find((o) => o.platformHint)?.platformHint,
+      overview: summaryBits.length > 0 ? summaryBits.join(' · ') : undefined,
+      rowNumber: latest.rowNumber,
+    });
+  }
+
+  return candidates.sort((a, b) => (b.dateStr || '').localeCompare(a.dateStr || ''));
+}
+
+export function parseTextFinishedLog(rawText: string, _fileName = ''): ParsedImportBatch {
+  const clean = rawText.replace(/^\uFEFF/, '');
+  const lines = clean.split(/\r?\n/);
+
+  // Detect Google Calendar Schedule / Agenda blocks first
+  const hasGcalHeaders = lines.some((l) => GCAL_HEADER_RE.test(l.trim()));
+  const occurrences: ParsedTextLogOccurrence[] = [];
+  const skipped: SkippedImportRow[] = [];
+
+  if (hasGcalHeaders) {
+    let pendingDay: number | null = null;
+    let currentYmd: string | undefined;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      if (/^\d{1,2}$/.test(line)) {
+        const nextLine = (lines[i + 1] || '').trim();
+        if (GCAL_HEADER_RE.test(nextLine)) {
+          const d = Number(line);
+          if (d >= 1 && d <= 31) {
+            pendingDay = d;
+            continue;
+          }
+        }
+      }
+
+      const hdrMatch = line.match(GCAL_HEADER_RE);
+      if (hdrMatch) {
+        const month = MONTH_INDEX_BY_ABBR[hdrMatch[1].toLowerCase()];
+        const year = Number(hdrMatch[2]);
+        const day = pendingDay ?? 1;
+        pendingDay = null;
+        if (month && year) {
+          currentYmd = formatYmd(year, month, day);
+        }
+        continue;
+      }
+
+      if (
+        /^all day$/i.test(line) ||
+        /^\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*[–-]\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?$/i.test(line) ||
+        /^\d{1,2}:\d{2}(?:\s*(?:am|pm))?$/i.test(line)
+      ) {
+        continue;
+      }
+
+      if (isVenueOrAddressLine(line)) {
+        skipped.push({
+          rowNumber: i + 1,
+          title: line,
+          reason: 'Venue / street address line',
+        });
+        continue;
+      }
+
+      const parsed = parseFinishedLogLine(line, i + 1, currentYmd);
+      if (parsed) {
+        occurrences.push(parsed);
+      } else {
+        skipped.push({ rowNumber: i + 1, title: line, reason: 'Unrecognized empty log entry' });
+      }
+    }
+  } else {
+    // Generic plain-text finished log: dated lines ("2026-11-04 - Finished ...") or plain/bullet list
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line || line.startsWith('#')) continue;
+      if (isVenueOrAddressLine(line)) {
+        skipped.push({ rowNumber: i + 1, title: line, reason: 'Venue / street address line' });
+        continue;
+      }
+
+      let dateYmd: string | undefined;
+      let body = line;
+      const dateMatch = line.match(GENERIC_DATE_LINE_RE);
+      if (dateMatch) {
+        if (dateMatch[1]) {
+          dateYmd = dateMatch[1];
+        } else if (dateMatch[2]) {
+          const d = new Date(dateMatch[2]);
+          if (!Number.isNaN(d.getTime())) {
+            dateYmd = formatYmd(d.getFullYear(), d.getMonth() + 1, d.getDate());
+          }
+        }
+        body = dateMatch[3].trim();
+      }
+
+      const parsed = parseFinishedLogLine(body, i + 1, dateYmd);
+      if (parsed) occurrences.push(parsed);
+    }
+  }
+
+  const candidates = consolidateTextLogOccurrences(occurrences);
+  if (candidates.length === 0) {
+    return {
+      source: 'unknown',
+      sourceLabel: 'Text Finished Log',
+      candidates: [],
+      skipped,
+      error: 'No finished titles could be parsed from this text log.',
+    };
+  }
+
+  return {
+    source: 'text-finished-log',
+    sourceLabel: hasGcalHeaders ? 'Google Calendar Finished Log (.txt)' : 'Finished Log (.txt)',
+    candidates,
+    skipped,
+  };
+}
+
+function looksLikeTextFinishedLog(trimmed: string, fileName = ''): boolean {
+  if (
+    /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+\d{4},\s+(?:mon|tue|wed|thu|fri|sat|sun)\b/i.test(
+      trimmed
+    )
+  ) {
+    return true;
+  }
+  const lowerName = fileName.toLowerCase();
+  if (lowerName.endsWith('.txt') || lowerName.endsWith('.text') || lowerName.endsWith('.log')) {
+    return true;
+  }
+  return (
+    /^[\u{1F300}-\u{1FAFF}]/mu.test(trimmed) ||
+    /^(?:\d{4}-\d{2}-\d{2}\s+[-–—:|]\s+)?(?:fully\s+)?(?:finished|rewatched|watched|reread|played|beat|completed)\s+/im.test(
+      trimmed
+    )
+  );
+}
+
 export function parseImportFile(rawText: string, fileName = ''): ParsedImportBatch {
   const trimmed = rawText.trim();
   if (!trimmed) {
@@ -1218,7 +2170,7 @@ export function parseImportFile(rawText: string, fileName = ''): ParsedImportBat
       sourceLabel: 'Empty Input',
       candidates: [],
       skipped: [],
-      error: 'Select a CSV/JSON export or paste CSV text to preview.',
+      error: 'Select a CSV, JSON, or TXT log file or paste text to preview.',
     };
   }
 
@@ -1236,64 +2188,69 @@ export function parseImportFile(rawText: string, fileName = ''): ParsedImportBat
     }
   }
 
+  // Detect Google Calendar Schedule/Agenda plain-text exports before CSV parsing
+  if (
+    /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+\d{4},\s+(?:mon|tue|wed|thu|fri|sat|sun)\b/i.test(
+      trimmed
+    )
+  ) {
+    return parseTextFinishedLog(trimmed, fileName);
+  }
+
   const rows = parseCsvRows(trimmed);
-  if (rows.length < 2) {
-    return {
-      source: 'unknown',
-      sourceLabel: 'CSV File',
-      candidates: [],
-      skipped: [],
-      error: 'CSV needs a header row and at least one media row.',
-    };
-  }
+  if (rows.length >= 2) {
+    const headers = buildHeaderIndex(rows[0]);
 
-  const headers = buildHeaderIndex(rows[0]);
-
-  if (
-    headers['const'] !== undefined ||
-    headers['titletype'] !== undefined ||
-    headers['imdbrating'] !== undefined ||
-    headers['yourrating'] !== undefined
-  ) {
-    return parseImdbCsv(rows, headers, fileName);
-  }
-
-  if (headers['titleid'] !== undefined) {
-    if (headers['prompttype'] !== undefined || headers['dismissaldate'] !== undefined) {
-      return {
-        source: 'unknown',
-        sourceLabel: 'IMDb Dismissals Log',
-        candidates: [],
-        skipped: [],
-        error:
-          'This looks like an IMDb recommendation dismissals log (IMDbPersonalization.Dismissals.csv). Upload IMDbRatings.UserRatings.csv or a Watchlist/List export instead.',
-      };
+    if (
+      headers['const'] !== undefined ||
+      headers['titletype'] !== undefined ||
+      headers['imdbrating'] !== undefined ||
+      headers['yourrating'] !== undefined
+    ) {
+      return parseImdbCsv(rows, headers, fileName);
     }
-    return parseImdbAccountExportCsv(rows, headers, fileName);
+
+    if (headers['titleid'] !== undefined) {
+      if (headers['prompttype'] !== undefined || headers['dismissaldate'] !== undefined) {
+        return {
+          source: 'unknown',
+          sourceLabel: 'IMDb Dismissals Log',
+          candidates: [],
+          skipped: [],
+          error:
+            'This looks like an IMDb recommendation dismissals log (IMDbPersonalization.Dismissals.csv). Upload IMDbRatings.UserRatings.csv or a Watchlist/List export instead.',
+        };
+      }
+      return parseImdbAccountExportCsv(rows, headers, fileName);
+    }
+
+    if (
+      headers['letterboxduri'] !== undefined ||
+      (headers['name'] !== undefined && headers['year'] !== undefined)
+    ) {
+      return parseLetterboxdCsv(rows, headers, fileName);
+    }
+
+    if (headers['exclusiveshelf'] !== undefined || headers['authorlf'] !== undefined || headers['bookid'] !== undefined) {
+      return parseGoodreadsCsv(rows, headers);
+    }
+
+    // Generic Title + Type fallback CSV
+    if (headers['title'] !== undefined) {
+      return parseImdbCsv(rows, headers, fileName);
+    }
   }
 
-  if (
-    headers['letterboxduri'] !== undefined ||
-    (headers['name'] !== undefined && headers['year'] !== undefined)
-  ) {
-    return parseLetterboxdCsv(rows, headers, fileName);
-  }
-
-  if (headers['exclusiveshelf'] !== undefined || headers['authorlf'] !== undefined || headers['bookid'] !== undefined) {
-    return parseGoodreadsCsv(rows, headers);
-  }
-
-  // Generic Title + Type fallback CSV
-  if (headers['title'] !== undefined) {
-    return parseImdbCsv(rows, headers, fileName);
+  if (looksLikeTextFinishedLog(trimmed, fileName)) {
+    return parseTextFinishedLog(trimmed, fileName);
   }
 
   return {
     source: 'unknown',
-    sourceLabel: 'Unrecognized CSV',
+    sourceLabel: 'Unrecognized Import',
     candidates: [],
     skipped: [],
-    error: 'Unrecognized CSV headers. Supported formats: IMDb CSV, Letterboxd CSV, Goodreads CSV, and JSON backups.',
+    error: 'Unrecognized format. Supported: IMDb CSV, Letterboxd CSV, Goodreads CSV, JSON backups, and .txt finished logs.',
   };
 }
 
@@ -1428,6 +2385,31 @@ export function buildFallbackShow(c: ImportCandidate): Show {
   if (c.mediaType === 'anime' && !baseGenres.some((g) => g.toLowerCase() === 'anime')) {
     baseGenres.unshift('Anime');
   }
+  const seasonNums = c.seasonDates
+    ? Object.keys(c.seasonDates)
+        .map(Number)
+        .filter((n) => Number.isFinite(n) && n >= 1)
+    : [];
+  const maxSeason = seasonNums.length > 0 ? Math.max(...seasonNums) : 1;
+  const seasons = Array.from({ length: maxSeason }, (_, idx) => {
+    const sNum = idx + 1;
+    const airIso = c.seasonDates?.[sNum]?.slice(0, 10) || `${c.year}-01-01`;
+    return {
+      number: sNum,
+      episodes: [
+        {
+          id: `${id}-s${sNum}e1`,
+          season: sNum,
+          number: 1,
+          title: 'Episode 1',
+          airdate: airIso,
+          runtime,
+          stillUrl: poster,
+          overview: '',
+        },
+      ],
+    };
+  });
   return {
     id,
     title: c.title,
@@ -1440,24 +2422,8 @@ export function buildFallbackShow(c: ImportCandidate): Show {
     overview: c.overview || `${c.title} (${c.year}).`,
     runtimeAvg: runtime,
     network: 'Streaming',
-    totalEpisodes: 1,
-    seasons: [
-      {
-        number: 1,
-        episodes: [
-          {
-            id: `${id}-s1e1`,
-            season: 1,
-            number: 1,
-            title: 'Episode 1',
-            airdate: `${c.year}-01-01`,
-            runtime,
-            stillUrl: poster,
-            overview: '',
-          },
-        ],
-      },
-    ],
+    totalEpisodes: seasons.length,
+    seasons,
     cast: [],
   };
 }
@@ -1509,6 +2475,9 @@ export function buildFallbackGameItem(c: ImportCandidate): GameItem {
   const id = slugifyImportId('imp-game', c.title, c.externalConst);
   const known = lookupKnownGameChapters(c.title);
   const cover = c.posterUrl || '';
+  const platforms: GamePlatform[] = c.platformHint
+    ? Array.from(new Set<GamePlatform>([c.platformHint, 'PC', 'PS5']))
+    : ['PC', 'PS5'];
   return {
     id,
     title: c.title,
@@ -1516,7 +2485,7 @@ export function buildFallbackGameItem(c: ImportCandidate): GameItem {
     year: c.year,
     genres: c.genres.length > 0 ? c.genres : ['Video Game'],
     rating: c.communityRating ? Number((c.communityRating / 2).toFixed(1)) : 4.5,
-    platforms: ['PC', 'PS5'],
+    platforms,
     coverUrl: cover,
     backdropUrl: cover,
     overview: c.overview || `${c.title} (${c.year}).`,

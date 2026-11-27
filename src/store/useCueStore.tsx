@@ -82,7 +82,9 @@ import {
 import {
   annotateImportDuplicates,
   classifyReadFormat,
+  type ImportCandidate,
   type ImportConflictPolicy,
+  normalizeImportDateIso,
   type PreparedImportEntry,
 } from '../utils/mediaImport';
 import {
@@ -6345,9 +6347,49 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       let skipped = 0;
       const nowIso = new Date().toISOString();
 
+      const mergeImportRuns = (
+        existingRuns: CompletionRun[] | undefined,
+        cand: ImportCandidate,
+        primaryIso: string | undefined,
+        runPrefix: string
+      ): { runs: CompletionRun[]; addedCount: number } => {
+        const byDay = new Map<string, CompletionRun>();
+        for (const r of existingRuns || []) {
+          const day = (r.finishedAt || '').slice(0, 10);
+          if (day) byDay.set(day, r);
+        }
+        const initialSize = byDay.size;
+        const incoming: Array<{ finishedAt: string; note?: string }> =
+          cand.extraRuns && cand.extraRuns.length > 0
+            ? cand.extraRuns
+            : primaryIso && cand.completed
+              ? [{ finishedAt: primaryIso }]
+              : [];
+        incoming.forEach((inc, rIdx) => {
+          const normIso = normalizeImportDateIso(inc.finishedAt);
+          if (!normIso) return;
+          const day = normIso.slice(0, 10);
+          const prevRun = byDay.get(day);
+          if (!prevRun) {
+            byDay.set(day, {
+              id: `run-${runPrefix}-${day}-${rIdx}`,
+              finishedAt: normIso,
+              ...(inc.note ? { note: inc.note } : {}),
+            });
+          } else if (!prevRun.note && inc.note) {
+            byDay.set(day, { ...prevRun, note: inc.note });
+          }
+        });
+        const sorted = Array.from(byDay.values()).sort((a, b) =>
+          a.finishedAt.localeCompare(b.finishedAt)
+        );
+        return { runs: sorted, addedCount: Math.max(0, sorted.length - initialSize) };
+      };
+
       selectedEntries.forEach((entry, idx) => {
         const c = annotated[idx];
         const existingId = c.existingId;
+        const primaryIso = normalizeImportDateIso(c.dateStr) || (c.completed ? nowIso : undefined);
 
         if (existingId) {
           if (policy === 'skip_existing') {
@@ -6358,9 +6400,41 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           let changed = false;
           if (c.kind === 'show' && nextShows[existingId]) {
             const ep = nextShowProgress[existingId];
-            if (ep && !ep.rating && c.userRating) {
-              nextShowProgress[existingId] = { ...ep, rating: c.userRating };
-              changed = true;
+            if (ep) {
+              const patched: ShowProgress = { ...ep };
+              if (!patched.rating && c.userRating) {
+                patched.rating = c.userRating;
+                changed = true;
+              }
+              if (c.completed && primaryIso) {
+                if (!patched.finishedAt) {
+                  patched.finishedAt = primaryIso;
+                  patched.lastWatchedAt = patched.lastWatchedAt || primaryIso;
+                  changed = true;
+                }
+                const { runs, addedCount } = mergeImportRuns(
+                  patched.completedRuns,
+                  c,
+                  primaryIso,
+                  existingId
+                );
+                if (addedCount > 0) {
+                  patched.completedRuns = runs;
+                  changed = true;
+                }
+              }
+              if (c.seasonDates) {
+                const nextSeasons = { ...(patched.seasonFinishedAt || {}) };
+                for (const [sNumStr, iso] of Object.entries(c.seasonDates)) {
+                  const sNum = Number(sNumStr);
+                  if (!nextSeasons[sNum] && iso) {
+                    nextSeasons[sNum] = iso;
+                    changed = true;
+                  }
+                }
+                if (changed) patched.seasonFinishedAt = nextSeasons;
+              }
+              if (changed) nextShowProgress[existingId] = patched;
             }
           } else if (c.kind === 'movie' && nextMovies[existingId]) {
             const mp = nextMovieProgress[existingId];
@@ -6368,18 +6442,37 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               status: mp?.status || 'watchlist',
               watchCount: mp?.watchCount || 0,
               watchedAt: mp?.watchedAt,
+              completedRuns: mp?.completedRuns,
               rating: mp?.rating,
+              ownership: mp?.ownership,
+              collection: mp?.collection,
               mood: mp?.mood,
             };
             if (!patched.rating && c.userRating) {
               patched.rating = c.userRating;
               changed = true;
             }
-            if (patched.watchCount === 0 && c.completed) {
-              patched.status = 'watched';
-              patched.watchCount = 1;
-              patched.watchedAt = patched.watchedAt || c.dateStr || nowIso;
-              changed = true;
+            if (c.completed) {
+              const { runs, addedCount } = mergeImportRuns(
+                patched.completedRuns,
+                c,
+                primaryIso,
+                existingId
+              );
+              if (patched.watchCount === 0) {
+                patched.status = 'watched';
+                patched.watchCount = Math.max(1, runs.length);
+                patched.watchedAt = patched.watchedAt || primaryIso || nowIso;
+                changed = true;
+              } else if (addedCount > 0) {
+                patched.watchCount = Math.max(patched.watchCount, runs.length);
+                patched.watchedAt = patched.watchedAt || primaryIso;
+                changed = true;
+              }
+              if (runs.length > 0 && (addedCount > 0 || !patched.completedRuns?.length)) {
+                patched.completedRuns = runs;
+                changed = true;
+              }
             }
             if (changed) nextMovieProgress[existingId] = patched;
           } else if (c.kind === 'read' && nextReadItems[existingId]) {
@@ -6429,7 +6522,26 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 patched.currentUnit = updatedItem.totalUnits;
                 patched.maxCompletedUnit = Math.max(updatedItem.totalUnits, rp.maxCompletedUnit || 0);
                 patched.rereadCount = Math.max(1, rp.rereadCount || 0);
+                patched.finishedAt = patched.finishedAt || primaryIso;
+                patched.lastReadAt = patched.lastReadAt || primaryIso;
                 changed = true;
+              }
+              if (c.completed && primaryIso) {
+                if (!patched.finishedAt) {
+                  patched.finishedAt = primaryIso;
+                  changed = true;
+                }
+                const { runs, addedCount } = mergeImportRuns(
+                  patched.completedRuns,
+                  c,
+                  primaryIso,
+                  existingId
+                );
+                if (addedCount > 0 || (runs.length > 0 && !patched.completedRuns?.length)) {
+                  patched.completedRuns = runs;
+                  patched.rereadCount = Math.max(patched.rereadCount || 0, runs.length);
+                  changed = true;
+                }
               }
               if (changed) nextReadProgress[existingId] = patched;
             }
@@ -6445,7 +6557,26 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
                 patched.status = 'completed';
                 patched.completionPct = 100;
                 patched.playthroughCount = Math.max(1, gp.playthroughCount || 0);
+                patched.finishedAt = patched.finishedAt || primaryIso;
+                patched.lastPlayedAt = patched.lastPlayedAt || primaryIso;
                 changed = true;
+              }
+              if (c.completed && primaryIso) {
+                if (!patched.finishedAt) {
+                  patched.finishedAt = primaryIso;
+                  changed = true;
+                }
+                const { runs, addedCount } = mergeImportRuns(
+                  patched.completedRuns,
+                  c,
+                  primaryIso,
+                  existingId
+                );
+                if (addedCount > 0 || (runs.length > 0 && !patched.completedRuns?.length)) {
+                  patched.completedRuns = runs;
+                  patched.playthroughCount = Math.max(patched.playthroughCount || 0, runs.length);
+                  changed = true;
+                }
               }
               if (changed) nextGameProgress[existingId] = patched;
             }
@@ -6468,12 +6599,21 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               epCounts[getEpisodeKey(ep.season, ep.number)] = 1;
             }
           }
+          const { runs } = c.completed
+            ? mergeImportRuns(undefined, c, primaryIso, sid)
+            : { runs: [] as CompletionRun[] };
           nextShowProgress[sid] = {
             status: c.completed ? 'finished' : 'not_started',
             episodeCounts: epCounts,
             bookmarked: true,
             notifications: true,
-            lastWatchedAt: c.completed ? c.dateStr || nowIso : undefined,
+            lastWatchedAt: c.completed ? primaryIso : undefined,
+            finishedAt: c.completed ? primaryIso : undefined,
+            completedRuns: runs.length > 0 ? runs : undefined,
+            seasonFinishedAt:
+              c.seasonDates && Object.keys(c.seasonDates).length > 0
+                ? { ...c.seasonDates }
+                : undefined,
             rating: c.userRating,
           };
           if (c.completed) {
@@ -6486,7 +6626,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               posterUrl: storedShow.posterUrl,
               codeLabel: 'Imported · Finished',
               subtitle: storedShow.mediaType === 'anime' ? 'Anime' : 'Show',
-              loggedAt: c.dateStr || nowIso,
+              loggedAt: primaryIso || nowIso,
             });
           }
           added += 1;
@@ -6496,10 +6636,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           const storedMovie = mid === movie.id ? movie : { ...movie, id: mid };
           nextMovies[mid] = storedMovie;
           newMovieIds.push(mid);
+          const { runs } = c.completed
+            ? mergeImportRuns(undefined, c, primaryIso, mid)
+            : { runs: [] as CompletionRun[] };
           nextMovieProgress[mid] = {
             status: c.completed ? 'watched' : 'watchlist',
-            watchCount: c.completed ? 1 : 0,
-            watchedAt: c.completed ? c.dateStr || nowIso : undefined,
+            watchCount: c.completed ? Math.max(1, runs.length) : 0,
+            watchedAt: c.completed ? primaryIso : undefined,
+            completedRuns: runs.length > 0 ? runs : undefined,
             rating: c.userRating,
           };
           if (c.completed) {
@@ -6512,7 +6656,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               posterUrl: storedMovie.posterUrl,
               codeLabel: 'Watched',
               subtitle: `${storedMovie.year} · ${storedMovie.runtime}m`,
-              loggedAt: c.dateStr || nowIso,
+              loggedAt: primaryIso || nowIso,
             });
           }
           added += 1;
@@ -6524,13 +6668,18 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           newReadIds.push(rid);
           const finished = c.readStatus === 'finished' || c.completed;
           const reading = c.readStatus === 'reading';
+          const { runs } = finished
+            ? mergeImportRuns(undefined, c, primaryIso, rid)
+            : { runs: [] as CompletionRun[] };
           nextReadProgress[rid] = {
             status: finished ? 'finished' : reading ? 'reading' : 'want_to_read',
             currentUnit: finished ? storedRead.totalUnits : reading ? 1 : 0,
             maxCompletedUnit: finished ? storedRead.totalUnits : reading ? 1 : 0,
-            rereadCount: finished ? 1 : 0,
+            rereadCount: finished ? Math.max(1, runs.length) : 0,
             bookmarked: true,
-            lastReadAt: finished || reading ? c.dateStr || nowIso : undefined,
+            lastReadAt: finished || reading ? primaryIso : undefined,
+            finishedAt: finished ? primaryIso : undefined,
+            completedRuns: runs.length > 0 ? runs : undefined,
             rating: c.userRating,
           };
           if (finished) {
@@ -6543,7 +6692,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               posterUrl: storedRead.coverUrl,
               codeLabel: 'Finished',
               subtitle: storedRead.creator,
-              loggedAt: c.dateStr || nowIso,
+              loggedAt: primaryIso || nowIso,
             });
           }
           added += 1;
@@ -6553,16 +6702,21 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
           const storedGame = gid === game.id ? game : { ...game, id: gid };
           nextGames[gid] = storedGame;
           newGameIds.push(gid);
+          const { runs } = c.completed
+            ? mergeImportRuns(undefined, c, primaryIso, gid)
+            : { runs: [] as CompletionRun[] };
           nextGameProgress[gid] = {
             status: c.completed ? 'completed' : 'backlog',
             hoursPlayed: 0,
             completionPct: c.completed ? 100 : 0,
             currentChapter: c.completed && storedGame.totalChapters ? storedGame.totalChapters : 0,
-            playthroughCount: c.completed ? 1 : 0,
+            playthroughCount: c.completed ? Math.max(1, runs.length) : 0,
             platinum: false,
-            platform: storedGame.platforms[0] || 'PC',
+            platform: c.platformHint || storedGame.platforms[0] || 'PC',
             bookmarked: true,
-            lastPlayedAt: c.completed ? c.dateStr || nowIso : undefined,
+            lastPlayedAt: c.completed ? primaryIso : undefined,
+            finishedAt: c.completed ? primaryIso : undefined,
+            completedRuns: runs.length > 0 ? runs : undefined,
             rating: c.userRating,
           };
           if (c.completed) {
@@ -6575,7 +6729,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
               posterUrl: storedGame.coverUrl,
               codeLabel: 'Completed',
               subtitle: storedGame.developer,
-              loggedAt: c.dateStr || nowIso,
+              loggedAt: primaryIso || nowIso,
             });
           }
           added += 1;

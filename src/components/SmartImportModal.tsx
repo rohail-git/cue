@@ -149,19 +149,61 @@ export function SmartImportModal() {
       .map(([id, label]) => [id, id === 'all' ? label : `${label} (${counts[id]})`] as const);
   }, [resolvedCandidates]);
 
-  const cycleReadCandidateFormat = (tempId: string) => {
+  const cycleCandidateType = (tempId: string) => {
     setParsed((prev) => {
       if (!prev) return prev;
+      const allowAllDomains = prev.source === 'text-finished-log';
+      const allOrder: ImportCandidate['mediaType'][] = [
+        'tv',
+        'anime',
+        'movie',
+        'comic',
+        'manga',
+        'novel',
+        'game',
+      ];
       return {
         ...prev,
         candidates: prev.candidates.map((c) => {
-          if (c.tempId !== tempId || c.kind !== 'read') return c;
-          const nextFormat: 'comic' | 'manga' | 'novel' =
-            c.mediaType === 'comic' ? 'manga' : c.mediaType === 'manga' ? 'novel' : 'comic';
+          if (c.tempId !== tempId) return c;
+          if (!allowAllDomains) {
+            if (c.kind !== 'read') return c;
+            const nextFormat: 'comic' | 'manga' | 'novel' =
+              c.mediaType === 'comic' ? 'manga' : c.mediaType === 'manga' ? 'novel' : 'comic';
+            return {
+              ...c,
+              mediaType: nextFormat,
+              genres: [nextFormat === 'comic' ? 'Comics' : nextFormat === 'manga' ? 'Manga' : 'Fiction'],
+            };
+          }
+          const idx = allOrder.indexOf(c.mediaType);
+          const nextMediaType = allOrder[(idx + 1) % allOrder.length];
+          const nextKind: ImportCandidate['kind'] =
+            nextMediaType === 'tv' || nextMediaType === 'anime'
+              ? 'show'
+              : nextMediaType === 'movie'
+                ? 'movie'
+                : nextMediaType === 'game'
+                  ? 'game'
+                  : 'read';
+          const nextDomain: ImportCandidate['domain'] =
+            nextKind === 'read' ? 'read' : nextKind === 'game' ? 'play' : 'watch';
+          const genreMap: Record<ImportCandidate['mediaType'], string> = {
+            tv: 'Series',
+            anime: 'Anime',
+            movie: 'Feature Film',
+            comic: 'Comics',
+            manga: 'Manga',
+            novel: 'Fiction',
+            game: 'Video Game',
+          };
           return {
             ...c,
-            mediaType: nextFormat,
-            genres: [nextFormat === 'comic' ? 'Comics' : nextFormat === 'manga' ? 'Manga' : 'Fiction'],
+            kind: nextKind,
+            domain: nextDomain,
+            mediaType: nextMediaType,
+            readStatus: nextKind === 'read' ? 'finished' : undefined,
+            genres: [genreMap[nextMediaType]],
           };
         }),
       };
@@ -251,7 +293,7 @@ export function SmartImportModal() {
       }
     }
     setSelectedMap(initialSel);
-    setEnrichArt(!(result.source === 'goodreads' && result.candidates.length > 50));
+    setEnrichArt(result.candidates.length <= 50);
 
     if (result.needsIdResolution && result.candidates.length > 0 && result.candidates.length <= 100) {
       void resolvePendingImdbIds(result);
@@ -310,10 +352,11 @@ export function SmartImportModal() {
         const slice = selectedCandidates.slice(i, i + batchSize);
         const batchResults = await Promise.all(
           slice.map(async (cand) => {
-            if (!enrichArt || (cand.existingId && policy === 'skip_existing')) {
-              return buildFallbackPreparedEntry(cand);
-            }
-            return enrichImportCandidate(cand, state.settings.tmdbApiKey);
+            const res =
+              !enrichArt || (cand.existingId && policy === 'skip_existing')
+                ? buildFallbackPreparedEntry(cand)
+                : await enrichImportCandidate(cand, state.settings.tmdbApiKey);
+            return { ...res, selected: true };
           })
         );
         if (cancelRef.current) break;
@@ -405,6 +448,7 @@ export function SmartImportModal() {
                   'IMDb Watchlist CSV',
                   'Letterboxd CSV',
                   'Goodreads CSV',
+                  'Finished Log TXT',
                   'Trakt / TV Time JSON',
                   'Cue Backup JSON',
                 ].map((fmt) => (
@@ -424,16 +468,16 @@ export function SmartImportModal() {
               >
                 <Upload className="w-7 h-7 text-watch mx-auto mb-2.5" />
                 <p className="font-display font-bold text-base text-ink">
-                  Choose CSV or JSON export file
+                  Choose CSV, JSON, or TXT file
                 </p>
                 <p className="text-xs text-ink-dim mt-1">
-                  From IMDb (Account Data or Your Ratings / Watchlist → ⋮ → Export), Letterboxd, Goodreads, or Cue
+                  IMDb, Letterboxd, Goodreads, Cue backup JSON, or plain-text .txt finished logs (Google Calendar exports, dated lists)
                 </p>
               </button>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".csv,.json,text/csv,application/json"
+                accept=".csv,.json,.txt,.text,text/csv,application/json,text/plain"
                 className="hidden"
                 onChange={handleFileChange}
               />
@@ -445,7 +489,7 @@ export function SmartImportModal() {
                   className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-dim hover:text-ink"
                 >
                   <FileSpreadsheet className="w-3.5 h-3.5 text-brand" />
-                  <span>Or paste CSV / JSON text directly</span>
+                  <span>Or paste CSV, JSON, or plain-text log directly</span>
                   {showPasteBox ? (
                     <ChevronDown className="w-3.5 h-3.5" />
                   ) : (
@@ -459,13 +503,13 @@ export function SmartImportModal() {
                       rows={5}
                       value={rawInput}
                       onChange={(e) => setRawInput(e.target.value)}
-                      placeholder={'Const,Your Rating,Date Rated,Title,URL,Title Type,IMDb Rating,Runtime (mins),Year,Genres,Num Votes,Release Date,Directors\ntt7631058,8,2026-10-12,The Lord of the Rings: The Rings of Power,,tvSeries,6.9,65,2022,"Action, Adventure, Drama",400000,2022-09-01,'}
+                      placeholder={'Paste IMDb/Letterboxd/Goodreads CSV, Cue JSON, or a .txt log:\n4\nNov 2026, Wed\nAll day\n📺 Finished Reacher (season 4) ⭐⭐⭐⭐'}
                       className="w-full rounded-2xl bg-background border border-white/12 p-3 text-xs font-mono text-ink placeholder:text-ink-faint outline-none focus:border-brand resize-y"
                     />
                     <button
                       type="button"
                       disabled={!rawInput.trim()}
-                      onClick={() => runParse(rawInput, 'pasted-export.csv')}
+                      onClick={() => runParse(rawInput, 'pasted-import.txt')}
                       className="px-4 py-2 rounded-full bg-brand text-brand-ink text-xs font-semibold disabled:opacity-40"
                     >
                       Preview import
@@ -641,7 +685,9 @@ export function SmartImportModal() {
                         ? 'ISBN covers ready (fast import)'
                         : parsed.source === 'imdb-account-export' && selectedCandidates.length > 50 && !enrichArt
                           ? 'Posters fetched (fast import)'
-                          : 'Fetch posters & episodes'}
+                          : resolvedCandidates.length > 50 && !enrichArt
+                            ? 'Fast import (artwork loads on open)'
+                            : 'Fetch posters & episodes'}
                     </span>
                   </label>
                 </div>
@@ -854,16 +900,20 @@ export function SmartImportModal() {
                           <div className="min-w-0">
                             <p className="text-sm font-semibold text-ink truncate">{c.title}</p>
                             <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-                              {c.kind === 'read' ? (
+                              {c.kind === 'read' || parsed.source === 'text-finished-log' ? (
                                 <button
                                   type="button"
                                   disabled={importing}
-                                  title="Click to switch between Comic, Manga, and Novel"
+                                  title={
+                                    parsed.source === 'text-finished-log'
+                                      ? 'Tap to switch type (Show, Anime, Movie, Comic, Manga, Novel, Game)'
+                                      : 'Click to switch between Comic, Manga, and Novel'
+                                  }
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    cycleReadCandidateFormat(c.tempId);
+                                    cycleCandidateType(c.tempId);
                                   }}
-                                  className={`text-[9.5px] font-semibold uppercase px-1.5 py-[1px] rounded hover:ring-1 hover:ring-read/60 ${domainBadgeClass(
+                                  className={`text-[9.5px] font-semibold uppercase px-1.5 py-[1px] rounded hover:ring-1 hover:ring-white/40 ${domainBadgeClass(
                                     c
                                   )}`}
                                 >
@@ -880,8 +930,18 @@ export function SmartImportModal() {
                               )}
                               <span className="text-[11px] text-ink-dim tabular-nums">{c.year}</span>
                               <span className="text-[11px] text-ink-dim">
-                                · {c.completed ? (c.kind === 'read' ? 'Finished' : 'Watched') : 'Watchlist'}
+                                · {c.completed ? (c.kind === 'read' ? 'Finished' : c.kind === 'game' ? 'Completed' : 'Watched') : 'Watchlist'}
                               </span>
+                              {c.dateStr && (
+                                <span className="text-[10.5px] text-ink-faint tabular-nums">
+                                  · {c.dateStr.slice(0, 10)}
+                                </span>
+                              )}
+                              {c.extraRuns && c.extraRuns.length > 1 && (
+                                <span className="text-[10.5px] text-watch font-medium tabular-nums">
+                                  · {c.extraRuns.length} runs
+                                </span>
+                              )}
                               {c.userRating && (
                                 <span className="inline-flex items-center gap-0.5 text-[11px] text-brand tabular-nums">
                                   <Star className="w-3 h-3 fill-brand" />
