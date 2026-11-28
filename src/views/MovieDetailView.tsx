@@ -26,7 +26,7 @@ import { MediaImage } from '../components/MediaImage';
 import { PersonalNotesSection } from '../components/PersonalNotesSection';
 import { HeroRatingCard, RatingControl, SuggestedRatingBanner } from '../components/RatingControl';
 import { enrichMovieStub, fetchTmdbMovieDetails } from '../services/mediaApi';
-import { useCueStore } from '../store/useCueStore';
+import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type { DetailCardMode } from '../types';
 import { getMediaCollectionBadge } from '../utils/collection';
 import { evaluateMovieCollectionProgress, findMovieCollection } from '../utils/containers';
@@ -63,6 +63,7 @@ export function MovieDetailView({ movieId }: { movieId: string }) {
   const [newListName, setNewListName] = useState('');
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [fixModalOpen, setFixModalOpen] = useState(false);
+  useModalBackHandler(listPickerOpen, () => setListPickerOpen(false));
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
     () => sessionDetailModeByMovieId.get(movieId) || state.settings.detailMode || 'simple'
   );

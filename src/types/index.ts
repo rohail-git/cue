@@ -419,7 +419,7 @@ export type RouteView =
   | { view: 'read'; calendarMode?: boolean }
   | { view: 'play'; calendarMode?: boolean }
   | { view: 'journal' }
-  | { view: 'search' }
+  | { view: 'search'; subView?: 'rail' | 'collection' | 'collections' }
   | { view: 'show-detail'; showId: string }
   | { view: 'movie-detail'; movieId: string }
   | { view: 'read-detail'; readId: string }

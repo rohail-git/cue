@@ -143,6 +143,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   const [loadingUnitDetail, setLoadingUnitDetail] = useState(false);
 
   useModalBackHandler(activeUnitDrawer !== null, () => setActiveUnitDrawer(null));
+  useModalBackHandler(listPickerOpen, () => setListPickerOpen(false));
   const [hydratingIssues, setHydratingIssues] = useState(false);
   const [hydratingManga, setHydratingManga] = useState(false);
   const [fixModalOpen, setFixModalOpen] = useState(false);

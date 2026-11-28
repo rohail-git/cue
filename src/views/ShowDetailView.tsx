@@ -108,6 +108,7 @@ export function ShowDetailView({ showId }: { showId: string }) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
 
   useModalBackHandler(Boolean(activeEpisodeDrawer), () => setActiveEpisodeDrawer(null));
+  useModalBackHandler(listPickerOpen, () => setListPickerOpen(false));
   const [detailMode, setDetailMode] = useState<DetailCardMode>(
     () => sessionDetailModeByShowId.get(showId) || state.settings.detailMode || 'simple'
   );

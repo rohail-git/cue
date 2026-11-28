@@ -119,6 +119,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
   const enrichedGameRef = useRef<Set<string>>(new Set());
 
   useModalBackHandler(activeChapterDrawer !== null, () => setActiveChapterDrawer(null));
+  useModalBackHandler(listPickerOpen, () => setListPickerOpen(false));
 
   useEffect(() => {
     setDetailMode(sessionDetailModeByGameId.get(gameId) || state.settings.detailMode || 'simple');

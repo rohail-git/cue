@@ -20,7 +20,7 @@ import { MediaImage } from '../components/MediaImage';
 import { MOOD_OPTIONS } from '../components/PersonalNotesSection';
 import { ProfileMediaPickerModal } from '../components/ProfileMediaPickerModal';
 import { YearWrappedModal } from '../components/YearWrappedModal';
-import { useCueStore } from '../store/useCueStore';
+import { useCueStore, useModalBackHandler } from '../store/useCueStore';
 import type {
   DetailCardMode,
   MediaDomain,
@@ -74,6 +74,9 @@ export function JournalView() {
   const [listOrdered, setListOrdered] = useState(false);
   const [wrappedOpen, setWrappedOpen] = useState(false);
   const [mediaPickerTarget, setMediaPickerTarget] = useState<'avatar' | 'banner' | null>(null);
+
+  useModalBackHandler(composeOpen, () => setComposeOpen(false));
+  useModalBackHandler(newListOpen, () => setNewListOpen(false));
 
   const handleJournalModeChange = (nextMode: DetailCardMode) => {
     sessionJournalMode = nextMode;

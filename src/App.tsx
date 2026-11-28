@@ -50,7 +50,7 @@ function CueShell() {
       case 'journal':
         return <JournalView />;
       case 'search':
-        return <SearchView />;
+        return <SearchView subView={route.subView} />;
       case 'show-detail':
         return <ShowDetailView showId={route.showId} />;
       case 'movie-detail':

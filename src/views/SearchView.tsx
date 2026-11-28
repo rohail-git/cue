@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   Check,
   ChevronLeft,
@@ -73,7 +73,27 @@ const DISCOVER_PILLS: DomainPillConfig[] = [
   },
 ];
 
-let sessionDiscoverScope: DiscoverScope = 'all';
+interface SessionSearchSnapshot {
+  query: string;
+  scope: DiscoverScope;
+  liveResults: LiveSearchResult[];
+  lastLiveQueryKey: string;
+  railsByScope: Partial<Record<DiscoverScope, DiscoverRail[]>>;
+  expandedRail: DiscoverRail | null;
+  expandedCollection: DiscoverCollection | null;
+  scrollY: number;
+}
+
+const sessionSearchState: SessionSearchSnapshot = {
+  query: '',
+  scope: 'all',
+  liveResults: [],
+  lastLiveQueryKey: '',
+  railsByScope: {},
+  expandedRail: null,
+  expandedCollection: null,
+  scrollY: 0,
+};
 
 function badgeLabelForItem(item: LiveSearchResult): string {
   if (item.mediaType === 'tv' || item.mediaType === 'anime') return 'SHOW';
@@ -84,9 +104,14 @@ function badgeLabelForItem(item: LiveSearchResult): string {
   return 'GAME';
 }
 
-export function SearchView() {
+export function SearchView({
+  subView,
+}: {
+  subView?: 'rail' | 'collection' | 'collections';
+}) {
   const {
     state,
+    goBack,
     pushRoute,
     addLiveShowToStore,
     addLiveMovieToStore,
@@ -103,19 +128,26 @@ export function SearchView() {
     createCustomList,
   } = useCueStore();
 
-  const [query, setQuery] = useState('');
-  const [scope, setScopeState] = useState<DiscoverScope>(() => sessionDiscoverScope);
-  const [liveResults, setLiveResults] = useState<LiveSearchResult[]>([]);
+  const [query, setQuery] = useState<string>(() => sessionSearchState.query);
+  const [scope, setScopeState] = useState<DiscoverScope>(() => sessionSearchState.scope);
+  const [liveResults, setLiveResults] = useState<LiveSearchResult[]>(
+    () => sessionSearchState.liveResults
+  );
   const [loadingLive, setLoadingLive] = useState(false);
   const [hydratingId, setHydratingId] = useState<string | null>(null);
 
   const [railsByScope, setRailsByScope] = useState<Partial<Record<DiscoverScope, DiscoverRail[]>>>(
-    {}
+    () => sessionSearchState.railsByScope
   );
-  const [loadingRails, setLoadingRails] = useState(true);
-  const [expandedRail, setExpandedRail] = useState<DiscoverRail | null>(null);
-  const [expandedCollection, setExpandedCollection] = useState<DiscoverCollection | null>(null);
-  const [showAllCollections, setShowAllCollections] = useState(false);
+  const [loadingRails, setLoadingRails] = useState(
+    () => !sessionSearchState.railsByScope[sessionSearchState.scope]
+  );
+  const [expandedRail, setExpandedRail] = useState<DiscoverRail | null>(
+    () => (subView === 'rail' ? sessionSearchState.expandedRail : null)
+  );
+  const [expandedCollection, setExpandedCollection] = useState<DiscoverCollection | null>(
+    () => (subView === 'collection' ? sessionSearchState.expandedCollection : null)
+  );
   const [scannerOpen, setScannerOpen] = useState(false);
   const [customComicOpen, setCustomComicOpen] = useState(false);
   const [customComicTitle, setCustomComicTitle] = useState('');
@@ -123,12 +155,63 @@ export function SearchView() {
   const [customComicYear, setCustomComicYear] = useState('2026');
   const [customComicCount, setCustomComicCount] = useState('6');
 
+  const showAllCollections = subView === 'collections';
+
+  useEffect(() => {
+    setExpandedRail(subView === 'rail' ? sessionSearchState.expandedRail : null);
+    setExpandedCollection(subView === 'collection' ? sessionSearchState.expandedCollection : null);
+  }, [subView]);
+
+  useLayoutEffect(() => {
+    if (subView) return;
+    const savedY = sessionSearchState.scrollY;
+    if (savedY <= 0) return;
+    const rafId = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: savedY, behavior: 'instant' as ScrollBehavior });
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [subView]);
+
+  const handleQueryChange = (nextQuery: string) => {
+    sessionSearchState.query = nextQuery;
+    if (!nextQuery.trim()) {
+      sessionSearchState.liveResults = [];
+      sessionSearchState.lastLiveQueryKey = '';
+      sessionSearchState.scrollY = 0;
+    }
+    setQuery(nextQuery);
+  };
+
   const setScope = (nextScope: DiscoverScope) => {
-    sessionDiscoverScope = nextScope;
+    sessionSearchState.scope = nextScope;
+    sessionSearchState.expandedRail = null;
+    sessionSearchState.expandedCollection = null;
+    sessionSearchState.scrollY = 0;
     setScopeState(nextScope);
     setExpandedRail(null);
     setExpandedCollection(null);
-    setShowAllCollections(false);
+    if (subView) {
+      goBack();
+    }
+  };
+
+  const openExpandedRail = (rail: DiscoverRail) => {
+    sessionSearchState.scrollY = window.scrollY;
+    sessionSearchState.expandedRail = rail;
+    setExpandedRail(rail);
+    pushRoute({ view: 'search', subView: 'rail' });
+  };
+
+  const openExpandedCollection = (col: DiscoverCollection) => {
+    sessionSearchState.scrollY = window.scrollY;
+    sessionSearchState.expandedCollection = col;
+    setExpandedCollection(col);
+    pushRoute({ view: 'search', subView: 'collection' });
+  };
+
+  const openAllCollections = () => {
+    sessionSearchState.scrollY = window.scrollY;
+    pushRoute({ view: 'search', subView: 'collections' });
   };
 
   useEffect(() => {
@@ -148,11 +231,19 @@ export function SearchView() {
     loader
       .then((rails) => {
         if (!cancelled) {
+          sessionSearchState.railsByScope = {
+            ...sessionSearchState.railsByScope,
+            [scope]: rails,
+          };
           setRailsByScope((prev) => ({ ...prev, [scope]: rails }));
         }
       })
       .catch(() => {
         if (!cancelled) {
+          sessionSearchState.railsByScope = {
+            ...sessionSearchState.railsByScope,
+            [scope]: [],
+          };
           setRailsByScope((prev) => ({ ...prev, [scope]: [] }));
         }
       })
@@ -168,7 +259,15 @@ export function SearchView() {
   useEffect(() => {
     const q = query.trim();
     if (q.length < 2) {
+      sessionSearchState.liveResults = [];
+      sessionSearchState.lastLiveQueryKey = '';
       setLiveResults([]);
+      setLoadingLive(false);
+      return;
+    }
+
+    const reqKey = `${scope}::${q.toLowerCase()}`;
+    if (sessionSearchState.lastLiveQueryKey === reqKey) {
       setLoadingLive(false);
       return;
     }
@@ -178,9 +277,16 @@ export function SearchView() {
     const timer = setTimeout(async () => {
       try {
         const res = await searchLiveMedia(q, scope, state.settings.tmdbApiKey);
-        if (!cancelled) setLiveResults(res);
+        if (!cancelled) {
+          sessionSearchState.liveResults = res;
+          sessionSearchState.lastLiveQueryKey = reqKey;
+          setLiveResults(res);
+        }
       } catch {
-        if (!cancelled) setLiveResults([]);
+        if (!cancelled) {
+          sessionSearchState.liveResults = [];
+          setLiveResults([]);
+        }
       } finally {
         if (!cancelled) setLoadingLive(false);
       }
@@ -366,6 +472,9 @@ export function SearchView() {
   };
 
   const handleOpenLiveResult = async (item: LiveSearchResult, andAdd = false) => {
+    if (!andAdd && !subView) {
+      sessionSearchState.scrollY = window.scrollY;
+    }
     if (item.kind === 'movie') {
       if (andAdd && state.movieProgress[item.id]) {
         toggleMovieWatchlist(item.id);
@@ -554,7 +663,7 @@ export function SearchView() {
     <button
       key={col.id}
       type="button"
-      onClick={() => setExpandedCollection(col)}
+      onClick={() => openExpandedCollection(col)}
       className={`group flex flex-col items-stretch justify-start self-start text-left ${
         layout === 'rail' ? 'w-[252px] sm:w-[292px] shrink-0 snap-start' : 'w-full'
       }`}
@@ -596,7 +705,7 @@ export function SearchView() {
             type="text"
             inputMode="search"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => handleQueryChange(e.target.value)}
             placeholder="Search titles, games, or ISBN…"
             aria-label="Search all media"
             className="w-full h-11 rounded-2xl bg-surface border border-white/10 pl-11 pr-24 text-[15px] text-ink placeholder:text-ink-faint outline-none focus:border-brand transition-colors"
@@ -606,7 +715,7 @@ export function SearchView() {
             {query && (
               <button
                 type="button"
-                onClick={() => setQuery('')}
+                onClick={() => handleQueryChange('')}
                 aria-label="Clear search"
                 className="h-7 w-7 rounded-full bg-white/10 flex items-center justify-center text-ink-dim hover:text-ink"
               >
@@ -706,6 +815,7 @@ export function SearchView() {
                     role="button"
                     tabIndex={0}
                     onClick={() => {
+                      sessionSearchState.scrollY = window.scrollY;
                       if (item.kind === 'show') pushRoute({ view: 'show-detail', showId: item.id });
                       else if (item.kind === 'movie') pushRoute({ view: 'movie-detail', movieId: item.id });
                       else if (item.kind === 'read') pushRoute({ view: 'read-detail', readId: item.id });
@@ -713,6 +823,7 @@ export function SearchView() {
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
+                        sessionSearchState.scrollY = window.scrollY;
                         if (item.kind === 'show') pushRoute({ view: 'show-detail', showId: item.id });
                         else if (item.kind === 'movie') pushRoute({ view: 'movie-detail', movieId: item.id });
                         else if (item.kind === 'read') pushRoute({ view: 'read-detail', readId: item.id });
@@ -1019,7 +1130,10 @@ export function SearchView() {
             <div className="flex items-start gap-2.5 min-w-0">
               <button
                 type="button"
-                onClick={() => setExpandedCollection(null)}
+                onClick={() => {
+                  setExpandedCollection(null);
+                  goBack();
+                }}
                 aria-label="Back to Discover"
                 className="h-9 w-9 rounded-full bg-surface border border-white/10 flex items-center justify-center text-ink shrink-0 mt-0.5"
               >
@@ -1070,7 +1184,10 @@ export function SearchView() {
           <div className="flex items-center gap-2.5">
             <button
               type="button"
-              onClick={() => setExpandedRail(null)}
+              onClick={() => {
+                setExpandedRail(null);
+                goBack();
+              }}
               aria-label="Back to Discover"
               className="h-9 w-9 rounded-full bg-surface border border-white/10 flex items-center justify-center text-ink shrink-0"
             >
@@ -1092,7 +1209,7 @@ export function SearchView() {
           <div className="flex items-center gap-2.5">
             <button
               type="button"
-              onClick={() => setShowAllCollections(false)}
+              onClick={goBack}
               aria-label="Back to Discover"
               className="h-9 w-9 rounded-full bg-surface border border-white/10 flex items-center justify-center text-ink shrink-0"
             >
@@ -1133,7 +1250,7 @@ export function SearchView() {
               <section key={rail.id} aria-label={rail.title} className="space-y-2.5">
                 <button
                   type="button"
-                  onClick={() => setExpandedRail(rail)}
+                  onClick={() => openExpandedRail(rail)}
                   className="inline-flex items-center gap-1 group text-left"
                 >
                   <h2 className="font-display font-bold text-[18px] sm:text-[19px] text-ink group-hover:text-brand transition-colors">
@@ -1155,7 +1272,7 @@ export function SearchView() {
             <section aria-label="Collections & Runs" className="space-y-2.5">
               <button
                 type="button"
-                onClick={() => setShowAllCollections(true)}
+                onClick={openAllCollections}
                 className="inline-flex items-center gap-1 group text-left"
               >
                 <h2 className="font-display font-bold text-[18px] sm:text-[19px] text-ink group-hover:text-brand transition-colors">

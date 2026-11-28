@@ -62,6 +62,12 @@ import {
   recomputeAutoCollectionRatings,
 } from '../utils/containers';
 import {
+  buildRouteUrlWithHash,
+  type CueHistoryStateLike,
+  resolvePopStateStack,
+  routesEqual,
+} from '../utils/navigationStack';
+import {
   getComicEditionLabel,
   getKnownComicEditionSpec,
   mergeComicEditionCatalog,
@@ -644,37 +650,30 @@ interface CueContextValue {
 
 const CueContext = createContext<CueContextValue | null>(null);
 
-interface CueHistoryState {
+interface CueHistoryState extends CueHistoryStateLike {
   cueNav: true;
+  sessionId?: string;
   depth: number;
   stack: RouteView[];
   modal?: boolean;
   overlayId?: number;
 }
 
-function routesEqual(a?: RouteView, b?: RouteView): boolean {
-  if (!a || !b) return false;
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
-function getInitialHistoryState(): { stack: RouteView[]; depth: number } {
+function getInitialHistoryState(): { stack: RouteView[] } {
   try {
     const st = window.history.state as Partial<CueHistoryState> | null;
     if (st?.cueNav && Array.isArray(st.stack) && st.stack.length > 0) {
-      return {
-        stack: st.stack,
-        depth: typeof st.depth === 'number' && st.depth >= 0 ? st.depth : 0,
-      };
+      return { stack: st.stack };
     }
   } catch {
     // ignore history access errors
   }
-  return { stack: [{ view: 'queue' }], depth: 0 };
+  return { stack: [{ view: 'queue' }] };
 }
 
 export function CueProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<CueStoreState>(loadInitialState);
-  const initialHistoryRef = useRef<{ stack: RouteView[]; depth: number } | null>(null);
+  const initialHistoryRef = useRef<{ stack: RouteView[] } | null>(null);
   if (!initialHistoryRef.current) {
     initialHistoryRef.current = getInitialHistoryState();
   }
@@ -696,7 +695,12 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
   const lastPreImportStateRef = useRef<CueStoreState | null>(null);
   const routeStackRef = useRef<RouteView[]>(routeStack);
   routeStackRef.current = routeStack;
-  const historyDepthRef = useRef<number>(initialHistoryRef.current.depth);
+  const navSessionIdRef = useRef<string>(
+    `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  );
+  const historyDepthRef = useRef<number>(0);
+  const navSeqRef = useRef<number>(0);
+  const scrollByRouteKeyRef = useRef<Map<string, number>>(new Map());
   const modalFlagsRef = useRef({
     filter: false,
     notifications: false,
@@ -704,6 +708,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     insights: false,
     import: false,
   });
+  const modalOpenedNavSeqRef = useRef<Partial<Record<keyof typeof modalFlagsRef.current, number>>>({});
   const suppressModalBackPopRef = useRef(0);
   const overlayHandlersRef = useRef<Array<{ id: number; close: () => void }>>([]);
   const overlayIdSeqRef = useRef(1);
@@ -999,6 +1004,17 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
     setImportModalOpenRaw(false);
   }, []);
 
+  const restoreScrollForStack = useCallback((nextStack: RouteView[]) => {
+    const top = nextStack[nextStack.length - 1];
+    if (top && (top.view === 'watch' || top.view === 'read' || top.view === 'play')) {
+      return;
+    }
+    const savedY = scrollByRouteKeyRef.current.get(JSON.stringify(nextStack)) ?? 0;
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: savedY, behavior: 'instant' as ScrollBehavior });
+    });
+  }, []);
+
   const updateModalOpen = useCallback(
     (
       key: keyof typeof modalFlagsRef.current,
@@ -1011,24 +1027,33 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
         const cur = window.history.state as Partial<CueHistoryState> | null;
         if (open) {
           if (!(cur?.cueNav && cur?.modal === true && !cur?.overlayId)) {
+            const openedSeq = navSeqRef.current;
+            modalOpenedNavSeqRef.current[key] = openedSeq;
             const nextDepth = historyDepthRef.current + 1;
             historyDepthRef.current = nextDepth;
             const entry: CueHistoryState = {
               cueNav: true,
+              sessionId: navSessionIdRef.current,
               depth: nextDepth,
               stack: routeStackRef.current,
               modal: true,
             };
-            window.history.pushState(entry, '');
+            const url = `${window.location.pathname}${window.location.search}#cue-m-${openedSeq}-${nextDepth}`;
+            window.history.pushState(entry, '', url);
           }
         } else {
+          const openedSeq = modalOpenedNavSeqRef.current[key];
           queueMicrotask(() => {
+            if (openedSeq !== undefined && navSeqRef.current !== openedSeq) {
+              return;
+            }
             const anyOpen = Object.values(modalFlagsRef.current).some(Boolean);
             const latest = window.history.state as Partial<CueHistoryState> | null;
             if (
               !anyOpen &&
               overlayHandlersRef.current.length === 0 &&
               latest?.cueNav &&
+              latest?.sessionId === navSessionIdRef.current &&
               latest?.modal === true &&
               !latest?.overlayId &&
               historyDepthRef.current > 0
@@ -1047,6 +1072,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const registerOverlayBackHandler = useCallback((onBack: () => void) => {
     const id = overlayIdSeqRef.current++;
+    const openedSeq = navSeqRef.current;
     let closedByPop = false;
     overlayHandlersRef.current.push({
       id,
@@ -1060,12 +1086,14 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       historyDepthRef.current = nextDepth;
       const entry: CueHistoryState = {
         cueNav: true,
+        sessionId: navSessionIdRef.current,
         depth: nextDepth,
         stack: routeStackRef.current,
         modal: true,
         overlayId: id,
       };
-      window.history.pushState(entry, '');
+      const url = `${window.location.pathname}${window.location.search}#cue-ov-${id}-${nextDepth}`;
+      window.history.pushState(entry, '', url);
     } catch {
       // ignore history access errors
     }
@@ -1073,9 +1101,15 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       overlayHandlersRef.current = overlayHandlersRef.current.filter((item) => item.id !== id);
       if (closedByPop) return;
       queueMicrotask(() => {
+        if (navSeqRef.current !== openedSeq) return;
         try {
           const latest = window.history.state as Partial<CueHistoryState> | null;
-          if (latest?.cueNav && latest?.overlayId === id && historyDepthRef.current > 0) {
+          if (
+            latest?.cueNav &&
+            latest?.sessionId === navSessionIdRef.current &&
+            latest?.overlayId === id &&
+            historyDepthRef.current > 0
+          ) {
             suppressModalBackPopRef.current += 1;
             window.history.back();
           }
@@ -1109,36 +1143,42 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     try {
-      const cur = window.history.state as Partial<CueHistoryState> | null;
-      if (!cur?.cueNav) {
-        const initialEntry: CueHistoryState = {
-          cueNav: true,
-          depth: historyDepthRef.current,
-          stack: routeStackRef.current,
-        };
-        window.history.replaceState(initialEntry, '');
-      }
+      const initialEntry: CueHistoryState = {
+        cueNav: true,
+        sessionId: navSessionIdRef.current,
+        depth: 0,
+        stack: routeStackRef.current,
+      };
+      const url = buildRouteUrlWithHash(
+        routeStackRef.current,
+        0,
+        window.location.pathname,
+        window.location.search
+      );
+      window.history.replaceState(initialEntry, '', url);
     } catch {
       // ignore history errors
     }
 
+    const syncDepthAfterPop = (st: Partial<CueHistoryState> | null) => {
+      if (st?.cueNav && st.sessionId === navSessionIdRef.current && typeof st.depth === 'number') {
+        historyDepthRef.current = Math.max(0, st.depth);
+      } else {
+        historyDepthRef.current = Math.max(0, historyDepthRef.current - 1);
+      }
+    };
+
     const onPopState = (event: PopStateEvent) => {
       const st = event.state as Partial<CueHistoryState> | null;
+      syncDepthAfterPop(st);
+
       if (suppressModalBackPopRef.current > 0) {
         suppressModalBackPopRef.current -= 1;
-        if (typeof st?.depth === 'number' && st.depth >= 0) {
-          historyDepthRef.current = st.depth;
-        }
         return;
       }
 
       if (overlayHandlersRef.current.length > 0) {
         const topOverlay = overlayHandlersRef.current.pop();
-        if (typeof st?.depth === 'number' && st.depth >= 0) {
-          historyDepthRef.current = st.depth;
-        } else {
-          historyDepthRef.current = Math.max(0, historyDepthRef.current - 1);
-        }
         topOverlay?.close();
         return;
       }
@@ -1146,55 +1186,92 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
       const hadModal = Object.values(modalFlagsRef.current).some(Boolean);
       closeAllModalsRaw();
 
-      if (st?.cueNav && Array.isArray(st.stack) && st.stack.length > 0) {
-        const nextStack = st.stack;
-        const prevTop = routeStackRef.current[routeStackRef.current.length - 1];
-        const nextTop = nextStack[nextStack.length - 1];
-        historyDepthRef.current =
-          typeof st.depth === 'number' && st.depth >= 0
-            ? st.depth
-            : Math.max(0, historyDepthRef.current - 1);
-        routeStackRef.current = nextStack;
-        setRouteStack(nextStack);
-        if (!hadModal || !routesEqual(prevTop, nextTop)) {
-          window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+      const resolution = resolvePopStateStack(routeStackRef.current, st, hadModal);
+
+      if (resolution.needsHistoryRepair) {
+        try {
+          navSeqRef.current += 1;
+          const repairedDepth = Math.max(
+            historyDepthRef.current,
+            resolution.nextStack.length > 1 ? 1 : 0
+          );
+          historyDepthRef.current = repairedDepth;
+          const repairEntry: CueHistoryState = {
+            cueNav: true,
+            sessionId: navSessionIdRef.current,
+            depth: repairedDepth,
+            stack: resolution.nextStack,
+          };
+          const url = buildRouteUrlWithHash(
+            resolution.nextStack,
+            navSeqRef.current,
+            window.location.pathname,
+            window.location.search
+          );
+          window.history.replaceState(repairEntry, '', url);
+        } catch {
+          // ignore history errors
         }
+      }
+
+      if (hadModal) {
+        return;
+      }
+
+      const prevTop = routeStackRef.current[routeStackRef.current.length - 1];
+      const nextTop = resolution.nextStack[resolution.nextStack.length - 1];
+      routeStackRef.current = resolution.nextStack;
+      setRouteStack(resolution.nextStack);
+
+      if (!routesEqual(prevTop, nextTop)) {
+        restoreScrollForStack(resolution.nextStack);
       }
     };
 
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, [closeAllModalsRaw]);
+  }, [closeAllModalsRaw, restoreScrollForStack]);
 
   const commitNavigation = useCallback(
     (nextStack: RouteView[], mode: 'push' | 'replace' = 'push') => {
       overlayHandlersRef.current = [];
       closeAllModalsRaw();
+      navSeqRef.current += 1;
+      const seq = navSeqRef.current;
       try {
         const cur = window.history.state as Partial<CueHistoryState> | null;
+        const nextUrl = buildRouteUrlWithHash(
+          nextStack,
+          seq,
+          window.location.pathname,
+          window.location.search
+        );
         if (mode === 'push' && cur?.cueNav && cur?.modal === true) {
           const entry: CueHistoryState = {
             cueNav: true,
+            sessionId: navSessionIdRef.current,
             depth: historyDepthRef.current,
             stack: nextStack,
           };
-          window.history.replaceState(entry, '');
+          window.history.replaceState(entry, '', nextUrl);
         } else if (mode === 'push') {
           const nextDepth = historyDepthRef.current + 1;
           historyDepthRef.current = nextDepth;
           const entry: CueHistoryState = {
             cueNav: true,
+            sessionId: navSessionIdRef.current,
             depth: nextDepth,
             stack: nextStack,
           };
-          window.history.pushState(entry, '');
+          window.history.pushState(entry, '', nextUrl);
         } else {
           const entry: CueHistoryState = {
             cueNav: true,
+            sessionId: navSessionIdRef.current,
             depth: historyDepthRef.current,
             stack: nextStack,
           };
-          window.history.replaceState(entry, '');
+          window.history.replaceState(entry, '', nextUrl);
         }
       } catch {
         // ignore history errors
@@ -1229,6 +1306,7 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const pushRoute = useCallback(
     (next: RouteView) => {
+      scrollByRouteKeyRef.current.set(JSON.stringify(routeStackRef.current), window.scrollY);
       commitNavigation([...routeStackRef.current, next], 'push');
       window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
     },
@@ -1237,18 +1315,23 @@ export function CueProvider({ children }: { children: React.ReactNode }) {
 
   const goBack = useCallback(() => {
     if (routeStackRef.current.length <= 1) return;
-    if (historyDepthRef.current > 0) {
-      try {
+    try {
+      const cur = window.history.state as Partial<CueHistoryState> | null;
+      if (
+        historyDepthRef.current > 0 &&
+        cur?.cueNav &&
+        cur?.sessionId === navSessionIdRef.current
+      ) {
         window.history.back();
         return;
-      } catch {
-        // fall through to local stack pop
       }
+    } catch {
+      // fall through to safe local stack pop
     }
     const popped = routeStackRef.current.slice(0, -1);
     commitNavigation(popped, 'replace');
-    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
-  }, [commitNavigation]);
+    restoreScrollForStack(popped);
+  }, [commitNavigation, restoreScrollForStack]);
 
   const toggleCalendarMode = useCallback(() => {
     const curStack = routeStackRef.current;
