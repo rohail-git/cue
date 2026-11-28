@@ -26,6 +26,7 @@ import {
   exportLibraryCsv,
 } from '../utils/mediaExport';
 import { RecentImportsList } from './RecentImportsList';
+import { ProfileMediaPickerModal } from './ProfileMediaPickerModal';
 import {
   fetchLiveHealth,
   scanAndRepairLibrary,
@@ -52,8 +53,8 @@ export function SettingsModal() {
   } = useCueStore();
 
   const [name, setName] = useState(state.profile.name);
-  const [handle, setHandle] = useState(state.profile.handle);
   const [bio, setBio] = useState(state.profile.bio);
+  const [profileMediaTarget, setProfileMediaTarget] = useState<'avatar' | 'banner' | null>(null);
   const [tmdbKey, setTmdbKey] = useState(state.settings.tmdbApiKey);
   const [tmdbStatus, setTmdbStatus] = useState<'idle' | 'testing' | 'ok' | 'err'>('idle');
   const [confirmScope, setConfirmScope] = useState<'watch' | 'read' | 'play' | 'all' | 'wipe' | null>(null);
@@ -65,10 +66,10 @@ export function SettingsModal() {
   useEffect(() => {
     if (!settingsOpen) {
       setConfirmScope(null);
+      setProfileMediaTarget(null);
       return;
     }
     setName(state.profile.name);
-    setHandle(state.profile.handle);
     setBio(state.profile.bio);
     setTmdbKey(state.settings.tmdbApiKey);
     setLoadingHealth(true);
@@ -76,7 +77,7 @@ export function SettingsModal() {
       setHealth(rep);
       setLoadingHealth(false);
     });
-  }, [settingsOpen, state.profile.name, state.profile.handle, state.profile.bio, state.settings.tmdbApiKey]);
+  }, [settingsOpen, state.profile.name, state.profile.bio, state.settings.tmdbApiKey]);
 
   if (!settingsOpen) return null;
 
@@ -100,10 +101,8 @@ export function SettingsModal() {
     .slice(0, 4);
 
   const handleSaveProfile = () => {
-    const cleanHandle = handle.trim().startsWith('@') ? handle.trim() : `@${handle.trim()}`;
     updateProfile({
       name: name.trim() || 'You',
-      handle: cleanHandle || '@you',
       bio: bio.trim(),
     });
   };
@@ -225,23 +224,13 @@ export function SettingsModal() {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs text-ink-dim block mb-1">Name</label>
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full rounded-xl bg-background border border-white/10 px-3 py-2 text-sm text-ink focus:border-brand outline-none"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-ink-dim block mb-1">Label</label>
-                <input
-                  value={handle}
-                  onChange={(e) => setHandle(e.target.value)}
-                  className="w-full rounded-xl bg-background border border-white/10 px-3 py-2 text-sm text-ink focus:border-brand outline-none"
-                />
-              </div>
+            <div>
+              <label className="text-xs text-ink-dim block mb-1">Name</label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full rounded-xl bg-background border border-white/10 px-3 py-2 text-sm text-ink focus:border-brand outline-none"
+              />
             </div>
 
             <div>
@@ -253,9 +242,29 @@ export function SettingsModal() {
               />
             </div>
 
-            {bannerOptions.length > 0 && (
-              <div>
-                <p className="text-xs text-ink-dim mb-1.5">Cover banner</p>
+            <div>
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <p className="text-xs text-ink-dim">Cover banner</p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setProfileMediaTarget('banner')}
+                    className="text-[11px] font-semibold text-brand hover:underline"
+                  >
+                    Upload or paste URL
+                  </button>
+                  {state.profile.bannerUrl && (
+                    <button
+                      type="button"
+                      onClick={() => updateProfile({ bannerUrl: '' })}
+                      className="text-[11px] text-ink-dim hover:text-red-300"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+              {bannerOptions.length > 0 && (
                 <div className="grid grid-cols-4 gap-2">
                   {bannerOptions.map((b, idx) => (
                     <button
@@ -272,13 +281,33 @@ export function SettingsModal() {
                     </button>
                   ))}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
-            {avatarOptions.length > 0 && (
-              <div>
-                <p className="text-xs text-ink-dim mb-1.5">Avatar</p>
-                <div className="flex items-center gap-2.5">
+            <div>
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <p className="text-xs text-ink-dim">Avatar</p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setProfileMediaTarget('avatar')}
+                    className="text-[11px] font-semibold text-brand hover:underline"
+                  >
+                    Upload or paste URL
+                  </button>
+                  {state.profile.avatarUrl && (
+                    <button
+                      type="button"
+                      onClick={() => updateProfile({ avatarUrl: '' })}
+                      className="text-[11px] text-ink-dim hover:text-red-300"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+              {avatarOptions.length > 0 && (
+                <div className="flex items-center gap-2.5 flex-wrap">
                   {avatarOptions.map((url, idx) => (
                     <button
                       key={idx}
@@ -292,8 +321,8 @@ export function SettingsModal() {
                     </button>
                   ))}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </section>
 
           {/* Preferences */}
@@ -310,6 +339,26 @@ export function SettingsModal() {
               <span
                 className={`w-10 h-6 rounded-full p-0.5 transition-colors flex items-center ${
                   state.settings.showPosterProgress ? 'bg-brand justify-end' : 'bg-white/15 justify-start'
+                }`}
+              >
+                <span className="w-5 h-5 rounded-full bg-white shadow" />
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                updateSettings({
+                  groupChapters: !(state.settings.groupChapters !== false),
+                })
+              }
+              className="w-full flex items-center justify-between px-3.5 py-3 rounded-xl bg-background border border-white/8 text-sm"
+            >
+              <span>Group long chapter lists</span>
+              <span
+                className={`w-10 h-6 rounded-full p-0.5 transition-colors flex items-center ${
+                  state.settings.groupChapters !== false
+                    ? 'bg-brand justify-end'
+                    : 'bg-white/15 justify-start'
                 }`}
               >
                 <span className="w-5 h-5 rounded-full bg-white shadow" />
@@ -674,6 +723,12 @@ export function SettingsModal() {
           </section>
         </div>
       </div>
+
+      <ProfileMediaPickerModal
+        open={profileMediaTarget !== null}
+        initialTarget={profileMediaTarget || 'avatar'}
+        onClose={() => setProfileMediaTarget(null)}
+      />
     </div>
   );
 }

@@ -216,7 +216,6 @@ function loadInitialState(): CueStoreState {
       };
       if (v1?.profile?.name) {
         empty.profile.name = v1.profile.name;
-        empty.profile.handle = v1.profile.handle || empty.profile.handle;
         if (v1.profile.avatarUrl) empty.profile.avatarUrl = v1.profile.avatarUrl;
         if (v1.profile.bannerUrl) empty.profile.bannerUrl = v1.profile.bannerUrl;
       }

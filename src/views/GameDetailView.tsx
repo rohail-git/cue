@@ -89,6 +89,7 @@ export function GameDetailView({ gameId }: { gameId: string }) {
     updateCompletionRunDate,
     deleteCompletionRun,
     resetGameProgress,
+    updateSettings,
     addJournalEntry,
     toggleItemInList,
     createCustomList,
@@ -658,147 +659,185 @@ export function GameDetailView({ gameId }: { gameId: string }) {
 
               {/* Simple Accordion Story Chapters List or Suggest Prompt */}
               {totalChapters > 0 ? (
-                <section className="pt-2 pb-4 divide-y divide-white/[0.06]">
-                  {gameBuckets.map((bucket) => {
-                    const totalInBucket = bucket.end - bucket.start + 1;
-                    let doneInBucket = 0;
-                    const chapNums: number[] = [];
-                    for (let c = bucket.start; c <= bucket.end; c += 1) {
-                      chapNums.push(c);
-                      if (c <= currentChapter) doneInBucket += 1;
-                    }
-                    const bucketDone = doneInBucket >= totalInBucket;
-                    const bucketRatio = Math.min(1, doneInBucket / Math.max(1, totalInBucket));
-                    const isOpen =
-                      expandedBuckets[bucket.idx] !== undefined
-                        ? expandedBuckets[bucket.idx]
-                        : bucket.idx === defaultGameOpenBucket;
+                <section className="pt-2 pb-4">
+                  {totalChapters > 25 && (
+                    <div className="flex items-center justify-between gap-2 pb-2.5">
+                      <span className="text-xs font-semibold text-ink-dim tabular-nums">
+                        {chapterUnitLabelCap} ({totalChapters})
+                      </span>
+                      <div className="inline-flex items-center rounded-full bg-surface border border-white/10 p-0.5">
+                        {(
+                          [
+                            { grouped: true, label: 'Grouped' },
+                            { grouped: false, label: 'All' },
+                          ] as const
+                        ).map((opt) => {
+                          const isGrouped = state.settings.groupChapters !== false;
+                          const active = isGrouped === opt.grouped;
+                          return (
+                            <button
+                              key={opt.label}
+                              type="button"
+                              onClick={() => updateSettings({ groupChapters: opt.grouped })}
+                              className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${
+                                active
+                                  ? 'bg-brand text-brand-ink'
+                                  : 'text-ink-dim hover:text-ink'
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
-                    return (
-                      <div key={bucket.idx} className="py-2">
-                        <div className="flex items-center justify-between gap-3 py-1.5">
+                  {(() => {
+                    const renderGameChapterRow = (n: number) => {
+                      const done = n <= currentChapter;
+                      const official = getOfficialGameChapter(game.title, n);
+                      const customTitle = progress?.chapterTitles?.[n];
+                      const resolvedName = customTitle || official?.title;
+                      const displayTitle = resolvedName || `${chapterSingleCap} ${n}`;
+                      const chapRating = progress?.chapterRatings?.[n];
+                      return (
+                        <div
+                          key={n}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => {
+                            setChapterNoteText('');
+                            setEditingChapterTitle(false);
+                            setActiveChapterDrawer(n);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setChapterNoteText('');
+                              setEditingChapterTitle(false);
+                              setActiveChapterDrawer(n);
+                            }
+                          }}
+                          className="py-2.5 flex items-center justify-between gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-[14px] font-medium text-ink truncate">
+                              {displayTitle}
+                            </p>
+                            {(resolvedName || done || (typeof chapRating === 'number' && chapRating > 0)) && (
+                              <p className="text-[11.5px] text-ink-dim tabular-nums flex items-center gap-1.5 mt-0.5 truncate">
+                                {resolvedName && (
+                                  <span>
+                                    {chapterSingleCap} {n}
+                                  </span>
+                                )}
+                                {done && (
+                                  <span className="text-watched font-medium">
+                                    {resolvedName ? '· Done' : 'Done'}
+                                  </span>
+                                )}
+                                {typeof chapRating === 'number' && chapRating > 0 && (
+                                  <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-brand">
+                                    {resolvedName || done ? '· ' : ''}
+                                    <Star className="w-3 h-3 fill-brand" />
+                                    {formatRating(chapRating)}
+                                  </span>
+                                )}
+                              </p>
+                            )}
+                          </div>
                           <button
                             type="button"
-                            onClick={() =>
-                              setExpandedBuckets((prev) => ({
-                                ...prev,
-                                [bucket.idx]: !isOpen,
-                              }))
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setGameChapter(game.id, n === currentChapter ? n - 1 : n);
+                            }}
+                            aria-label={
+                              done
+                                ? `Unmark ${displayTitle} completed`
+                                : `Mark ${displayTitle} completed`
                             }
-                            aria-expanded={isOpen}
-                            className="flex items-center gap-1.5 font-display font-bold text-[15px] text-ink text-left"
+                            className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+                              done
+                                ? 'text-watched'
+                                : 'text-ink-faint hover:text-watched'
+                            }`}
                           >
-                            <span>{bucket.label}</span>
-                            {isOpen ? (
-                              <ChevronUp className="w-4 h-4 text-ink-dim" />
-                            ) : (
-                              <ChevronDown className="w-4 h-4 text-ink-dim" />
-                            )}
+                            <Check className="w-[17px] h-[17px]" strokeWidth={2.5} />
                           </button>
-
-                          <div className="flex items-center gap-3 shrink-0">
-                            <span
-                              className={`text-xs font-semibold tabular-nums ${
-                                bucketDone ? 'text-watched' : 'text-ink-dim'
-                              }`}
-                            >
-                              {doneInBucket}/{totalInBucket}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setGameChapter(
-                                  game.id,
-                                  bucketDone ? bucket.start - 1 : bucket.end
-                                )
-                              }
-                              aria-label={`Toggle ${bucket.label} complete`}
-                              className={`h-7 w-7 rounded-full flex items-center justify-center transition-colors ${
-                                bucketDone
-                                  ? 'text-watched'
-                                  : 'text-ink-faint hover:text-watched'
-                              }`}
-                            >
-                              <Check className="w-[17px] h-[17px]" strokeWidth={2.5} />
-                            </button>
-                          </div>
                         </div>
+                      );
+                    };
 
-                        <div className="h-[2.5px] w-full rounded-full bg-white/10 overflow-hidden mb-1">
-                          <div
-                            className="h-full bg-watched transition-all duration-300"
-                            style={{ width: `${Math.round(bucketRatio * 100)}%` }}
-                          />
+                    if (state.settings.groupChapters === false) {
+                      const allNums: number[] = [];
+                      for (let c = 1; c <= totalChapters; c += 1) allNums.push(c);
+                      return (
+                        <div className="divide-y divide-white/[0.06]">
+                          {allNums.map((n) => renderGameChapterRow(n))}
                         </div>
+                      );
+                    }
 
-                        {isOpen && (
-                          <div className="divide-y divide-white/[0.06] pt-1">
-                            {chapNums.map((n) => {
-                              const done = n <= currentChapter;
-                              const official = getOfficialGameChapter(game.title, n);
-                              const customTitle = progress?.chapterTitles?.[n];
-                              const resolvedName = customTitle || official?.title;
-                              const displayTitle = resolvedName || `${chapterSingleCap} ${n}`;
-                              const chapRating = progress?.chapterRatings?.[n];
-                              return (
-                                <div
-                                  key={n}
-                                  role="button"
-                                  tabIndex={0}
-                                  onClick={() => {
-                                    setChapterNoteText('');
-                                    setEditingChapterTitle(false);
-                                    setActiveChapterDrawer(n);
-                                  }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter' || e.key === ' ') {
-                                      e.preventDefault();
-                                      setChapterNoteText('');
-                                      setEditingChapterTitle(false);
-                                      setActiveChapterDrawer(n);
-                                    }
-                                  }}
-                                  className="py-2.5 flex items-center justify-between gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors"
+                    return (
+                      <div className="divide-y divide-white/[0.06]">
+                        {gameBuckets.map((bucket) => {
+                          const totalInBucket = bucket.end - bucket.start + 1;
+                          let doneInBucket = 0;
+                          const chapNums: number[] = [];
+                          for (let c = bucket.start; c <= bucket.end; c += 1) {
+                            chapNums.push(c);
+                            if (c <= currentChapter) doneInBucket += 1;
+                          }
+                          const bucketDone = doneInBucket >= totalInBucket;
+                          const bucketRatio = Math.min(1, doneInBucket / Math.max(1, totalInBucket));
+                          const isOpen =
+                            expandedBuckets[bucket.idx] !== undefined
+                              ? expandedBuckets[bucket.idx]
+                              : bucket.idx === defaultGameOpenBucket;
+
+                          return (
+                            <div key={bucket.idx} className="py-2">
+                              <div className="flex items-center justify-between gap-3 py-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedBuckets((prev) => ({
+                                      ...prev,
+                                      [bucket.idx]: !isOpen,
+                                    }))
+                                  }
+                                  aria-expanded={isOpen}
+                                  className="flex items-center gap-1.5 font-display font-bold text-[15px] text-ink text-left"
                                 >
-                                  <div className="min-w-0">
-                                    <p className="text-[14px] font-medium text-ink truncate">
-                                      {displayTitle}
-                                    </p>
-                                    {(resolvedName || done || (typeof chapRating === 'number' && chapRating > 0)) && (
-                                      <p className="text-[11.5px] text-ink-dim tabular-nums flex items-center gap-1.5 mt-0.5 truncate">
-                                        {resolvedName && (
-                                          <span>
-                                            {chapterSingleCap} {n}
-                                          </span>
-                                        )}
-                                        {done && (
-                                          <span className="text-watched font-medium">
-                                            {resolvedName ? '· Done' : 'Done'}
-                                          </span>
-                                        )}
-                                        {typeof chapRating === 'number' && chapRating > 0 && (
-                                          <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-brand">
-                                            {resolvedName || done ? '· ' : ''}
-                                            <Star className="w-3 h-3 fill-brand" />
-                                            {formatRating(chapRating)}
-                                          </span>
-                                        )}
-                                      </p>
-                                    )}
-                                  </div>
+                                  <span>{bucket.label}</span>
+                                  {isOpen ? (
+                                    <ChevronUp className="w-4 h-4 text-ink-dim" />
+                                  ) : (
+                                    <ChevronDown className="w-4 h-4 text-ink-dim" />
+                                  )}
+                                </button>
+
+                                <div className="flex items-center gap-3 shrink-0">
+                                  <span
+                                    className={`text-xs font-semibold tabular-nums ${
+                                      bucketDone ? 'text-watched' : 'text-ink-dim'
+                                    }`}
+                                  >
+                                    {doneInBucket}/{totalInBucket}
+                                  </span>
                                   <button
                                     type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setGameChapter(game.id, n === currentChapter ? n - 1 : n);
-                                    }}
-                                    aria-label={
-                                      done
-                                        ? `Unmark ${displayTitle} completed`
-                                        : `Mark ${displayTitle} completed`
+                                    onClick={() =>
+                                      setGameChapter(
+                                        game.id,
+                                        bucketDone ? bucket.start - 1 : bucket.end
+                                      )
                                     }
-                                    className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 transition-colors ${
-                                      done
+                                    aria-label={`Toggle ${bucket.label} complete`}
+                                    className={`h-7 w-7 rounded-full flex items-center justify-center transition-colors ${
+                                      bucketDone
                                         ? 'text-watched'
                                         : 'text-ink-faint hover:text-watched'
                                     }`}
@@ -806,13 +845,26 @@ export function GameDetailView({ gameId }: { gameId: string }) {
                                     <Check className="w-[17px] h-[17px]" strokeWidth={2.5} />
                                   </button>
                                 </div>
-                              );
-                            })}
-                          </div>
-                        )}
+                              </div>
+
+                              <div className="h-[2.5px] w-full rounded-full bg-white/10 overflow-hidden mb-1">
+                                <div
+                                  className="h-full bg-watched transition-all duration-300"
+                                  style={{ width: `${Math.round(bucketRatio * 100)}%` }}
+                                />
+                              </div>
+
+                              {isOpen && (
+                                <div className="divide-y divide-white/[0.06] pt-1">
+                                  {chapNums.map((n) => renderGameChapterRow(n))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     );
-                  })}
+                  })()}
                 </section>
               ) : (
                 <section className="pt-2 pb-4">

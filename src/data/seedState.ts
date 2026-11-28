@@ -824,7 +824,6 @@ export function createSeedState(): CueStoreState {
     },
     profile: {
       name: 'Alex',
-      handle: '@alex',
       bio: 'Private logbook for shows, movies, novels, manga, comics, and games.',
       avatarUrl: walterAvatar,
       bannerUrl: shows['breaking-bad']?.backdropUrl || shows['house-of-the-dragon']?.backdropUrl || '',
@@ -873,7 +872,6 @@ export function createEmptyState(): CueStoreState {
     },
     profile: {
       name: 'You',
-      handle: '@you',
       bio: 'Private logbook for shows, movies, novels, manga, comics, and games.',
       avatarUrl: '',
       bannerUrl: '',

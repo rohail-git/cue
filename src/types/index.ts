@@ -365,7 +365,7 @@ export interface CustomList {
 
 export interface UserProfile {
   name: string;
-  handle: string;
+  handle?: string;
   bio: string;
   avatarUrl: string;
   bannerUrl: string;
@@ -406,6 +406,7 @@ export interface AppSettings {
   playFilter: PlayFilter;
   sortBy: SortMode;
   showPosterProgress: boolean;
+  groupChapters?: boolean;
   detailMode?: DetailCardMode;
   cueMindIntroDismissed?: boolean;
   skipCatchUpPromptIds?: string[];

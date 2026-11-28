@@ -99,6 +99,7 @@ export function ScrollUpHistoryFeed({
   resetAnchorKey = '',
   children,
 }: ScrollUpHistoryFeedProps) {
+  const headerWrapRef = useRef<HTMLDivElement>(null);
   const historyWrapRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
   const prevHistoryCountRef = useRef(historyItems.length);
@@ -116,6 +117,20 @@ export function ScrollUpHistoryFeed({
     const anchorEl = anchorRef.current;
     if (!anchorEl) return;
 
+    const getTopOffset = () => {
+      const headerHeight = headerWrapRef.current?.getBoundingClientRect().height || 0;
+      if (headerHeight > 0) return headerHeight;
+      return window.innerWidth >= 768 ? 84 : 52;
+    };
+
+    const alignToAnchor = () => {
+      const targetTop = Math.max(
+        0,
+        anchorEl.getBoundingClientRect().top + window.scrollY - getTopOffset()
+      );
+      window.scrollTo({ top: targetTop, behavior: 'instant' as ScrollBehavior });
+    };
+
     const currentHistoryHeight = historyEl ? historyEl.getBoundingClientRect().height : 0;
     const keyChanged = initializedKeyRef.current !== resetAnchorKey;
 
@@ -124,10 +139,12 @@ export function ScrollUpHistoryFeed({
       prevHistoryCountRef.current = historyItems.length;
       prevHistoryHeightRef.current = currentHistoryHeight;
 
-      const topOffset = window.innerWidth >= 768 ? 84 : 52;
-      const targetTop = Math.max(0, anchorEl.getBoundingClientRect().top + window.scrollY - topOffset);
-      window.scrollTo({ top: targetTop, behavior: 'instant' as ScrollBehavior });
-      return;
+      alignToAnchor();
+      const rafId = window.requestAnimationFrame(() => {
+        alignToAnchor();
+        prevHistoryHeightRef.current = historyEl ? historyEl.getBoundingClientRect().height : 0;
+      });
+      return () => window.cancelAnimationFrame(rafId);
     }
 
     if (historyItems.length !== prevHistoryCountRef.current) {
@@ -145,7 +162,11 @@ export function ScrollUpHistoryFeed({
 
   return (
     <div className="min-h-dvh">
-      {stickyHeader}
+      {stickyHeader && (
+        <div ref={headerWrapRef} className="md:hidden sticky top-0 z-30">
+          {stickyHeader}
+        </div>
+      )}
 
       <div className="max-w-2xl mx-auto px-4 sm:px-6">
         {/* Scroll-up chronological history (oldest -> newest so newest sits right above main anchor) */}
@@ -154,7 +175,7 @@ export function ScrollUpHistoryFeed({
           data-history-feed
           className={
             historyItems.length > 0
-              ? 'pt-3 md:pt-[84px] pb-4 md:pb-[92px] space-y-2.5'
+              ? 'pt-3 md:pt-[84px] pb-5 md:pb-[92px] space-y-2.5'
               : 'md:pt-[84px]'
           }
         >
@@ -172,7 +193,11 @@ export function ScrollUpHistoryFeed({
         </div>
 
         {/* Main anchored viewport section ("Watch next", "Novels / Manga / Comics", "Playing now") */}
-        <div ref={anchorRef} data-main-anchor className="min-h-[calc(100dvh-76px)] pt-2 pb-28 md:pb-14">
+        <div
+          ref={anchorRef}
+          data-main-anchor
+          className="min-h-[calc(100dvh-50px)] md:min-h-[calc(100dvh-82px)] pt-2 pb-28 md:pb-14"
+        >
           {children}
         </div>
       </div>

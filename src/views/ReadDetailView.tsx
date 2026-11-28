@@ -115,6 +115,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
     updateReadTotalUnits,
     updateReadMetadata,
     updateReadFormat,
+    updateSettings,
     resetReadProgress,
     addLiveReadToStore,
     addJournalEntry,
@@ -150,6 +151,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
   );
   const [expandedBuckets, setExpandedBuckets] = useState<Record<number, boolean>>({ 0: true });
   const [showAllContainers, setShowAllContainers] = useState(false);
+  const [showAllFlatUnits, setShowAllFlatUnits] = useState(false);
   const fetchedCoversRef = useRef<Set<string>>(new Set());
   const fetchedIssueKeyRef = useRef<Set<string>>(new Set());
   const fetchedSingleIssueRef = useRef<Set<string>>(new Set());
@@ -159,6 +161,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
     setDetailMode(sessionDetailModeByReadId.get(readId) || state.settings.detailMode || 'simple');
     setExpandedBuckets({ 0: true });
     setShowAllContainers(false);
+    setShowAllFlatUnits(false);
     setActiveUnitDrawer(null);
     setUnitNoteText('');
   }, [readId, state.settings.detailMode]);
@@ -976,7 +979,7 @@ export function ReadDetailView({ readId }: { readId: string }) {
               )}
 
               {/* Simple Accordion Issue / Chapter Checklist */}
-              <section className="pt-2 pb-4 divide-y divide-white/[0.06]">
+              <section className="pt-2 pb-4">
                 {(hydratingIssues || hydratingManga) && (
                   <div className="py-2 text-xs text-ink-dim flex items-center gap-2">
                     <Clock className="w-3.5 h-3.5 text-read shrink-0" />
@@ -987,233 +990,287 @@ export function ReadDetailView({ readId }: { readId: string }) {
                     </span>
                   </div>
                 )}
-                {simpleBuckets.map((bucket) => {
-                  const unitNums = bucket.unitNums;
-                  const totalInBucket = unitNums.length;
-                  const doneInBucket = unitNums.reduce(
-                    (acc, u) => (completedSet.has(u) ? acc + 1 : acc),
-                    0
-                  );
-                  const bucketDone = totalInBucket > 0 && doneInBucket >= totalInBucket;
-                  const bucketRatio = Math.min(1, doneInBucket / Math.max(1, totalInBucket));
-                  const isOpen =
-                    expandedBuckets[bucket.idx] !== undefined
-                      ? expandedBuckets[bucket.idx]
-                      : bucket.idx === defaultOpenBucket;
 
-                  return (
-                    <div key={bucket.idx} className="py-2">
-                      <div className="flex items-center justify-between gap-3 py-1.5">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpandedBuckets((prev) => ({
-                              ...prev,
-                              [bucket.idx]: !isOpen,
-                            }))
-                          }
-                          aria-expanded={isOpen}
-                          className="flex items-center gap-1.5 font-display font-bold text-[15px] text-ink text-left min-w-0"
-                        >
-                          <span className="truncate">{bucket.label}</span>
-                          {isOpen ? (
-                            <ChevronUp className="w-4 h-4 text-ink-dim shrink-0" />
-                          ) : (
-                            <ChevronDown className="w-4 h-4 text-ink-dim shrink-0" />
-                          )}
-                        </button>
-
-                        <div className="flex items-center gap-3 shrink-0">
-                          <span
-                            className={`text-xs font-semibold tabular-nums ${
-                              bucketDone ? 'text-watched' : 'text-ink-dim'
+                {stats.total > 25 && distinctSeriesTitles.size < 2 && (
+                  <div className="flex items-center justify-between gap-2 pb-2.5">
+                    <span className="text-xs font-semibold text-ink-dim tabular-nums">
+                      {item.unit === 'issues' ? 'Issues' : 'Chapters'} ({stats.total})
+                    </span>
+                    <div className="inline-flex items-center rounded-full bg-surface border border-white/10 p-0.5">
+                      {(
+                        [
+                          { grouped: true, label: 'Grouped' },
+                          { grouped: false, label: 'All' },
+                        ] as const
+                      ).map((opt) => {
+                        const isGrouped = state.settings.groupChapters !== false;
+                        const active = isGrouped === opt.grouped;
+                        return (
+                          <button
+                            key={opt.label}
+                            type="button"
+                            onClick={() => updateSettings({ groupChapters: opt.grouped })}
+                            className={`px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors ${
+                              active
+                                ? 'bg-brand text-brand-ink'
+                                : 'text-ink-dim hover:text-ink'
                             }`}
                           >
-                            {doneInBucket}/{totalInBucket}
-                          </span>
+                            {opt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {(() => {
+                  const renderSimpleUnitRow = (u: number) => {
+                    const done = completedSet.has(u);
+                    const meta = item.format === 'comic' ? item.issueDetails?.[u] : undefined;
+                    const unitReleased =
+                      item.format !== 'comic' || isComicIssueReleased(meta);
+                    const fallbackLabel =
+                      item.unit === 'issues' ? `Issue #${u}` : `Chapter ${u}`;
+                    const issueTag =
+                      showSeriesPrefixInRows && meta?.seriesTitle
+                        ? `${meta.seriesTitle} ${meta.issueLabel || `#${u}`}`
+                        : meta?.issueLabel || `Issue #${u}`;
+                    const primaryTitle =
+                      item.format === 'comic'
+                        ? meta?.title ||
+                          (showSeriesPrefixInRows && meta?.seriesTitle
+                            ? `${meta.seriesTitle} ${meta.issueLabel || `#${u}`}`
+                            : meta?.issueLabel
+                              ? `${item.title} ${meta.issueLabel}`
+                              : fallbackLabel)
+                        : fallbackLabel;
+                    const issueSub =
+                      item.format === 'comic'
+                        ? [issueTag, meta?.releaseDate].filter(Boolean).join(' · ')
+                        : '';
+                    const issueThumb = meta?.coverUrl || activeCover;
+                    const unitRating = progress?.unitRatings?.[u];
+
+                    return (
+                      <div
+                        key={u}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => {
+                          setUnitNoteText('');
+                          setActiveUnitDrawer(u);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setUnitNoteText('');
+                            setActiveUnitDrawer(u);
+                          }
+                        }}
+                        className={`py-2.5 flex items-center gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors ${
+                          !done && !unitReleased ? 'opacity-70' : ''
+                        }`}
+                      >
+                        {item.format === 'comic' && (
                           <button
                             type="button"
-                            onClick={() => {
-                              const releasedInBucket = unitNums.filter(
-                                (u) =>
-                                  item.format !== 'comic' ||
-                                  isComicIssueReleased(item.issueDetails?.[u])
-                              );
-                              if (bucketDone) {
-                                setReadUnitsBatch(item.id, unitNums, false);
-                              } else if (releasedInBucket.length > 0) {
-                                setReadUnitsBatch(item.id, releasedInBucket, true);
-                              }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setLightboxOverride({
+                                src: issueThumb,
+                                title: primaryTitle,
+                                subtitle: [
+                                  item.title,
+                                  meta?.issueLabel || `Issue #${u}`,
+                                  meta?.releaseDate,
+                                ]
+                                  .filter(Boolean)
+                                  .join(' · '),
+                              });
+                              setLightboxOpen(true);
                             }}
-                            aria-label={`Toggle ${bucket.label} complete`}
-                            className={`h-7 w-7 rounded-full flex items-center justify-center transition-colors ${
-                              bucketDone
-                                ? 'text-watched'
-                                : 'text-ink-faint hover:text-watched'
-                            }`}
+                            aria-label={`View ${primaryTitle} cover fullscreen`}
+                            className="w-[44px] h-[64px] rounded-lg overflow-hidden bg-surface border border-white/10 shrink-0 cursor-zoom-in"
                           >
-                            <Check className="w-[17px] h-[17px]" strokeWidth={2.5} />
+                            <MediaImage
+                              src={issueThumb}
+                              fallbackSrc={activeCover}
+                              alt={primaryTitle}
+                              className="w-full h-full object-cover"
+                            />
                           </button>
-                        </div>
-                      </div>
+                        )}
 
-                      <div className="h-[2.5px] w-full rounded-full bg-white/10 overflow-hidden mb-1">
-                        <div
-                          className="h-full bg-watched transition-all duration-300"
-                          style={{ width: `${Math.round(bucketRatio * 100)}%` }}
-                        />
-                      </div>
-
-                      {isOpen && (
-                        <div className="divide-y divide-white/[0.06] pt-1">
-                          {unitNums.map((u) => {
-                            const done = completedSet.has(u);
-                            const meta = item.format === 'comic' ? item.issueDetails?.[u] : undefined;
-                            const unitReleased =
-                              item.format !== 'comic' || isComicIssueReleased(meta);
-                            const fallbackLabel =
-                              item.unit === 'issues' ? `Issue #${u}` : `Chapter ${u}`;
-                            const issueTag =
-                              showSeriesPrefixInRows && meta?.seriesTitle
-                                ? `${meta.seriesTitle} ${meta.issueLabel || `#${u}`}`
-                                : meta?.issueLabel || `Issue #${u}`;
-                            const primaryTitle =
-                              item.format === 'comic'
-                                ? meta?.title ||
-                                  (showSeriesPrefixInRows && meta?.seriesTitle
-                                    ? `${meta.seriesTitle} ${meta.issueLabel || `#${u}`}`
-                                    : meta?.issueLabel
-                                      ? `${item.title} ${meta.issueLabel}`
-                                      : fallbackLabel)
-                                : fallbackLabel;
-                            const issueSub =
-                              item.format === 'comic'
-                                ? [issueTag, meta?.releaseDate].filter(Boolean).join(' · ')
-                                : '';
-                            const issueThumb = meta?.coverUrl || activeCover;
-                            const unitRating = progress?.unitRatings?.[u];
-
-                            return (
-                              <div
-                                key={u}
-                                role="button"
-                                tabIndex={0}
-                                onClick={() => {
-                                  setUnitNoteText('');
-                                  setActiveUnitDrawer(u);
-                                }}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' || e.key === ' ') {
-                                    e.preventDefault();
-                                    setUnitNoteText('');
-                                    setActiveUnitDrawer(u);
-                                  }
-                                }}
-                                className={`py-2.5 flex items-center gap-3 cursor-pointer hover:bg-white/[0.025] -mx-2 px-2 rounded-xl transition-colors ${
-                                  !done && !unitReleased ? 'opacity-70' : ''
-                                }`}
-                              >
-                                {item.format === 'comic' && (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setLightboxOverride({
-                                        src: issueThumb,
-                                        title: primaryTitle,
-                                        subtitle: [
-                                          item.title,
-                                          meta?.issueLabel || `Issue #${u}`,
-                                          meta?.releaseDate,
-                                        ]
-                                          .filter(Boolean)
-                                          .join(' · '),
-                                      });
-                                      setLightboxOpen(true);
-                                    }}
-                                    aria-label={`View ${primaryTitle} cover fullscreen`}
-                                    className="w-[44px] h-[64px] rounded-lg overflow-hidden bg-surface border border-white/10 shrink-0 cursor-zoom-in"
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[14px] font-medium text-ink truncate leading-snug">
+                            {primaryTitle}
+                          </p>
+                          {item.format === 'comic' ? (
+                            <p className="text-[12px] text-ink-dim tabular-nums mt-0.5 flex items-center gap-1.5 flex-wrap">
+                              <span className="truncate">{issueSub}</span>
+                              {!done && !unitReleased && (
+                                <span className="px-1.5 py-0.5 rounded-full bg-white/[0.07] text-[10px] font-semibold text-ink-dim shrink-0">
+                                  Upcoming
+                                </span>
+                              )}
+                              {done && (
+                                <span className="text-watched font-medium shrink-0">
+                                  · Read
+                                </span>
+                              )}
+                              {(() => {
+                                const aId = getComicIssueAtomicId(meta);
+                                const uOwn =
+                                  progress?.unitOwnership?.[u] ||
+                                  (aId ? state.atomicReadUnits?.[aId]?.ownership : undefined);
+                                if (!uOwn) return null;
+                                return (
+                                  <span
+                                    className={`shrink-0 ${
+                                      uOwn === 'owned'
+                                        ? 'text-read font-medium'
+                                        : 'text-ink-dim'
+                                    }`}
                                   >
-                                    <MediaImage
-                                      src={issueThumb}
-                                      fallbackSrc={activeCover}
-                                      alt={primaryTitle}
-                                      className="w-full h-full object-cover"
-                                    />
-                                  </button>
+                                    · {uOwn === 'owned' ? 'Owned' : 'Want'}
+                                  </span>
+                                );
+                              })()}
+                              {typeof unitRating === 'number' && unitRating > 0 && (
+                                <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-brand shrink-0">
+                                  · <Star className="w-3 h-3 fill-brand" />
+                                  {formatRating(unitRating)}
+                                </span>
+                              )}
+                            </p>
+                          ) : (
+                            (done || (typeof unitRating === 'number' && unitRating > 0)) && (
+                              <p className="text-[11.5px] text-ink-dim tabular-nums flex items-center gap-1.5 mt-0.5">
+                                {done && <span className="text-watched">Read</span>}
+                                {typeof unitRating === 'number' && unitRating > 0 && (
+                                  <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-brand">
+                                    {done ? '· ' : ''}
+                                    <Star className="w-3 h-3 fill-brand" />
+                                    {formatRating(unitRating)}
+                                  </span>
                                 )}
+                              </p>
+                            )
+                          )}
+                        </div>
 
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-[14px] font-medium text-ink truncate leading-snug">
-                                    {primaryTitle}
-                                  </p>
-                                  {item.format === 'comic' ? (
-                                    <p className="text-[12px] text-ink-dim tabular-nums mt-0.5 flex items-center gap-1.5 flex-wrap">
-                                      <span className="truncate">{issueSub}</span>
-                                      {!done && !unitReleased && (
-                                        <span className="px-1.5 py-0.5 rounded-full bg-white/[0.07] text-[10px] font-semibold text-ink-dim shrink-0">
-                                          Upcoming
-                                        </span>
-                                      )}
-                                      {done && (
-                                        <span className="text-watched font-medium shrink-0">
-                                          · Read
-                                        </span>
-                                      )}
-                                      {(() => {
-                                        const aId = getComicIssueAtomicId(meta);
-                                        const uOwn =
-                                          progress?.unitOwnership?.[u] ||
-                                          (aId ? state.atomicReadUnits?.[aId]?.ownership : undefined);
-                                        if (!uOwn) return null;
-                                        return (
-                                          <span
-                                            className={`shrink-0 ${
-                                              uOwn === 'owned'
-                                                ? 'text-read font-medium'
-                                                : 'text-ink-dim'
-                                            }`}
-                                          >
-                                            · {uOwn === 'owned' ? 'Owned' : 'Want'}
-                                          </span>
-                                        );
-                                      })()}
-                                      {typeof unitRating === 'number' && unitRating > 0 && (
-                                        <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-brand shrink-0">
-                                          · <Star className="w-3 h-3 fill-brand" />
-                                          {formatRating(unitRating)}
-                                        </span>
-                                      )}
-                                    </p>
-                                  ) : (
-                                    (done || (typeof unitRating === 'number' && unitRating > 0)) && (
-                                      <p className="text-[11.5px] text-ink-dim tabular-nums flex items-center gap-1.5 mt-0.5">
-                                        {done && <span className="text-watched">Read</span>}
-                                        {typeof unitRating === 'number' && unitRating > 0 && (
-                                          <span className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-brand">
-                                            {done ? '· ' : ''}
-                                            <Star className="w-3 h-3 fill-brand" />
-                                            {formatRating(unitRating)}
-                                          </span>
-                                        )}
-                                      </p>
-                                    )
-                                  )}
-                                </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleReadUnit(item.id, u);
+                          }}
+                          aria-label={
+                            done
+                              ? `Unmark ${primaryTitle} read`
+                              : `Mark ${primaryTitle} read`
+                          }
+                          className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+                            done
+                              ? 'text-watched'
+                              : 'text-ink-faint hover:text-watched'
+                          }`}
+                        >
+                          <Check className="w-[17px] h-[17px]" strokeWidth={2.5} />
+                        </button>
+                      </div>
+                    );
+                  };
 
+                  const useFlatList =
+                    state.settings.groupChapters === false && distinctSeriesTitles.size < 2;
+
+                  if (useFlatList) {
+                    const flatCap = !showAllFlatUnits && stats.total > 200 ? 200 : stats.total;
+                    const flatNums: number[] = [];
+                    for (let u = 1; u <= flatCap; u += 1) flatNums.push(u);
+                    return (
+                      <div>
+                        <div className="divide-y divide-white/[0.06]">
+                          {flatNums.map((u) => renderSimpleUnitRow(u))}
+                        </div>
+                        {stats.total > flatCap && (
+                          <button
+                            type="button"
+                            onClick={() => setShowAllFlatUnits(true)}
+                            className="mt-3 w-full py-2.5 rounded-xl bg-surface border border-white/10 text-xs font-semibold text-ink hover:border-brand transition-colors"
+                          >
+                            Show all {stats.total.toLocaleString()} {stats.unitLabel}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="divide-y divide-white/[0.06]">
+                      {simpleBuckets.map((bucket) => {
+                        const unitNums = bucket.unitNums;
+                        const totalInBucket = unitNums.length;
+                        const doneInBucket = unitNums.reduce(
+                          (acc, u) => (completedSet.has(u) ? acc + 1 : acc),
+                          0
+                        );
+                        const bucketDone = totalInBucket > 0 && doneInBucket >= totalInBucket;
+                        const bucketRatio = Math.min(1, doneInBucket / Math.max(1, totalInBucket));
+                        const isOpen =
+                          expandedBuckets[bucket.idx] !== undefined
+                            ? expandedBuckets[bucket.idx]
+                            : bucket.idx === defaultOpenBucket;
+
+                        return (
+                          <div key={bucket.idx} className="py-2">
+                            <div className="flex items-center justify-between gap-3 py-1.5">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedBuckets((prev) => ({
+                                    ...prev,
+                                    [bucket.idx]: !isOpen,
+                                  }))
+                                }
+                                aria-expanded={isOpen}
+                                className="flex items-center gap-1.5 font-display font-bold text-[15px] text-ink text-left min-w-0"
+                              >
+                                <span className="truncate">{bucket.label}</span>
+                                {isOpen ? (
+                                  <ChevronUp className="w-4 h-4 text-ink-dim shrink-0" />
+                                ) : (
+                                  <ChevronDown className="w-4 h-4 text-ink-dim shrink-0" />
+                                )}
+                              </button>
+
+                              <div className="flex items-center gap-3 shrink-0">
+                                <span
+                                  className={`text-xs font-semibold tabular-nums ${
+                                    bucketDone ? 'text-watched' : 'text-ink-dim'
+                                  }`}
+                                >
+                                  {doneInBucket}/{totalInBucket}
+                                </span>
                                 <button
                                   type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    toggleReadUnit(item.id, u);
+                                  onClick={() => {
+                                    const releasedInBucket = unitNums.filter(
+                                      (u) =>
+                                        item.format !== 'comic' ||
+                                        isComicIssueReleased(item.issueDetails?.[u])
+                                    );
+                                    if (bucketDone) {
+                                      setReadUnitsBatch(item.id, unitNums, false);
+                                    } else if (releasedInBucket.length > 0) {
+                                      setReadUnitsBatch(item.id, releasedInBucket, true);
+                                    }
                                   }}
-                                  aria-label={
-                                    done
-                                      ? `Unmark ${primaryTitle} read`
-                                      : `Mark ${primaryTitle} read`
-                                  }
-                                  className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 transition-colors ${
-                                    done
+                                  aria-label={`Toggle ${bucket.label} complete`}
+                                  className={`h-7 w-7 rounded-full flex items-center justify-center transition-colors ${
+                                    bucketDone
                                       ? 'text-watched'
                                       : 'text-ink-faint hover:text-watched'
                                   }`}
@@ -1221,13 +1278,26 @@ export function ReadDetailView({ readId }: { readId: string }) {
                                   <Check className="w-[17px] h-[17px]" strokeWidth={2.5} />
                                 </button>
                               </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                            </div>
+
+                            <div className="h-[2.5px] w-full rounded-full bg-white/10 overflow-hidden mb-1">
+                              <div
+                                className="h-full bg-watched transition-all duration-300"
+                                style={{ width: `${Math.round(bucketRatio * 100)}%` }}
+                              />
+                            </div>
+
+                            {isOpen && (
+                              <div className="divide-y divide-white/[0.06] pt-1">
+                                {unitNums.map((u) => renderSimpleUnitRow(u))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   );
-                })}
+                })()}
               </section>
             </>
           ) : (

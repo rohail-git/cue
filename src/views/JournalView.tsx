@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   Bell,
+  Camera,
   ChevronRight,
   Lock,
   PenLine,
@@ -17,6 +18,7 @@ import { DeviceSyncModal } from '../components/DeviceSyncModal';
 import { JournalAdvancedStats } from '../components/JournalAdvancedStats';
 import { MediaImage } from '../components/MediaImage';
 import { MOOD_OPTIONS } from '../components/PersonalNotesSection';
+import { ProfileMediaPickerModal } from '../components/ProfileMediaPickerModal';
 import { YearWrappedModal } from '../components/YearWrappedModal';
 import { useCueStore } from '../store/useCueStore';
 import type {
@@ -71,6 +73,7 @@ export function JournalView() {
   const [listDesc, setListDesc] = useState('');
   const [listOrdered, setListOrdered] = useState(false);
   const [wrappedOpen, setWrappedOpen] = useState(false);
+  const [mediaPickerTarget, setMediaPickerTarget] = useState<'avatar' | 'banner' | null>(null);
 
   const handleJournalModeChange = (nextMode: DetailCardMode) => {
     sessionJournalMode = nextMode;
@@ -281,18 +284,34 @@ export function JournalView() {
     <div className="min-h-dvh pb-28 md:pb-14 bg-background">
       {/* Cover Banner */}
       <div className="relative h-[185px] sm:h-[220px] md:h-[240px] w-full overflow-hidden bg-surface border-b border-white/[0.06]">
-        {state.profile.bannerUrl ? (
-          <>
-            <MediaImage
-              src={state.profile.bannerUrl}
-              alt="Journal cover"
-              className="w-full h-full object-cover object-center"
-            />
-            <div className="absolute inset-0 bg-[#131519]/65" />
-          </>
-        ) : (
-          <div className="absolute inset-0 bg-surface-raised/40" />
-        )}
+        <button
+          type="button"
+          onClick={() => setMediaPickerTarget('banner')}
+          aria-label="Change journal cover banner"
+          className="block w-full h-full relative text-left cursor-pointer group"
+        >
+          {state.profile.bannerUrl ? (
+            <>
+              <MediaImage
+                src={state.profile.bannerUrl}
+                alt="Journal cover"
+                className="w-full h-full object-cover object-center group-hover:scale-[1.01] transition-transform duration-300"
+              />
+              <div className="absolute inset-0 bg-[#131519]/65" />
+            </>
+          ) : (
+            <div className="absolute inset-0 bg-surface-raised/40" />
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setMediaPickerTarget('banner')}
+          className="glass-btn absolute bottom-14 right-4 sm:bottom-4 sm:right-6 z-20 px-2.5 py-1 rounded-full inline-flex items-center gap-1.5 text-[11px] font-medium text-ink/90 hover:text-ink"
+        >
+          <Camera className="w-3 h-3 text-brand" />
+          <span>Cover</span>
+        </button>
 
         <button
           type="button"
@@ -319,19 +338,29 @@ export function JournalView() {
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10">
         {/* Avatar + Edit Profile */}
         <div className="-mt-12 relative z-10 flex items-end justify-between mb-3">
-          <div className="w-24 h-24 rounded-full overflow-hidden ring-4 ring-background bg-surface-raised shadow-xl flex items-center justify-center">
-            {state.profile.avatarUrl ? (
-              <MediaImage
-                src={state.profile.avatarUrl}
-                alt={state.profile.name}
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <span className="font-display font-bold text-3xl text-ink select-none">
-                {(state.profile.name || 'Y').trim().charAt(0).toUpperCase()}
-              </span>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={() => setMediaPickerTarget('avatar')}
+            aria-label="Change profile picture"
+            className="relative group rounded-full cursor-pointer shrink-0"
+          >
+            <div className="w-24 h-24 rounded-full overflow-hidden ring-4 ring-background bg-surface-raised shadow-xl flex items-center justify-center">
+              {state.profile.avatarUrl ? (
+                <MediaImage
+                  src={state.profile.avatarUrl}
+                  alt={state.profile.name}
+                  className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+                />
+              ) : (
+                <span className="font-display font-bold text-3xl text-ink select-none">
+                  {(state.profile.name || 'Y').trim().charAt(0).toUpperCase()}
+                </span>
+              )}
+            </div>
+            <span className="absolute bottom-0.5 right-0.5 h-7 w-7 rounded-full bg-surface-raised border border-white/15 flex items-center justify-center text-ink shadow-md group-hover:border-brand transition-colors">
+              <Camera className="w-3.5 h-3.5 text-brand" />
+            </span>
+          </button>
           <div className="flex items-center gap-2 flex-wrap justify-end">
             <button
               type="button"
@@ -984,6 +1013,11 @@ export function JournalView() {
       )}
       <DeviceSyncModal open={syncOpen} onClose={() => setSyncOpen(false)} />
       <YearWrappedModal open={wrappedOpen} onClose={() => setWrappedOpen(false)} />
+      <ProfileMediaPickerModal
+        open={mediaPickerTarget !== null}
+        initialTarget={mediaPickerTarget || 'avatar'}
+        onClose={() => setMediaPickerTarget(null)}
+      />
     </div>
   );
 }
